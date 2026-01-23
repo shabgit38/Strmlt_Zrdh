@@ -1,0 +1,32 @@
+os.environ["GROQ_API_KEY"] = "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"
+
+python -m streamlit run chatbot.py
+
+
+
+Checks and quick fixes (run these in PowerShell)
+
+Confirm which Python and pip you're using
+python --version
+python -m site
+python -m pip --version
+
+Check if streamlit is installed in that Python
+python -m pip show streamlit
+python -m pip list | Select-String streamlit
+
+
+If streamlit not found, install using the same Python executable (avoids wrong pip)
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+If pip install -r fails because of the fenced block in requirements.txt, install directly:
+python -m pip install streamlit python-dotenv langchain-community langchain-groq
+
+Run Streamlit without relying on the streamlit command being on PATH:
+python -m streamlit --version
+python -m streamlit run chatbot.py
+
+
+
+
