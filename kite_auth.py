@@ -3,6 +3,7 @@ import os
 
 import streamlit as st
 from kiteconnect import KiteConnect
+#common utilities for authenticating with Kite and handling token errors across multiple app
 
 try:
     from kiteconnect.exceptions import TokenException
