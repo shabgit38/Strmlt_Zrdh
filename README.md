@@ -1,1 +1,0 @@
-# Strmlit_projs
