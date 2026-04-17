@@ -16,23 +16,23 @@ def fetch_instruments_dump(api_key: str, access_token: str) -> pd.DataFrame:
 _, API_KEY, _ = bootstrap_kite_app("Zerodha Instrument Dump")
 
 st.caption("Daily instrument CSV dump from Kite. It is useful for lookup and database import.")
-if st.button("Load instrument list"):
-    try:
-        instruments_df = fetch_instruments_dump(API_KEY, st.session_state.access_token)
-        st.success(f"Loaded {len(instruments_df):,} instruments.")
-        st.dataframe(instruments_df.head(100), width="stretch")
-        st.download_button(
-            "Download full CSV",
-            data=instruments_df.to_csv(index=False),
-            file_name=f"kite_instruments_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-        )
-    except Exception as exc:
-        if is_token_error(exc):
-            clear_auth_state()
-            st.error("Your session expired. Please login again to load instruments.")
-            st.rerun()
-        st.error("Error loading instrument list. Please try again.")
+
+try:
+    #st.success(f"Loaded {len(instruments_df):,} instruments.")
+    #st.dataframe(instruments_df.head(100), width="stretch")
+    instruments_df = fetch_instruments_dump(API_KEY, st.session_state.access_token)
+    st.download_button(
+        "Download full CSV",
+        data=instruments_df.to_csv(index=False),
+        file_name=f"kite_instruments_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+    )
+except Exception as exc:
+    if is_token_error(exc):
+        clear_auth_state()
+        st.error("Your session expired. Please login again to load instruments.")
+        st.rerun()
+    st.error("Error loading instrument list. Please try again.")
 
 
 if "access_token" in st.session_state:

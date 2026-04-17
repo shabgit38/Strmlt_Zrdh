@@ -10,14 +10,23 @@ try:
 except ImportError:  # pragma: no cover - depends on kiteconnect version
     TokenException = None
 
+try:
+    from streamlit.errors import StreamlitSecretNotFoundError
+except ImportError:  # pragma: no cover - older Streamlit versions
+    StreamlitSecretNotFoundError = None
+
 
 logger = logging.getLogger(__name__)
 
 
 def get_secret_value(secret_name: str) -> str:
     """Load secrets from Streamlit secrets first, then environment variables."""
-    if secret_name in st.secrets:
-        return st.secrets[secret_name]
+    try:
+        if secret_name in st.secrets:
+            return st.secrets[secret_name]
+    except Exception as exc:  # pragma: no cover - depends on local Streamlit config
+        if StreamlitSecretNotFoundError is None or not isinstance(exc, StreamlitSecretNotFoundError):
+            raise
     return os.getenv(secret_name, "")
 
 
@@ -65,7 +74,7 @@ def bootstrap_kite_app(page_title: str) -> tuple[KiteConnect, str, str]:
 
         if not request_token:
             login_url = kite.login_url()
-            print(f"Login URL: {login_url}")
+            #print(f"Login URL: {login_url}")
             st.info("Please login to Zerodha to continue.")
             st.link_button("Login to Kite", login_url)
             st.stop()
