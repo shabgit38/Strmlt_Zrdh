@@ -21,6 +21,8 @@ try:
     #st.success(f"Loaded {len(instruments_df):,} instruments.")
     #st.dataframe(instruments_df.head(100), width="stretch")
     instruments_df = fetch_instruments_dump(API_KEY, st.session_state.access_token)
+    print(instruments_df.head(),f"Loaded {len(instruments_df):,} instruments.")
+
     st.download_button(
         "Download full CSV",
         data=instruments_df.to_csv(index=False),
