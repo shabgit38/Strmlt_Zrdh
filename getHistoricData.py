@@ -1,4 +1,5 @@
 from datetime import datetime, time
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -75,14 +76,60 @@ def get_kite_historical_data(
     return df
 
 
+@st.cache_data(ttl=24 * 60 * 60)
+def load_instrument_dump_from_downloads() -> pd.DataFrame:
+    """
+    Load the newest Kite instrument dump CSV from the user's Downloads folder.
+    """
+    downloads_dir = Path.home() / "Downloads"
+    candidates = sorted(
+        downloads_dir.glob("*.csv"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+    for csv_path in candidates:
+        try:
+            df = pd.read_csv(csv_path)
+        except Exception:
+            continue
+
+        if {"tradingsymbol", "instrument_token"}.issubset(df.columns):
+            return df
+
+    raise FileNotFoundError(
+        "No Kite instrument dump CSV found in Downloads with tradingsymbol and instrument_token columns."
+    )
+
+
+def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame) -> dict[str, int]:
+    """
+    Map comma-separated tickers to instrument tokens using the instrument dump.
+    """
+    resolved: dict[str, int] = {}
+    normalized = instruments_df.copy()
+    normalized["tradingsymbol"] = normalized["tradingsymbol"].astype(str).str.strip().str.upper()
+
+    for ticker in tickers:
+        matches = normalized[normalized["tradingsymbol"] == ticker]
+        if matches.empty:
+            raise ValueError(f"No instrument token found for ticker: {ticker}")
+
+        # Prefer the first exact match. If the CSV contains duplicates, the user
+        # can refine the lookup later by exchange/segment if needed.
+        resolved[ticker] = int(matches.iloc[0]["instrument_token"])
+
+    return resolved
+
+
 kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
 
-st.caption("Fetch historical candles from Kite using an instrument token and date range.")
+st.caption("Fetch historical candles from Kite using ticker symbols and a date range.")
 
-instrument_token = st.text_input(
-    "Instrument token",
-    placeholder="e.g. 256265",
-    help="Enter the Kite instrument token for the symbol you want to inspect.",
+tickers_input = st.text_input(
+    "Tickers (comma-separated)",
+    placeholder="e.g. RELIANCE, INFY, TCS",
+    help="Enter one or more stock ticker symbols separated by commas.",
 )
 
 col1, col2 = st.columns(2)
@@ -97,12 +144,14 @@ interval = st.selectbox(
     index=1,
 )
 
-continuous = st.checkbox("Continuous data", value=False)
-oi = st.checkbox("Include OI", value=False)
+continuous =  0  #st.checkbox("Continuous data", value=False)
+oi = 0 #st.checkbox("Include OI", value=False)
 
 if st.button("Fetch historical data", type="primary"):
-    if not instrument_token.strip():
-        st.warning("Enter an instrument token.")
+    raw_tickers = [item.strip().upper() for item in tickers_input.split(",") if item.strip()]
+
+    if not raw_tickers:
+        st.warning("Enter at least one ticker symbol.")
         st.stop()
 
     if from_date > to_date:
@@ -113,25 +162,39 @@ if st.button("Fetch historical data", type="primary"):
     end_dt = datetime.combine(to_date, time(23, 59, 59))
 
     try:
-        historical_df = get_kite_historical_data(
-            kite=kite,
-            instrument_token=instrument_token.strip(),
-            interval=interval,
-            from_date=start_dt,
-            to_date=end_dt,
-            continuous=continuous,
-            oi=oi,
-        )
+        instruments_df = load_instrument_dump_from_downloads()
+        token_map = resolve_tokens_from_tickers(raw_tickers, instruments_df)
+
+        all_frames: list[pd.DataFrame] = []
+        for ticker, token in token_map.items():
+            historical_df = get_kite_historical_data(
+                kite=kite,
+                instrument_token=token,
+                interval=interval,
+                from_date=start_dt,
+                to_date=end_dt,
+                continuous=continuous,
+                oi=oi,
+            )
+
+            if historical_df.empty:
+                continue
+
+            historical_df = historical_df.copy()
+            historical_df.insert(0, "Ticker", ticker)
+            historical_df.insert(1, "InstrumentToken", token)
+            all_frames.append(historical_df)
 
         st.subheader("Historical candles")
-        if historical_df.empty:
+        if not all_frames:
             st.info("No candle data returned for the selected inputs.")
         else:
-            st.dataframe(historical_df, width="stretch")
+            result_df = pd.concat(all_frames).sort_index()
+            st.dataframe(result_df, width="stretch")
             st.download_button(
                 "Download CSV",
-                data=historical_df.to_csv(),
-                file_name=f"kite_historical_{instrument_token.strip()}_{interval}.csv",
+                data=result_df.to_csv(),
+                file_name=f"kite_historical_{'_'.join(raw_tickers)}_{interval}.csv",
                 mime="text/csv",
             )
     except Exception as exc:
