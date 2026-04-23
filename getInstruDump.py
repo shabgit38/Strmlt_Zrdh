@@ -1,5 +1,7 @@
 import json
-from datetime import datetime
+import math
+from pathlib import Path
+from datetime import date, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -13,21 +15,58 @@ from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is
 
 SUPABASE_TABLE_DEFAULT = "kite_instruments"
 SUPABASE_BATCH_SIZE = 500
+REQUIRED_INSTRUMENT_COLUMNS = {"instrument_token", "tradingsymbol"}
+
+
+def _find_instruments_csv(project_dir: Path) -> Path:
+    csv_candidates = sorted(project_dir.glob("*.csv"))
+    if not csv_candidates:
+        raise FileNotFoundError(f"No CSV files found in project folder: {project_dir}")
+
+    matching_candidates: list[Path] = []
+    for csv_path in csv_candidates:
+        try:
+            columns = set(pd.read_csv(csv_path, nrows=0).columns)
+        except Exception:
+            continue
+        if REQUIRED_INSTRUMENT_COLUMNS.issubset(columns):
+            matching_candidates.append(csv_path)
+
+    if not matching_candidates:
+        raise FileNotFoundError(
+            f"No CSV in {project_dir} contains required columns: {sorted(REQUIRED_INSTRUMENT_COLUMNS)}"
+        )
+    if len(matching_candidates) > 1:
+        raise RuntimeError(
+            "Multiple CSV files in the project folder match the instrument schema: "
+            + ", ".join(path.name for path in matching_candidates)
+        )
+
+    return matching_candidates[0]
 
 
 @st.cache_data(ttl=24 * 60 * 60)
 def fetch_instruments_dump(api_key: str, access_token: str) -> pd.DataFrame:
-    """Fetch the daily instrument dump and cache it for one day."""
-    client = KiteConnect(api_key=api_key)
-    client.set_access_token(access_token)
-    return pd.DataFrame(client.instruments())
+    """Fetch the daily instrument dump from the local CSV and cache it for one day."""
+    # Keep the Kite Connect wiring available for future re-enable.
+    # client = KiteConnect(api_key=api_key)
+    # client.set_access_token(access_token)
+    # return pd.DataFrame(client.instruments())
 
+    csv_path = _find_instruments_csv(Path(__file__).resolve().parent)
+    return pd.read_csv(csv_path)
 
 def _json_safe_value(value: Any) -> Any:
     """Convert pandas/numpy values into JSON-safe primitives for Supabase."""
     if pd.isna(value):
         return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, datetime):
         return value.isoformat()
@@ -78,6 +117,8 @@ def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
 
     for chunk in _chunk_records(records, SUPABASE_BATCH_SIZE):
         payload = json.dumps(chunk).encode("utf-8")
+        if not payload or payload == b"[]":
+            continue
         request = Request(endpoint, data=payload, headers=headers, method="POST")
 
         try:
@@ -92,13 +133,15 @@ def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
             raise RuntimeError(f"Supabase write failed: {exc.reason}") from exc
 
 
-_, API_KEY, _ = bootstrap_kite_app("Zerodha Instrument Dump")
+_, API_KEY, _ = bootstrap_kite_app("Instrument Dump")
 
 st.caption("Daily instrument dump from Kite. It is useful for lookup and database import.")
 
 try:
     instruments_df = fetch_instruments_dump(API_KEY, st.session_state.access_token)
     st.success(f"Loaded {len(instruments_df):,} instruments from Kite.")
+    print(instruments_df.columns)
+    print(instruments_df.head(5))
 
     try:
         upsert_instruments_to_supabase(instruments_df)
