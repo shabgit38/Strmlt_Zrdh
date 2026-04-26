@@ -116,14 +116,6 @@ def _scan_dataframe_for_bad_values(df: pd.DataFrame) -> list[str]:
     return issues
 
 
-def _filter_equity_rows(df: pd.DataFrame) -> pd.DataFrame:
-    if "instrument_type" not in df.columns:
-        raise ValueError("Instrument dump is missing required column: instrument_type")
-
-    equity_df = df[df["instrument_type"].astype(str).str.strip().eq(EQUITY_INSTRUMENT_TYPE)].copy()
-    return equity_df
-
-
 def _records_from_dataframe(df: pd.DataFrame) -> list[dict[str, Any]]:
     normalized = df.copy().astype(object)
     for column in normalized.columns:
@@ -165,7 +157,7 @@ def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
     if "instrument_token" not in df.columns:
         raise ValueError("Instrument dump is missing required column: instrument_token")
 
-    #equity_df = _filter_equity_rows(df)
+    
     if df.empty:
         st.warning("No EQ rows found in the CSV. Nothing will be uploaded to Supabase.")
         return
@@ -232,7 +224,6 @@ st.caption("Daily instrument dump from the local CSV. It is useful for lookup an
 try:
     #UNCOMMENT the below line to fetch directly from Kite Connect API instead of local CSV upload.
     #instruments_df = fetch_instruments_dump("", "")
-    #equity_instruments_df = _filter_equity_rows(instruments_df)
     #st.success(f"Loaded {len(instruments_df):,} instruments from the local CSV.")
     #st.info(f"Found {len(equity_instruments_df):,} EQ rows to upload to Supabase.")
     #st.download_button(
