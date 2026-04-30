@@ -1,12 +1,14 @@
 from datetime import datetime, time
-from pathlib import Path
+import json
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import streamlit as st
 from kiteconnect import KiteConnect
 
-from kite_auth import bootstrap_kite_app, clear_auth_state, is_token_error
-
+from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 
 # ------------------------------------------------------------------------------
 # KITE HISTORICAL DATA
@@ -77,30 +79,62 @@ def get_kite_historical_data(
 
 
 @st.cache_data(ttl=24 * 60 * 60)
-def load_instrument_dump_from_downloads() -> pd.DataFrame:
+def load_instrument_token_from_supabase(tickers: list[str]) -> pd.DataFrame:
     """
-    Load the newest Kite instrument dump CSV from the user's Downloads folder.
+    Load instrument rows from Supabase for the ticker symbols entered by the user.
     """
-    downloads_dir = Path.home() / "Downloads"
-    candidates = sorted(
-        downloads_dir.glob("*.csv"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
+    normalized_tickers = sorted({ticker.strip().upper() for ticker in tickers if ticker.strip()})
+    if not normalized_tickers:
+        return pd.DataFrame()
+
+    supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
+    supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
+    table_name = get_secret_value("SUPABASE_TABLE_NAME").strip() 
+
+    if not supabase_url or not supabase_key:
+        raise ValueError(
+            "Missing Supabase config. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
+            "in .streamlit/secrets.toml or environment variables."
+        )
+
+    ticker_filter = ",".join(f"tradingsymbol.eq.{quote(ticker, safe='')}" for ticker in normalized_tickers)
+    endpoint = (
+        f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
+        f"?select=*&or=({ticker_filter})"
     )
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+    }
 
-    for csv_path in candidates:
-        try:
-            df = pd.read_csv(csv_path)
-        except Exception:
-            continue
+    request = Request(endpoint, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase instrument lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase instrument lookup failed: {exc.reason}") from exc
 
-        if {"tradingsymbol", "instrument_token"}.issubset(df.columns):
-            return df
+    instrument_token_df = pd.DataFrame(records)
+    if instrument_token_df.empty:
+        return pd.DataFrame(columns=["tradingsymbol", "instrument_token"])
 
-    raise FileNotFoundError(
-        "No Kite instrument dump CSV found in Downloads with tradingsymbol and instrument_token columns."
-    )
+    required_columns = {"tradingsymbol", "instrument_token"}
+    if not required_columns.issubset(instrument_token_df.columns):
+        raise ValueError(
+            f"Supabase instrument lookup missing columns: {required_columns - set(instrument_token_df.columns)}"
+        )
 
+    if "tradingsymbol" in instrument_token_df.columns:
+        instrument_token_df["tradingsymbol"] = (
+            instrument_token_df["tradingsymbol"].astype(str).str.strip().str.upper()
+        )
+
+    return instrument_token_df
 
 def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame) -> dict[str, int]:
     """
@@ -162,7 +196,7 @@ if st.button("Fetch historical data", type="primary"):
     end_dt = datetime.combine(to_date, time(23, 59, 59))
 
     try:
-        instruments_df = load_instrument_dump_from_downloads()
+        instruments_df = load_instrument_token_from_supabase(raw_tickers)
         token_map = resolve_tokens_from_tickers(raw_tickers, instruments_df)
 
         all_frames: list[pd.DataFrame] = []
@@ -190,13 +224,15 @@ if st.button("Fetch historical data", type="primary"):
             st.info("No candle data returned for the selected inputs.")
         else:
             result_df = pd.concat(all_frames).sort_index()
-            st.dataframe(result_df, width="stretch")
-            st.download_button(
-                "Download CSV",
-                data=result_df.to_csv(),
-                file_name=f"kite_historical_{'_'.join(raw_tickers)}_{interval}.csv",
-                mime="text/csv",
-            )
+            print(result_df.head(10))
+            #st.dataframe(result_df, width="stretch")
+            #st.download_button(
+            #    "Download CSV",
+            #    data=result_df.to_csv(),
+            #    file_name=f"kite_historical_{'_'.join(raw_tickers)}_{interval}.csv",
+            #    mime="text/csv",
+            #)
+
     except Exception as exc:
         if is_token_error(exc):
             clear_auth_state()

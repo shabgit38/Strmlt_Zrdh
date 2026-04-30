@@ -17,24 +17,12 @@ from indicators import (
     momentum_summary,
 )
 
-st.set_page_config(page_title="Momentum Tracker", layout="wide")
-st.title("Momentum Tracker")
 
-raw_input = st.text_input(
-    "Enter ticker symbols (comma-separated)",
-    placeholder="e.g. AAPL, MSFT, GOOGL"
-)
 
 # TICKER PARSING
 # Appends .NS suffix for NSE India.  User may also type the suffix explicitly
 # (e.g. RELIANCE.NS) — we detect and skip double-suffixing.
-KNOWN_SUFFIXES = (".NS", ".BO", ".NFO")
 
-def normalise_ticker(raw: str) -> str:
-    t = raw.strip().upper()
-    if any(t.endswith(s) for s in KNOWN_SUFFIXES):
-        return t               # already has a suffix — leave it
-    return t + ".NS"           # default to NSE
 
 tickers = [normalise_ticker(t) for t in raw_input.split(",") if t.strip()]
 

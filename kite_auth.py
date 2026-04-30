@@ -58,7 +58,7 @@ def bootstrap_kite_app(page_title: str) -> tuple[KiteConnect, str, str]:
     api_key = get_secret_value("ZERODHA_API_KEY")
     api_secret = get_secret_value("ZERODHA_API_SECRET")
 
-    st.title(page_title)
+    #st.title(page_title)
 
     if not api_key or not api_secret:
         st.error(

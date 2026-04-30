@@ -9,17 +9,15 @@ from urllib.request import Request, urlopen
 import pandas as pd
 import numpy as np
 import streamlit as st
+from kiteconnect import KiteConnect
+from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 
-from kite_auth import clear_auth_state, get_secret_value, is_token_error
 
 
-SUPABASE_TABLE_DEFAULT = "kite_instruments"
 SUPABASE_BATCH_SIZE = 500
-REQUIRED_INSTRUMENT_COLUMNS = {"instrument_token", "tradingsymbol"}
+REQUIRED_INSTRUMENT_COLUMNS = {"instrument_token", "tradingsymbol", "name"}
 EQUITY_INSTRUMENT_TYPE = "EQ"
 
-
-REQUIRED_INSTRUMENT_COLUMNS = {"instrument_token", "tradingsymbol"}
 
 def find_instruments_file_from_upload():
     """
@@ -46,6 +44,14 @@ def find_instruments_file_from_upload():
         st.error(f"Failed to read file: {e}")
         st.stop()
 
+    # Drop completely empty rows before any validation
+    before = len(df)
+    print(f"Initial row count: {before}")
+    df = df.dropna(how="all")
+    empty_dropped = before - len(df) # Count how many rows were dropped due to being completely empty
+    print(f"Dropped {empty_dropped} completely empty row(s). Remaining rows: {len(df)}")
+    
+
     # Validate required columns
     columns = set(df.columns)
     if not REQUIRED_INSTRUMENT_COLUMNS.issubset(columns):
@@ -53,31 +59,76 @@ def find_instruments_file_from_upload():
             f"Missing required columns: {REQUIRED_INSTRUMENT_COLUMNS - columns}"
         )
         st.stop()
+
+    # Drop rows missing the primary key — these can never be upserted
+    before = len(df)
+    print(f"Row count before dropping rows with missing instrument_token: {before}")
+    df = df[df["instrument_token"].notna()]
+    key_dropped = before - len(df)
+    print(f"Dropped {key_dropped} row(s) with missing instrument_token. Remaining rows: {len(df)}")
+
     
-    if "instrument_type" not in df.columns:
-        raise ValueError("Instrument dump is missing required column: instrument_type")
+    print( f"total rows with missing name: {df.isna().sum()}")
+    print(df[df["name"].isna()].head())
+    before = len(df)
+    print(f"Row count before dropping rows with missing name: {before}")    
+    df = df[df["name"].notna()]
+    noname_dropped = before - len(df)
+    print(f"Dropped {noname_dropped} row(s) with missing name. Remaining rows: {len(df)}")
 
-    equity_df = df[df["instrument_type"].astype(str).str.strip().eq(EQUITY_INSTRUMENT_TYPE)].copy()
-    equity_df = equity_df.replace([pd.NA, float("inf"), float("-inf")], None)
 
-    equity_df["name"] = equity_df["name"].where(
-    pd.notnull(equity_df["name"]),None
-    )
+    total_skipped = empty_dropped + key_dropped + noname_dropped
+    print(f"Total skipped rows: {total_skipped}")
+    if total_skipped:
+        st.info(f"Skipped {total_skipped:,} row(s) with missing data ({empty_dropped:,} blank, {key_dropped:,} missing instrument_token, {noname_dropped:,} missing name).")
+
+    # Filter to EQ instruments on NSE/BSE only
+    before = len(df)
+    print(f"Row count before filtering EQ instruments on NSE/BSE: {before}")
+    df = df[
+        (df["instrument_type"].str.upper() == EQUITY_INSTRUMENT_TYPE) &
+        (df["exchange"].str.upper().isin({"NSE", "BSE"}))
+    ]
+    filtered_out = before - len(df)
+    print(f"Filtered out {filtered_out} non-EQ or non-NSE/BSE row(s). Keeping {len(df)} EQ rows.")
+    if filtered_out:
+        st.info(f"Filtered out {filtered_out:,} non-EQ or non-NSE/BSE row(s). Keeping {len(df):,} EQ rows.")
     
-    st.success(f"File loaded successfully with {len(equity_df):,} rows.")
-    return equity_df
+     
+    ######
+        normalized_df = clean_dataframe_for_supabase(df)
+        print(normalized_df.head(5))
+        records = normalized_df.to_dict(orient="records")
+        print(f"Converted dataframe to {len(records)} record(s) for Supabase upload.")
+        if not records:
+            return
+
+        # Guarantee instrument_token is a Python int in every record regardless of
+        # how pandas serialised the column dtype (float64 → "500002.0" breaks bigint).
+        for record in records:
+            v = record.get("instrument_token")
+            if v is not None:
+                try:
+                    record["instrument_token"] = int(float(v))
+                except (TypeError, ValueError):
+                    pass
 
 
-#@st.cache_data(ttl=24 * 60 * 60)
-def fetch_instruments_dump(api_key: str, access_token: str) -> pd.DataFrame:
-    """Fetch the daily instrument dump from the local CSV and cache it for one day."""
-    # Keep the Kite Connect wiring available for future re-enable.
-    # client = KiteConnect(api_key=api_key)
-    # client.set_access_token(access_token)
-    # return pd.DataFrame(client.instruments())
+        issues = _scan_dataframe_for_bad_values(normalized_df)
+        print(f"Scanned dataframe for JSON serialization issues, found {len(issues)} issue(s).")
+        if issues:
+            message = "Found non-JSON-safe values in the CSV: " + "; ".join(issues[:20])
+            print(message)
+            st.error(message)
+        #####
 
-    #return pd.read_csv(csv_path)
-    
+
+    st.success(f"File loaded successfully with {len(normalized_df):,} rows.")
+    return normalized_df
+
+
+def fetch_instruments_dump(kite: KiteConnect) -> pd.DataFrame:
+    return pd.DataFrame(kite.instruments())
 
 
 def _json_safe_value(value: Any) -> Any:
@@ -116,13 +167,6 @@ def _scan_dataframe_for_bad_values(df: pd.DataFrame) -> list[str]:
     return issues
 
 
-def _records_from_dataframe(df: pd.DataFrame) -> list[dict[str, Any]]:
-    normalized = df.copy().astype(object)
-    for column in normalized.columns:
-        normalized[column] = normalized[column].map(_json_safe_value)
-    return normalized.to_dict(orient="records")
-
-
 def _find_json_serialization_issues(records: list[tuple[Any, dict[str, Any]]]) -> list[str]:
     issues: list[str] = []
     for row_index, record in records:
@@ -139,6 +183,35 @@ def _find_json_serialization_issues(records: list[tuple[Any, dict[str, Any]]]) -
 def _chunk_records(records: list[dict[str, Any]], chunk_size: int) -> list[list[dict[str, Any]]]:
     return [records[i : i + chunk_size] for i in range(0, len(records), chunk_size)]
 
+def clean_dataframe_for_supabase(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    # 1. Global cleaning (vectorized)
+    df = df.replace([pd.NA, float("inf"), float("-inf")], None)
+    df = df.where(pd.notnull(df), None)
+
+    # 2. Clean strings
+    for col in df.select_dtypes(include="object"):
+        df[col] = df[col].apply(
+            lambda x: x.strip() if isinstance(x, str) else x
+        )
+
+    # 3. Final pass: convert any remaining NaN / non-finite / non-JSON-safe
+    #    values to None (covers date columns like 'expiry' that hold float NaN)
+    for col in df.columns:
+        df[col] = df[col].apply(_json_safe_value)
+        
+
+    # 4. Fix integer columns LAST so df.where/replace above can't revert them
+    #    back to float64 (which would serialize as "500002.0" and fail bigint insert)
+    INT_COLUMNS = ["instrument_token"]
+    for col in INT_COLUMNS:
+        if col in df.columns:
+            df[col] = df[col].apply(
+                lambda x: int(float(x)) if x is not None else None
+            )
+
+    return df
 
 def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
     """
@@ -146,35 +219,33 @@ def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
     """
     supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
     supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
-    table_name = get_secret_value("SUPABASE_TABLE_NAME").strip() or SUPABASE_TABLE_DEFAULT
+    table_name = get_secret_value("SUPABASE_TABLE_NAME").strip()
 
     if not supabase_url or not supabase_key:
         raise ValueError(
             "Missing Supabase config. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
             "in .streamlit/secrets.toml or environment variables."
         )
-
-    if "instrument_token" not in df.columns:
-        raise ValueError("Instrument dump is missing required column: instrument_token")
-
-    
-    if df.empty:
-        st.warning("No EQ rows found in the CSV. Nothing will be uploaded to Supabase.")
-        return
-
-    normalized_df = df.copy().astype(object)
-    for column in normalized_df.columns:
-        normalized_df[column] = normalized_df[column].map(_json_safe_value)
-
-    issues = _scan_dataframe_for_bad_values(normalized_df)
-    if issues:
-        message = "Found non-JSON-safe values in the CSV: " + "; ".join(issues[:20])
-        print(message)
-        st.error(message)
-
-    records = normalized_df.to_dict(orient="records")
-    if not records:
-        return
+   
+    # Clear existing records before inserting fresh data
+    delete_endpoint = f"{supabase_url}/rest/v1/{table_name}?instrument_token=gte.0"
+    delete_headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Prefer": "return=minimal",
+    }
+    try:
+        delete_request = Request(delete_endpoint, headers=delete_headers, method="DELETE")
+        with urlopen(delete_request, timeout=60) as resp:
+            resp.read()
+        st.info("Existing records cleared from Supabase table.")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Failed to clear Supabase table before insert — HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Failed to clear Supabase table before insert: {exc.reason}") from exc
 
     endpoint = f"{supabase_url}/rest/v1/{table_name}?on_conflict=instrument_token"
     headers = {
@@ -184,10 +255,21 @@ def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
         "Prefer": "resolution=merge-duplicates,return=minimal",
     }
 
-    indexed_records = list(zip(normalized_df.index.tolist(), records))
+    records = df.to_dict(orient="records")
+    indexed_records = list(zip(df.index.tolist(), records))
+
+    INT_RECORD_COLUMNS = ("instrument_token",)
 
     for chunk in _chunk_records(indexed_records, SUPABASE_BATCH_SIZE):
         chunk_rows = [record for _, record in chunk]
+        for row in chunk_rows:
+            for col in INT_RECORD_COLUMNS:
+                v = row.get(col)
+                if v is not None:
+                    try:
+                        row[col] = int(float(v))
+                    except (TypeError, ValueError):
+                        pass
         try:
             payload = json.dumps(chunk_rows, allow_nan=False).encode("utf-8")
         except (ValueError, TypeError) as exc:
@@ -215,46 +297,50 @@ def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
             raise RuntimeError(f"Supabase write failed: {exc.reason}") from exc
 
 
-# Kite authentication/bootstrap is kept commented out because the upload flow
-# now reads from the local CSV and syncs that data to Supabase.
-# _, API_KEY, _ = bootstrap_kite_app("Instrument Dump")
+st.title("Instrument Dump")
+#st.caption("Fetch the daily instrument dump from Kite Connect, or upload a local CSV to sync to Supabase.")
 
-st.caption("Daily instrument dump from the local CSV. It is useful for lookup and database import.")
+if "request_token" in st.query_params and "access_token" not in st.session_state:
+    bootstrap_kite_app("Instrument Dump")
 
-try:
-    #UNCOMMENT the below line to fetch directly from Kite Connect API instead of local CSV upload.
-    #instruments_df = fetch_instruments_dump("", "")
-    #st.success(f"Loaded {len(instruments_df):,} instruments from the local CSV.")
-    #st.info(f"Found {len(equity_instruments_df):,} EQ rows to upload to Supabase.")
-    #st.download_button(
-    #    "Download full CSV",
-    #    data=instruments_df.to_csv(index=False),
-    #    file_name=f"kite_instruments_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-    #    mime="text/csv",
-    #)  
+tab_kite, tab_upload = st.tabs(["Download from Kite", "Upload CSV to Supabase"])
 
+with tab_kite:
+    st.write("Fetch the full instrument list directly from the Kite Connect API and download it as a CSV.")
+    if st.button("Fetch from Kite Connect"):
+        try:
+            kite, _, _ = bootstrap_kite_app("Instrument Dump")
+            with st.spinner("Fetching instruments from Kite..."):
+                instruments_df = fetch_instruments_dump(kite)
+            st.success(f"Fetched {len(instruments_df):,} instruments from Kite Connect.")
+            st.download_button(
+                "Download CSV",
+                data=instruments_df.to_csv(index=False),
+                file_name=f"kite_instruments_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+        except Exception as exc:
+            if is_token_error(exc):
+                clear_auth_state()
+                st.error("Your session expired. Please login again.")
+                st.rerun()
+            st.error(f"Failed to fetch instruments from Kite: {exc}")
 
-
-    # For - loading from the local CSV upload. 
-    # Future enhancement could include a toggle to choose between direct API fetch vs local CSV upload.
-    instruments_df = find_instruments_file_from_upload()
-    print(instruments_df.columns)
-    print(instruments_df.head(5))
-
+with tab_upload:
+    #st.write("Upload a CSV or Excel file to validate and sync instrument data to Supabase.")
     try:
-        upsert_instruments_to_supabase(instruments_df)
-        st.success("Instrument dump synced to Supabase.")
-    except Exception as supabase_exc:
-        st.warning(f"Loaded instruments, but Supabase sync was skipped or failed: {supabase_exc}")
-
-    
-except Exception as exc:
-    if is_token_error(exc):
-        clear_auth_state()
-        st.error("Your session expired. Please login again to load instruments.")
-        st.rerun()
-    st.error("Error loading instrument list. Please try again.")
-
+        instruments_df = find_instruments_file_from_upload()
+        try:
+            upsert_instruments_to_supabase(instruments_df)
+            st.success("Instrument dump synced to Supabase.")
+        except Exception as supabase_exc:
+            st.warning(f"Loaded instruments, but Supabase sync failed: {supabase_exc}")
+    except Exception as exc:
+        if is_token_error(exc):
+            clear_auth_state()
+            st.error("Your session expired. Please login again.")
+            st.rerun()
+        st.error("Error loading instrument list. Please try again.")
 
 if "access_token" in st.session_state:
     if st.sidebar.button("Logout"):
