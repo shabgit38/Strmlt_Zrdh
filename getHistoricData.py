@@ -84,6 +84,7 @@ def load_instrument_token_from_supabase(tickers: list[str]) -> pd.DataFrame:
     Load instrument rows from Supabase for the ticker symbols entered by the user.
     """
     normalized_tickers = sorted({ticker.strip().upper() for ticker in tickers if ticker.strip()})
+    print(f"Loading instrument tokens from Supabase for tickers: {normalized_tickers}")
     if not normalized_tickers:
         return pd.DataFrame()
 
@@ -123,16 +124,13 @@ def load_instrument_token_from_supabase(tickers: list[str]) -> pd.DataFrame:
     if instrument_token_df.empty:
         return pd.DataFrame(columns=["tradingsymbol", "instrument_token"])
 
-    required_columns = {"tradingsymbol", "instrument_token"}
-    if not required_columns.issubset(instrument_token_df.columns):
-        raise ValueError(
-            f"Supabase instrument lookup missing columns: {required_columns - set(instrument_token_df.columns)}"
-        )
-
+   
     if "tradingsymbol" in instrument_token_df.columns:
         instrument_token_df["tradingsymbol"] = (
             instrument_token_df["tradingsymbol"].astype(str).str.strip().str.upper()
         )
+    print(instrument_token_df.head())
+    print(f"Loaded {len(instrument_token_df)} instrument tokens from Supabase for tickers: {', '.join(instrument_token_df['tradingsymbol'])}")
 
     return instrument_token_df
 
@@ -143,7 +141,7 @@ def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame
     resolved: dict[str, int] = {}
     normalized = instruments_df.copy()
     normalized["tradingsymbol"] = normalized["tradingsymbol"].astype(str).str.strip().str.upper()
-
+    print(f"Resolving tokens for tickers: {tickers}")
     for ticker in tickers:
         matches = normalized[normalized["tradingsymbol"] == ticker]
         if matches.empty:
@@ -152,7 +150,7 @@ def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame
         # Prefer the first exact match. If the CSV contains duplicates, the user
         # can refine the lookup later by exchange/segment if needed.
         resolved[ticker] = int(matches.iloc[0]["instrument_token"])
-
+    print(f"Resolved tickers to tokens: {resolved}")
     return resolved
 
 
@@ -199,6 +197,7 @@ if st.button("Fetch historical data", type="primary"):
         instruments_df = load_instrument_token_from_supabase(raw_tickers)
         token_map = resolve_tokens_from_tickers(raw_tickers, instruments_df)
 
+        #st.stop()
         all_frames: list[pd.DataFrame] = []
         for ticker, token in token_map.items():
             historical_df = get_kite_historical_data(
@@ -217,14 +216,18 @@ if st.button("Fetch historical data", type="primary"):
             historical_df = historical_df.copy()
             historical_df.insert(0, "Ticker", ticker)
             historical_df.insert(1, "InstrumentToken", token)
+
+            with st.expander(f"{ticker} historical data", expanded=False):
+                st.dataframe(historical_df, width="stretch")
+
             all_frames.append(historical_df)
 
-        st.subheader("Historical candles")
+        #st.subheader("Historical candles")
         if not all_frames:
             st.info("No candle data returned for the selected inputs.")
         else:
-            result_df = pd.concat(all_frames).sort_index()
-            print(result_df.head(10))
+            result_df = pd.concat(all_frames)
+            #print(result_df.head(10))
             #st.dataframe(result_df, width="stretch")
             #st.download_button(
             #    "Download CSV",
