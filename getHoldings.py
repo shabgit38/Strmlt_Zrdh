@@ -1,5 +1,6 @@
 import json
 import math
+import calendar
 from datetime import date, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -24,26 +25,29 @@ HOLDINGS_COLUMN_MAP = {
     "LTP": "ltp",
     "Present Value": "present_value",
     "P&L": "pnl",
+    "P&L %": "pnl_pct",
+    "P&L chg": "pnl_pct",
     "Date": "trade_date",
     "Batch Qty": "batch_qty",
     "Batch Price": "batch_price",
     "Age (Days)": "age_days",
     "Batch P&L": "batch_pnl",
+    "Batch P&L %": "batch_pnl_pct",
     "Present Age": "present_age",
 }
 REQUIRED_HOLDINGS_COLUMNS = {"Row Type", "Symbol"}
-NUMERIC_HOLDINGS_COLUMNS = [
-    "total_qty",
+NUMERIC_HOLDINGS_COLUMNS = [    
     "buy_avg",
     "invested",
     "ltp",
     "present_value",
-    "pnl",
-    "batch_qty",
+    "pnl",    
+    "pnl_pct",
     "batch_price",
     "batch_pnl",
+    "batch_pnl_pct",
 ]
-INTEGER_HOLDINGS_COLUMNS = ["age_days"]
+INTEGER_HOLDINGS_COLUMNS = ["total_qty","age_days","batch_qty"]
 
 
 def _json_safe_value(value: Any) -> Any:
@@ -70,6 +74,34 @@ def _chunk_records(records: list[dict[str, Any]], chunk_size: int) -> list[list[
     return [records[i : i + chunk_size] for i in range(0, len(records), chunk_size)]
 
 
+def _record_numeric_value(value: Any) -> float | None:
+    value = _json_safe_value(value)
+    if value is None:
+        return None
+    converted = pd.to_numeric(value, errors="coerce")
+    if pd.isna(converted):
+        return None
+    return float(converted)
+
+
+def _record_integer_value(value: Any) -> int | None:
+    value = _record_numeric_value(value)
+    if value is None:
+        return None
+    return int(value)
+
+
+def _json_safe_record(record: dict[str, Any]) -> dict[str, Any]:
+    safe_record = {key: _json_safe_value(value) for key, value in record.items()}
+    for column in NUMERIC_HOLDINGS_COLUMNS:
+        if column in safe_record:
+            safe_record[column] = _record_numeric_value(safe_record[column])
+    for column in INTEGER_HOLDINGS_COLUMNS:
+        if column in safe_record:
+            safe_record[column] = _record_integer_value(safe_record[column])
+    return safe_record
+
+
 def _read_holdings_breakdown_upload(uploaded_file) -> pd.DataFrame:
     filename = uploaded_file.name.lower()
     if filename.endswith(".csv"):
@@ -91,6 +123,48 @@ def _normalize_trade_date(value: Any) -> Any:
     if pd.isna(parsed):
         return None
     return parsed.date().isoformat()
+
+
+def _parse_trade_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.date()
+
+
+def _holding_age_days(trade_date: Any) -> int | None:
+    parsed_trade_date = _parse_trade_date(trade_date)
+    if parsed_trade_date is None:
+        return None
+    return max((date.today() - parsed_trade_date).days, 0)
+
+
+def _holding_present_age(trade_date: Any) -> str | None:
+    parsed_trade_date = _parse_trade_date(trade_date)
+    if parsed_trade_date is None:
+        return None
+
+    today = date.today()
+    if parsed_trade_date > today:
+        return "0 Years, 0 Months, 0 Days"
+
+    years = today.year - parsed_trade_date.year
+    months = today.month - parsed_trade_date.month
+    days = today.day - parsed_trade_date.day
+
+    if days < 0:
+        months -= 1
+        previous_month = today.month - 1 or 12
+        previous_month_year = today.year if today.month > 1 else today.year - 1
+        days += calendar.monthrange(previous_month_year, previous_month)[1]
+
+    if months < 0:
+        years -= 1
+        months += 12
+
+    return f"{years} Years, {months} Months, {days} Days"
 
 
 def clean_holdings_breakdown_for_supabase(df: pd.DataFrame) -> pd.DataFrame:
@@ -123,11 +197,248 @@ def clean_holdings_breakdown_for_supabase(df: pd.DataFrame) -> pd.DataFrame:
 
     if "trade_date" in df.columns:
         df["trade_date"] = df["trade_date"].apply(_normalize_trade_date)
+        df["age_days"] = df["trade_date"].apply(_holding_age_days)
+        df["present_age"] = df["trade_date"].apply(_holding_present_age)
+    else:
+        df["age_days"] = None
+        df["present_age"] = None
 
     for column in df.columns:
         df[column] = df[column].apply(_json_safe_value)
 
     return df
+
+
+def _normalized_symbol_series(series: pd.Series) -> pd.Series:
+    return series.astype(str).str.upper().str.strip()
+
+
+def enrich_holdings_breakdown_with_ltp(
+    df: pd.DataFrame, ltp_by_symbol: dict[str, float]
+) -> tuple[pd.DataFrame, list[str]]:
+    df = df.copy()
+    if not ltp_by_symbol or "symbol" not in df.columns:
+        return df, []
+
+    normalized_ltp_by_symbol = {
+        str(symbol).upper().strip(): ltp
+        for symbol, ltp in ltp_by_symbol.items()
+        if symbol is not None and pd.notna(ltp)
+    }
+    symbol_key = _normalized_symbol_series(df["symbol"])
+    live_ltp = pd.to_numeric(symbol_key.map(normalized_ltp_by_symbol), errors="coerce")
+    matched_rows = live_ltp.notna()
+
+    if "ltp" not in df.columns:
+        df["ltp"] = None
+    df.loc[matched_rows, "ltp"] = live_ltp[matched_rows]
+
+    row_type = df["row_type"].astype(str).str.upper().str.strip()
+    summary_rows = matched_rows & row_type.eq("SUMMARY")
+    batch_rows = matched_rows & row_type.eq("BATCH")
+
+    for column in ["total_qty", "invested", "batch_qty", "batch_price", "ltp"]:
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    if "present_value" not in df.columns:
+        df["present_value"] = None
+    if "pnl" not in df.columns:
+        df["pnl"] = None
+    if "pnl_pct" not in df.columns:
+        df["pnl_pct"] = None
+    if "batch_pnl" not in df.columns:
+        df["batch_pnl"] = None
+    if "batch_pnl_pct" not in df.columns:
+        df["batch_pnl_pct"] = None
+
+    if {"total_qty", "ltp"}.issubset(df.columns):
+        df.loc[summary_rows, "present_value"] = (
+            df.loc[summary_rows, "total_qty"] * df.loc[summary_rows, "ltp"]
+        )
+
+    if {"present_value", "invested"}.issubset(df.columns):
+        df.loc[summary_rows, "pnl"] = (
+            df.loc[summary_rows, "present_value"] - df.loc[summary_rows, "invested"]
+        )
+
+    if {"pnl", "invested"}.issubset(df.columns):
+        invested = df.loc[summary_rows, "invested"]
+        df.loc[summary_rows, "pnl_pct"] = (
+            df.loc[summary_rows, "pnl"].where(invested.ne(0)) / invested * 100
+        )
+
+    if {"batch_qty", "ltp"}.issubset(df.columns):
+        df.loc[batch_rows, "present_value"] = (
+            df.loc[batch_rows, "batch_qty"] * df.loc[batch_rows, "ltp"]
+        )
+
+    if {"batch_qty", "ltp", "batch_price"}.issubset(df.columns):
+        df.loc[batch_rows, "batch_pnl"] = df.loc[batch_rows, "batch_qty"] * (
+            df.loc[batch_rows, "ltp"] - df.loc[batch_rows, "batch_price"]
+        )
+
+    if {"ltp", "batch_price"}.issubset(df.columns):
+        batch_price = df.loc[batch_rows, "batch_price"]
+        df.loc[batch_rows, "batch_pnl_pct"] = (
+            (df.loc[batch_rows, "ltp"] - batch_price).where(batch_price.ne(0))
+            / batch_price
+            * 100
+        )
+
+    unmatched_symbols = sorted(symbol_key[~matched_rows].dropna().unique().tolist())
+    return df, unmatched_symbols
+
+
+def _format_display_value(value: Any, decimals: int = 2) -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    if isinstance(value, (int, float)):
+        return f"{value:,.{decimals}f}"
+    return str(value)
+
+
+def _format_percent_value(value: Any, decimals: int = 2) -> str:
+    formatted_value = _format_display_value(value, decimals)
+    if formatted_value == "-":
+        return formatted_value
+    return f"{formatted_value}%"
+
+
+def _pnl_color(value: Any) -> str:
+    converted = pd.to_numeric(value, errors="coerce")
+    if pd.isna(converted):
+        return "#475569"
+    if converted > 0:
+        return "#047857"
+    if converted < 0:
+        return "#b91c1c"
+    return "#475569"
+
+
+def _style_pnl_columns(df: pd.DataFrame):
+    pnl_columns = [
+        column
+        for column in ["batch_pnl", "batch_pnl_pct", "pnl", "pnl_pct", "Batch P&L", "Batch P&L %", "P&L", "P&L %"]
+        if column in df.columns
+    ]
+    formatters = {
+        column: _format_display_value
+        for column in df.columns
+        if column not in {"batch_pnl_pct", "pnl_pct", "Batch P&L %", "P&L %"}
+    }
+    for column in ["batch_pnl_pct", "pnl_pct", "Batch P&L %", "P&L %"]:
+        if column in df.columns:
+            formatters[column] = _format_percent_value
+
+    styler = df.style.format(formatters, na_rep="-")
+    for column in pnl_columns:
+        styler = styler.map(lambda value: f"color: {_pnl_color(value)}; font-weight: 600", subset=[column])
+    return styler
+
+
+def _summary_display_df(summary: pd.Series) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Qty": summary.get("total_qty"),
+                "Buy Avg": summary.get("buy_avg"),
+                "Invested": summary.get("invested"),
+                "Present Value": summary.get("present_value"),
+                "LTP": summary.get("ltp"),
+                "P&L": summary.get("pnl"),
+                "P&L %": summary.get("pnl_pct"),
+            }
+        ]
+    )
+
+
+def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None = None) -> int:
+    visible_rows = max(row_count, min_rows)
+    if max_rows is not None:
+        visible_rows = min(visible_rows, max_rows)
+    header_height = 38
+    row_height = 35
+    border_padding = 4
+    return header_height + (visible_rows * row_height) + border_padding
+
+
+def _summary_expander_label(summary: pd.Series, batch_count: int) -> str:
+    return (
+        f"{summary.get('symbol', '-')}"
+        
+    )
+
+
+def display_holdings_breakdown_preview(df: pd.DataFrame) -> None:
+    summary_batches: list[tuple[pd.Series, list[pd.Series]]] = []
+    current_summary: pd.Series | None = None
+    current_batches: list[pd.Series] = []
+
+    for _, row in df.iterrows():
+        row_type = str(row.get("row_type") or "").upper()
+        if row_type == "SUMMARY":
+            if current_summary is not None:
+                summary_batches.append((current_summary, current_batches))
+            current_summary = row
+            current_batches = []
+        elif row_type == "BATCH" and current_summary is not None:
+            current_batches.append(row)
+
+    if current_summary is not None:
+        summary_batches.append((current_summary, current_batches))
+
+    if not summary_batches:
+        st.dataframe(df, width="stretch")
+        return
+
+    for summary, batches in summary_batches:
+        #_summary_expander_label(summary, len(batches))
+        with st.expander(_format_display_value(summary.get("symbol")), expanded=True):
+            summary_display_df = _summary_display_df(summary)
+            st.dataframe(
+                _style_pnl_columns(summary_display_df),
+                width="stretch",
+                height=_dataframe_height(len(summary_display_df)),
+                hide_index=True,
+            )
+
+            batch_df = pd.DataFrame(batches)
+            if batch_df.empty:
+                st.info("No batch rows found for this summary.")
+                continue
+
+            batch_columns = [
+                "trade_date",
+                "batch_qty",
+                "batch_price",
+                "ltp",
+                "present_value",
+                "batch_pnl",
+                "batch_pnl_pct",
+                "age_days",                
+                "present_age",
+            ]
+            display_batch_df = batch_df[[column for column in batch_columns if column in batch_df.columns]]
+            display_batch_df = display_batch_df.rename(
+                columns={
+                    "trade_date": "Date",
+                    "batch_qty": "Batch Qty",
+                    "batch_price": "Batch Price",
+                    "ltp": "LTP",
+                    "present_value": "Present Value",
+                    "batch_pnl": "Batch P&L",
+                    "batch_pnl_pct": "Batch P&L %",
+                    "age_days": "Age (Days)",
+                    "present_age": "Present Age",
+                }
+            )
+            st.dataframe(
+                _style_pnl_columns(display_batch_df),
+                width="stretch",
+                height=_dataframe_height(len(display_batch_df)),
+                hide_index=True,
+            )
 
 
 def replace_holdings_breakdown_in_supabase(df: pd.DataFrame) -> None:
@@ -162,7 +473,7 @@ def replace_holdings_breakdown_in_supabase(df: pd.DataFrame) -> None:
     except URLError as exc:
         raise RuntimeError(f"Failed to clear Supabase holdings table: {exc.reason}") from exc
 
-    records = df.to_dict(orient="records")
+    records = [_json_safe_record(record) for record in df.to_dict(orient="records")]
     insert_endpoint = f"{supabase_url}/rest/v1/{encoded_table_name}"
     for chunk in _chunk_records(records, SUPABASE_BATCH_SIZE):
         payload = json.dumps(chunk, allow_nan=False).encode("utf-8")
@@ -181,49 +492,68 @@ def replace_holdings_breakdown_in_supabase(df: pd.DataFrame) -> None:
 
 kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
 
-try:
-    holdings = kite.holdings()
-    if holdings:
-        df = pd.DataFrame(holdings)
-        print(df.columns)
-        #print(df.head())
-        display_cols = [
-            "tradingsymbol",
-            "exchange",
-            "price",
-            "quantity",
-            "average_price",
-            "last_price",
-            "day_change_percentage",
-            "pnl"
+st.subheader("Portfolio Holdings")
+
+
+def fetch_and_display_holdings():
+    try:
+        holdings = kite.holdings()
+        if holdings:
+            df = pd.DataFrame(holdings)
+            if {"tradingsymbol", "last_price"}.issubset(df.columns):
+                st.session_state["ltp_by_symbol"] = (
+                    df.assign(symbol=_normalized_symbol_series(df["tradingsymbol"]))
+                    .set_index("symbol")["last_price"]
+                    .dropna()
+                    .to_dict()
+                )
+            else:
+                st.session_state["ltp_by_symbol"] = {}
+            print("portfolio holdings columns:\n" )
+            print(df.columns)
+            #print(df.head())
+            display_cols = [
+                "tradingsymbol",
+                "exchange",
+                "price",
+                "quantity",
+                "average_price",
+                "last_price",
+                "day_change_percentage",
+                "pnl"
+                
+            ]
+            display_cols = [column for column in display_cols if column in df.columns]
+            #st.subheader("Your Portfolio Holdings")
+            st.dataframe(df[display_cols] if display_cols else df, width="stretch")
+
+            total_pnl = df["pnl"].sum() if "pnl" in df.columns else 0
+            st.metric("Total P&L", f"₹{total_pnl:,.2f}", delta=f"{total_pnl:.2f}")
             
-        ]
-        st.subheader("Your Portfolio Holdings")
-        st.dataframe(df[display_cols], width="stretch")
+            st.download_button(
+                "Download Kite Holdings as CSV",
+                data=df.to_csv(),
+                file_name=f"holdings_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+        else:
+            st.session_state["ltp_by_symbol"] = {}
+            st.warning("No holdings found in this account.")
+    except Exception as exc:
+        if is_token_error(exc):
+            clear_auth_state()
+            st.error("Your session expired. Please login again to view holdings.")
+            st.rerun()
+        st.error(f"Error fetching holdings. Please try again. Details: {exc}")
 
-        total_pnl = df["pnl"].sum()
-        st.metric("Total P&L", f"₹{total_pnl:,.2f}", delta=f"{total_pnl:.2f}")
-        
-        st.download_button(
-            "Download CSV",
-            data=df.to_csv(),
-            file_name=f"holdings_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-             mime="text/csv",
-        )
 
+fetch_and_display_holdings()
 
-    else:
-        st.warning("No holdings found in this account.")
-except Exception as exc:
-    if is_token_error(exc):
-        clear_auth_state()
-        st.error("Your session expired. Please login again to view holdings.")
-        st.rerun()
-    st.error("Error fetching holdings. Please try again.")
-
+#if st.button("Fetch Holdings", type="primary"):
+    #fetch_and_display_holdings()
 
 st.divider()
-st.subheader("Upload Holdings Breakdown")
+#st.subheader("Upload Holdings Breakdown")
 
 uploaded_holdings_file = st.file_uploader(
     "Upload holdings breakdown CSV or XLSX",
@@ -231,18 +561,40 @@ uploaded_holdings_file = st.file_uploader(
 )
 
 if uploaded_holdings_file is not None:
-    try:
-        holdings_breakdown_df = clean_holdings_breakdown_for_supabase(
-            _read_holdings_breakdown_upload(uploaded_holdings_file)
-        )
-        st.dataframe(holdings_breakdown_df, width="stretch")
+    try:        
+        
+        #_read_holdings_breakdown_upload(uploaded_holdings_file)-method is skipped to directly
+        # read the file in the try block to handle ImportError for missing dependencies when reading XLSX files.
+        filename = uploaded_holdings_file.name.lower()
+        if filename.endswith(".csv"):
+            df_brkdown = pd.read_csv(uploaded_holdings_file)
+        elif filename.endswith(".xlsx"):
+            df_brkdown = pd.read_excel(uploaded_holdings_file)
+        else:
+            raise ValueError("Upload a CSV or XLSX file.")
+        
+        print("holdings breakdown before cleaning:\n", df_brkdown.head())
+        holdings_breakdown_df = clean_holdings_breakdown_for_supabase(df_brkdown)
+        
+        print("holdings breakdown after cleaning:\n", holdings_breakdown_df.head())
 
-        if st.button("Replace Supabase holdings table", type="primary"):
-            replace_holdings_breakdown_in_supabase(holdings_breakdown_df)
-            st.success(
-                f"Supabase table {HOLDINGS_TABLE_NAME} replaced with "
-                f"{len(holdings_breakdown_df):,} row(s)."
+        holdings_breakdown_df, unmatched_symbols = enrich_holdings_breakdown_with_ltp(
+            holdings_breakdown_df,
+            st.session_state.get("ltp_by_symbol", {}),
+        )
+        print("holdings breakdown after enrichment:\n", holdings_breakdown_df.head())
+
+        if unmatched_symbols:
+            st.warning(
+                "No live LTP found for: "
+                + ", ".join(unmatched_symbols[:10])
+                + ("..." if len(unmatched_symbols) > 10 else "")
             )
+
+        display_holdings_breakdown_preview(holdings_breakdown_df)
+        
+        #replace_holdings_breakdown_in_supabase(holdings_breakdown_df)
+                    
     except ImportError as exc:
         st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
     except Exception as exc:
@@ -250,7 +602,7 @@ if uploaded_holdings_file is not None:
 
 
 
-if "access_token" in st.session_state:
-    if st.sidebar.button("Logout"):
-        clear_auth_state()
-        st.rerun()
+#if "access_token" in st.session_state:
+#    if st.sidebar.button("Logout"):
+#        clear_auth_state()
+#        st.rerun()
