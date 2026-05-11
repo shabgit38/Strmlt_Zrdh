@@ -217,6 +217,7 @@ def enrich_holdings_breakdown_with_ltp(
     df: pd.DataFrame, ltp_by_symbol: dict[str, float]
 ) -> tuple[pd.DataFrame, list[str]]:
     df = df.copy()
+    
     if not ltp_by_symbol or "symbol" not in df.columns:
         return df, []
 
@@ -399,7 +400,7 @@ def display_holdings_breakdown_preview(df: pd.DataFrame) -> None:
             st.dataframe(
                 _style_pnl_columns(summary_display_df),
                 width="stretch",
-                height=_dataframe_height(len(summary_display_df)),
+                height=_dataframe_height(len(summary_display_df)),#(numRows + 1) * 35 + 3
                 hide_index=True,
             )
 
@@ -436,7 +437,7 @@ def display_holdings_breakdown_preview(df: pd.DataFrame) -> None:
             st.dataframe(
                 _style_pnl_columns(display_batch_df),
                 width="stretch",
-                height=_dataframe_height(len(display_batch_df)),
+                height=_dataframe_height(len(display_batch_df)),#(numRows + 1) * 35 + 3
                 hide_index=True,
             )
 
@@ -490,52 +491,102 @@ def replace_holdings_breakdown_in_supabase(df: pd.DataFrame) -> None:
             raise RuntimeError(f"Supabase holdings upload failed: {exc.reason}") from exc
 
 
-kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
-
 st.subheader("Portfolio Holdings")
+
+
+def _read_uploaded_file(uploaded_file) -> pd.DataFrame:
+    filename = uploaded_file.name.lower()
+    if filename.endswith(".csv"):
+        return pd.read_csv(uploaded_file)
+    if filename.endswith(".xlsx"):
+        return pd.read_excel(uploaded_file)
+    raise ValueError("Upload a CSV or XLSX file.")
+
+
+def _cache_ltp_by_symbol(df: pd.DataFrame) -> None:
+    if {"tradingsymbol", "last_price"}.issubset(df.columns):
+        st.session_state["ltp_by_symbol"] = (
+            df.assign(symbol=_normalized_symbol_series(df["tradingsymbol"]))
+            .set_index("symbol")["last_price"]
+            .dropna()
+            .to_dict()
+        )
+    else:
+        st.session_state["ltp_by_symbol"] = {}
+
+
+def display_kite_holdings(df: pd.DataFrame) -> None:
+    if df.empty:
+        st.session_state["ltp_by_symbol"] = {}
+        st.warning("No holdings found.")
+        return
+
+    df = df.copy()
+    _cache_ltp_by_symbol(df)
+    print("portfolio holdings columns:\n")
+    print(df.columns)
+    
+    df["invested"] = pd.to_numeric(df["average_price"], errors="coerce") * pd.to_numeric(
+            df["quantity"], errors="coerce"
+    )
+    df["CurrentValue"] = pd.to_numeric(df["last_price"], errors="coerce") * pd.to_numeric(
+            df["quantity"], errors="coerce"
+    )
+    if "pnl_pct" not in df.columns and {"pnl", "average_price", "quantity"}.issubset(df.columns):
+        invested = df["invested"]        
+        df["pnl_pct"] = pd.to_numeric(df["pnl"], errors="coerce").where(invested.ne(0)) / invested * 100
+
+    display_cols = [
+        "tradingsymbol",
+        "quantity",
+        "average_price",
+        "invested",
+        "CurrentValue",
+        "last_price",        
+        "pnl",
+        "pnl_pct",
+        "day_change_percentage"
+    ]
+    display_cols = [column for column in display_cols if column in df.columns]
+    display_df = df[display_cols] if display_cols else df
+    display_df = display_df.rename(
+        columns={
+            "tradingsymbol": "Symbol",
+            "quantity": "Quantity",
+            "average_price": "Average Price",
+            "invested": "Invested",
+            "CurrentValue": "Current Value",
+            "last_price": "Last Price",            
+            "pnl": "P&L",
+            "pnl_pct": "P&L %",
+            "day_change_percentage": "Day Change %",
+        }
+    )
+    st.dataframe(_style_pnl_columns(display_df), width="stretch",height=_dataframe_height(len(display_df)))
+    
+    total_invested = pd.to_numeric(df["invested"], errors="coerce").sum() if "invested" in df.columns else 0
+    st.metric("Total Invested", f"Rs {total_invested:,.2f}", delta=f"{total_invested:.2f}")
+
+    total_pnl = pd.to_numeric(df["pnl"], errors="coerce").sum() if "pnl" in df.columns else 0
+    st.metric("Total P&L", f"Rs {total_pnl:,.2f}", delta=f"{total_pnl:.2f}")
+
 
 
 def fetch_and_display_holdings():
     try:
+        kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
         holdings = kite.holdings()
         if holdings:
             df = pd.DataFrame(holdings)
-            if {"tradingsymbol", "last_price"}.issubset(df.columns):
-                st.session_state["ltp_by_symbol"] = (
-                    df.assign(symbol=_normalized_symbol_series(df["tradingsymbol"]))
-                    .set_index("symbol")["last_price"]
-                    .dropna()
-                    .to_dict()
-                )
-            else:
-                st.session_state["ltp_by_symbol"] = {}
-            print("portfolio holdings columns:\n" )
-            print(df.columns)
-            #print(df.head())
-            display_cols = [
-                "tradingsymbol",
-                "exchange",
-                "price",
-                "quantity",
-                "average_price",
-                "last_price",
-                "day_change_percentage",
-                "pnl"
-                
-            ]
-            display_cols = [column for column in display_cols if column in df.columns]
-            #st.subheader("Your Portfolio Holdings")
-            st.dataframe(df[display_cols] if display_cols else df, width="stretch")
+            display_kite_holdings(df)
 
-            total_pnl = df["pnl"].sum() if "pnl" in df.columns else 0
-            st.metric("Total P&L", f"₹{total_pnl:,.2f}", delta=f"{total_pnl:.2f}")
-            
             st.download_button(
-                "Download Kite Holdings as CSV",
-                data=df.to_csv(),
-                file_name=f"holdings_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
+            "Download Kite Holdings as CSV",
+            data=df.to_csv(index=False),
+            file_name=f"holdings_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
             )
+
         else:
             st.session_state["ltp_by_symbol"] = {}
             st.warning("No holdings found in this account.")
@@ -547,58 +598,67 @@ def fetch_and_display_holdings():
         st.error(f"Error fetching holdings. Please try again. Details: {exc}")
 
 
-fetch_and_display_holdings()
+tab_upload_kite, tab_fetch_kite, tab_upload_holdings_breakdown = st.tabs(["Upload Kite Holdings", "Fetch from Kite","Upload Holdings Breakdown"])
 
-#if st.button("Fetch Holdings", type="primary"):
-    #fetch_and_display_holdings()
+with tab_upload_kite:
+    uploaded_kite_holdings_file = st.file_uploader(
+        "Upload Kite holdings CSV or XLSX",
+        type=["csv", "xlsx"],
+        key="kite_holdings_upload",
+    )
 
-st.divider()
-#st.subheader("Upload Holdings Breakdown")
+    if uploaded_kite_holdings_file is not None:
+        try:
+            kite_holdings_df = _read_uploaded_file(uploaded_kite_holdings_file)
+            display_kite_holdings(kite_holdings_df)
+        except ImportError as exc:
+            st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
+        except Exception as exc:
+            st.error(f"Failed to upload Kite holdings: {exc}")
 
-uploaded_holdings_file = st.file_uploader(
-    "Upload holdings breakdown CSV or XLSX",
-    type=["csv", "xlsx"],
-)
+with tab_fetch_kite:
+    if st.button("Fetch Holdings from Kite", type="primary"):
+        fetch_and_display_holdings()
 
-if uploaded_holdings_file is not None:
-    try:        
-        
-        #_read_holdings_breakdown_upload(uploaded_holdings_file)-method is skipped to directly
-        # read the file in the try block to handle ImportError for missing dependencies when reading XLSX files.
-        filename = uploaded_holdings_file.name.lower()
-        if filename.endswith(".csv"):
-            df_brkdown = pd.read_csv(uploaded_holdings_file)
-        elif filename.endswith(".xlsx"):
-            df_brkdown = pd.read_excel(uploaded_holdings_file)
-        else:
-            raise ValueError("Upload a CSV or XLSX file.")
-        
-        print("holdings breakdown before cleaning:\n", df_brkdown.head())
-        holdings_breakdown_df = clean_holdings_breakdown_for_supabase(df_brkdown)
-        
-        print("holdings breakdown after cleaning:\n", holdings_breakdown_df.head())
 
-        holdings_breakdown_df, unmatched_symbols = enrich_holdings_breakdown_with_ltp(
-            holdings_breakdown_df,
-            st.session_state.get("ltp_by_symbol", {}),
-        )
-        print("holdings breakdown after enrichment:\n", holdings_breakdown_df.head())
+with tab_upload_holdings_breakdown:
 
-        if unmatched_symbols:
-            st.warning(
-                "No live LTP found for: "
-                + ", ".join(unmatched_symbols[:10])
-                + ("..." if len(unmatched_symbols) > 10 else "")
+    uploaded_brkholdings_file = st.file_uploader(
+        "Upload holdings breakdown CSV or XLSX",
+        type=["csv", "xlsx"],
+    )
+
+    if uploaded_brkholdings_file is not None:
+        try:                    
+            #_read_holdings_breakdown_upload(uploaded_holdings_file)
+            brkdown_df = _read_uploaded_file(uploaded_brkholdings_file)              
+            
+            print("holdings breakdown before cleaning:\n", brkdown_df.head())
+            holdings_breakdown_df = clean_holdings_breakdown_for_supabase(brkdown_df)
+            
+            print("holdings breakdown after cleaning:\n", holdings_breakdown_df.head())
+
+            holdings_breakdown_df, unmatched_symbols = enrich_holdings_breakdown_with_ltp(
+                holdings_breakdown_df,
+                st.session_state.get("ltp_by_symbol", {}),
             )
+            print("holdings breakdown after enrichment:\n", holdings_breakdown_df.head())
 
-        display_holdings_breakdown_preview(holdings_breakdown_df)
-        
-        #replace_holdings_breakdown_in_supabase(holdings_breakdown_df)
-                    
-    except ImportError as exc:
-        st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
-    except Exception as exc:
-        st.error(f"Failed to upload holdings breakdown: {exc}")
+            if unmatched_symbols:
+                st.warning(
+                    "No live LTP found for: "
+                    + ", ".join(unmatched_symbols[:10])
+                    + ("..." if len(unmatched_symbols) > 10 else "")
+                )
+
+            display_holdings_breakdown_preview(holdings_breakdown_df)
+            
+            #replace_holdings_breakdown_in_supabase(holdings_breakdown_df)
+                        
+        except ImportError as exc:
+            st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
+        except Exception as exc:
+            st.error(f"Failed to upload holdings breakdown: {exc}")
 
 
 

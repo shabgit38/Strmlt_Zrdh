@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-from getHistoricData import (
+from computRngs import (
     get_stock_data,
     get_weekly_close,
     get_monthly_close,

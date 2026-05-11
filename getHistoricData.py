@@ -8,6 +8,13 @@ import pandas as pd
 import streamlit as st
 from kiteconnect import KiteConnect
 
+from computRngs import (
+    get_high_low_resampled,
+    get_monthly_close,
+    get_weekly_close,
+    get_weekly_ohlc,
+)
+from indicators import add_ema
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 
 # ------------------------------------------------------------------------------
@@ -76,6 +83,59 @@ def get_kite_historical_data(
     df = df[existing_columns]
     df.sort_index(inplace=True)
     return df
+
+
+@st.cache_data(ttl=60 * 60)
+def load_analytics_history(
+    _kite: KiteConnect,
+    instrument_token: int | str,
+    to_date: str,
+) -> pd.DataFrame:
+    """
+    Load one cached 2Y daily dataframe for levels and EMAs.
+    """
+    end = datetime.combine(pd.to_datetime(to_date).date(), time(23, 59, 59))
+    start = datetime.combine((pd.Timestamp(end) - pd.DateOffset(years=2)).date(), time.min)
+    return get_kite_historical_data(
+        kite=_kite,
+        instrument_token=instrument_token,
+        interval="day",
+        from_date=start,
+        to_date=end,
+    )
+
+
+def add_dashboard_metrics(display_df: pd.DataFrame, analytics_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add period high/low and latest EMA values to the visible dashboard dataframe.
+    """
+    if analytics_df.empty:
+        return display_df
+
+    analytics_df = add_ema(analytics_df.copy())
+    high_low = get_high_low_resampled(analytics_df)
+    weekly_close = get_weekly_close(analytics_df)
+    monthly_close = get_monthly_close(analytics_df)
+    weekly_ohlc = get_weekly_ohlc(analytics_df)
+
+    for period in ["1W", "1M", "3M", "6M", "1Y"]:
+        high, low = high_low[period]
+        display_df[f"{period} High"] = round(float(high), 2)
+        display_df[f"{period} Low"] = round(float(low), 2)
+
+    if weekly_close is not None:
+        display_df["Weekly Close"] = round(float(weekly_close), 2)
+    if monthly_close is not None:
+        display_df["Monthly Close"] = round(float(monthly_close), 2)
+    if weekly_ohlc is not None:
+        display_df["Weekly OHLC High"] = round(float(weekly_ohlc["High"]), 2)
+        display_df["Weekly OHLC Low"] = round(float(weekly_ohlc["Low"]), 2)
+        display_df["Weekly OHLC Close"] = round(float(weekly_ohlc["Close"]), 2)
+
+    for span in [5, 10, 20, 100, 200]:
+        display_df[f"EMA{span}"] = round(float(analytics_df.iloc[-1][f"EMA{span}"]), 2)
+
+    return display_df
 
 
 @st.cache_data(ttl=24 * 60 * 60)
@@ -217,8 +277,14 @@ if st.button("Fetch historical data", type="primary"):
             historical_df.insert(0, "Ticker", ticker)
             historical_df.insert(1, "InstrumentToken", token)
 
-            with st.expander(f"{ticker} historical data", expanded=False):
-                st.dataframe(historical_df, width="stretch")
+            with st.expander(f"{ticker} historical data", expanded=True):
+                analytics_df = load_analytics_history(kite, token, to_date.isoformat())
+                display_df = historical_df.copy()
+                display_df.drop(columns=["InstrumentToken"], inplace=True)
+                display_df = display_df.reset_index().rename(columns={"date": "Date"})
+                display_df["Date"] = pd.to_datetime(display_df["Date"]).dt.date
+                display_df = add_dashboard_metrics(display_df, analytics_df)
+                st.dataframe(display_df, width="stretch", hide_index=True)
 
             all_frames.append(historical_df)
 
