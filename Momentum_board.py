@@ -5,9 +5,9 @@ from computRngs import (
     get_stock_data,
     get_weekly_close,
     get_monthly_close,
-    get_high_low_resampled,
     get_weekly_ohlc,
 )
+from kite_analytics import get_high_low_resampled
 from indicators import (
     add_ema,
     pivot_points,

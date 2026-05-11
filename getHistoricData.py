@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import datetime
 import json
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -6,136 +6,14 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 import streamlit as st
-from kiteconnect import KiteConnect
 
-from computRngs import (
-    get_high_low_resampled,
-    get_monthly_close,
-    get_weekly_close,
-    get_weekly_ohlc,
+from kite_analytics import (
+    build_metric_ladder,
+    build_vertical_dashboard,
+    highlight_ltp_cells,
+    load_analytics_history,
 )
-from indicators import add_ema
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
-
-# ------------------------------------------------------------------------------
-# KITE HISTORICAL DATA
-# Wrapper around Kite's historical candle endpoint:
-# GET /instruments/historical/:instrument_token/:interval
-# ------------------------------------------------------------------------------
-
-def get_kite_historical_data(
-    kite: KiteConnect,
-    instrument_token: int | str,
-    interval: str,
-    from_date: str | datetime,
-    to_date: str | datetime,
-    continuous: int | bool = 0,
-    oi: int | bool = 0,
-) -> pd.DataFrame:
-    """
-    Fetch historical candles from Kite and return them as a DataFrame.
-    """
-    if not isinstance(kite, KiteConnect):
-        raise TypeError("kite must be an authenticated KiteConnect instance")
-
-    def _normalize_dt(value: str | datetime) -> datetime:
-        if isinstance(value, datetime):
-            return value
-        try:
-            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-        except ValueError as exc:
-            raise ValueError(
-                "from_date and to_date must be in 'yyyy-mm-dd hh:mm:ss' format"
-            ) from exc
-
-    start = _normalize_dt(from_date)
-    end = _normalize_dt(to_date)
-
-    candles = kite.historical_data(
-        instrument_token=int(instrument_token),
-        from_date=start,
-        to_date=end,
-        interval=interval,
-        continuous=int(bool(continuous)),
-        oi=int(bool(oi)),
-    )
-
-    df = pd.DataFrame(candles)
-    if df.empty:
-        return df
-
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"])
-        df.set_index("date", inplace=True)
-
-    rename_map = {
-        "open": "Open",
-        "high": "High",
-        "low": "Low",
-        "close": "Close",
-        "volume": "Volume",
-        "oi": "OI",
-    }
-    df.rename(columns=rename_map, inplace=True)
-
-    preferred_columns = ["Open", "High", "Low", "Close", "Volume", "OI"]
-    existing_columns = [col for col in preferred_columns if col in df.columns]
-    df = df[existing_columns]
-    df.sort_index(inplace=True)
-    return df
-
-
-@st.cache_data(ttl=60 * 60)
-def load_analytics_history(
-    _kite: KiteConnect,
-    instrument_token: int | str,
-    to_date: str,
-) -> pd.DataFrame:
-    """
-    Load one cached 2Y daily dataframe for levels and EMAs.
-    """
-    end = datetime.combine(pd.to_datetime(to_date).date(), time(23, 59, 59))
-    start = datetime.combine((pd.Timestamp(end) - pd.DateOffset(years=2)).date(), time.min)
-    return get_kite_historical_data(
-        kite=_kite,
-        instrument_token=instrument_token,
-        interval="day",
-        from_date=start,
-        to_date=end,
-    )
-
-
-def add_dashboard_metrics(display_df: pd.DataFrame, analytics_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add period high/low and latest EMA values to the visible dashboard dataframe.
-    """
-    if analytics_df.empty:
-        return display_df
-
-    analytics_df = add_ema(analytics_df.copy())
-    high_low = get_high_low_resampled(analytics_df)
-    weekly_close = get_weekly_close(analytics_df)
-    monthly_close = get_monthly_close(analytics_df)
-    weekly_ohlc = get_weekly_ohlc(analytics_df)
-
-    for period in ["1W", "1M", "3M", "6M", "1Y"]:
-        high, low = high_low[period]
-        display_df[f"{period} High"] = round(float(high), 2)
-        display_df[f"{period} Low"] = round(float(low), 2)
-
-    if weekly_close is not None:
-        display_df["Weekly Close"] = round(float(weekly_close), 2)
-    if monthly_close is not None:
-        display_df["Monthly Close"] = round(float(monthly_close), 2)
-    if weekly_ohlc is not None:
-        display_df["Weekly OHLC High"] = round(float(weekly_ohlc["High"]), 2)
-        display_df["Weekly OHLC Low"] = round(float(weekly_ohlc["Low"]), 2)
-        display_df["Weekly OHLC Close"] = round(float(weekly_ohlc["Close"]), 2)
-
-    for span in [5, 10, 20, 100, 200]:
-        display_df[f"EMA{span}"] = round(float(analytics_df.iloc[-1][f"EMA{span}"]), 2)
-
-    return display_df
 
 
 @st.cache_data(ttl=24 * 60 * 60)
@@ -216,7 +94,7 @@ def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame
 
 kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
 
-st.caption("Fetch historical candles from Kite using ticker symbols and a date range.")
+st.caption("Fetch cached 2Y daily Kite data and show a sorted price ladder per ticker.")
 
 tickers_input = st.text_input(
     "Tickers (comma-separated)",
@@ -224,90 +102,42 @@ tickers_input = st.text_input(
     help="Enter one or more stock ticker symbols separated by commas.",
 )
 
-col1, col2 = st.columns(2)
-with col1:
-    from_date = st.date_input("From date")
-with col2:
-    to_date = st.date_input("To date")
-
-interval = st.selectbox(
-    "Interval",
-    ["minute", "day", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute"],
-    index=1,
-)
-
-continuous =  0  #st.checkbox("Continuous data", value=False)
-oi = 0 #st.checkbox("Include OI", value=False)
-
-if st.button("Fetch historical data", type="primary"):
+if st.button("Fetch dashboard", type="primary"):
     raw_tickers = [item.strip().upper() for item in tickers_input.split(",") if item.strip()]
 
     if not raw_tickers:
         st.warning("Enter at least one ticker symbol.")
         st.stop()
 
-    if from_date > to_date:
-        st.warning("From date must be before or equal to To date.")
-        st.stop()
-
-    start_dt = datetime.combine(from_date, time.min)
-    end_dt = datetime.combine(to_date, time(23, 59, 59))
+    as_of_date = datetime.now().date().isoformat()
 
     try:
         instruments_df = load_instrument_token_from_supabase(raw_tickers)
         token_map = resolve_tokens_from_tickers(raw_tickers, instruments_df)
 
-        #st.stop()
-        all_frames: list[pd.DataFrame] = []
+        ladders: dict[str, list[tuple[str, float]]] = {}
         for ticker, token in token_map.items():
-            historical_df = get_kite_historical_data(
-                kite=kite,
-                instrument_token=token,
-                interval=interval,
-                from_date=start_dt,
-                to_date=end_dt,
-                continuous=continuous,
-                oi=oi,
-            )
-
-            if historical_df.empty:
+            analytics_df = load_analytics_history(kite, token, as_of_date)
+            if analytics_df.empty:
                 continue
 
-            historical_df = historical_df.copy()
-            historical_df.insert(0, "Ticker", ticker)
-            historical_df.insert(1, "InstrumentToken", token)
+            ladders[ticker] = build_metric_ladder(analytics_df)
 
-            with st.expander(f"{ticker} historical data", expanded=True):
-                analytics_df = load_analytics_history(kite, token, to_date.isoformat())
-                display_df = historical_df.copy()
-                display_df.drop(columns=["InstrumentToken"], inplace=True)
-                display_df = display_df.reset_index().rename(columns={"date": "Date"})
-                display_df["Date"] = pd.to_datetime(display_df["Date"]).dt.date
-                display_df = add_dashboard_metrics(display_df, analytics_df)
-                st.dataframe(display_df, width="stretch", hide_index=True)
-
-            all_frames.append(historical_df)
-
-        #st.subheader("Historical candles")
-        if not all_frames:
-            st.info("No candle data returned for the selected inputs.")
+        if not ladders:
+            st.info("No dashboard data returned for the selected inputs.")
         else:
-            result_df = pd.concat(all_frames)
-            #print(result_df.head(10))
-            #st.dataframe(result_df, width="stretch")
-            #st.download_button(
-            #    "Download CSV",
-            #    data=result_df.to_csv(),
-            #    file_name=f"kite_historical_{'_'.join(raw_tickers)}_{interval}.csv",
-            #    mime="text/csv",
-            #)
+            dashboard_df = build_vertical_dashboard(ladders)
+            st.dataframe(
+                dashboard_df.style.map(highlight_ltp_cells),
+                width="stretch",
+            )
 
     except Exception as exc:
         if is_token_error(exc):
             clear_auth_state()
-            st.error("Your session expired. Please login again to load historical data.")
+            st.error("Your session expired. Please login again to load dashboard data.")
             st.rerun()
-        st.error(f"Error fetching historical data: {exc}")
+        st.error(f"Error fetching dashboard data: {exc}")
 
 
 if "access_token" in st.session_state:

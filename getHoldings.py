@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 import pandas as pd
 import streamlit as st
 
+from kite_analytics import build_metric_values, load_analytics_history
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 
 
@@ -48,6 +49,27 @@ NUMERIC_HOLDINGS_COLUMNS = [
     "batch_pnl_pct",
 ]
 INTEGER_HOLDINGS_COLUMNS = ["total_qty","age_days","batch_qty"]
+TA_METRIC_COLUMNS = [
+    "Day Low",
+    "Day High",
+    "1W Low",
+    "1W High",
+    "1M Low",
+    "1M High",
+    "3M Low",
+    "3M High",
+    "6M Low",
+    "6M High",
+    "1Y Low",
+    "1Y High",
+    "2Y Low",
+    "2Y High",
+    "EMA5",
+    "EMA10",
+    "EMA20",
+    "EMA100",
+    "EMA200",
+]
 
 
 def _json_safe_value(value: Any) -> Any:
@@ -515,13 +537,48 @@ def _cache_ltp_by_symbol(df: pd.DataFrame) -> None:
         st.session_state["ltp_by_symbol"] = {}
 
 
-def display_kite_holdings(df: pd.DataFrame) -> None:
+def enrich_holdings_with_ta_metrics(df: pd.DataFrame, kite) -> pd.DataFrame:
+    if df.empty or "instrument_token" not in df.columns:
+        return df
+
+    enriched_df = df.copy()
+    as_of_date = datetime.now().date().isoformat()
+    failed_symbols: list[str] = []
+    for index, token in enriched_df["instrument_token"].items():
+        if pd.isna(token):
+            continue
+        try:
+            analytics_df = load_analytics_history(kite, token, as_of_date)
+        except Exception:
+            failed_symbols.append(str(enriched_df.loc[index].get("tradingsymbol", token)))
+            continue
+
+        metrics = build_metric_values(analytics_df)
+        for column in TA_METRIC_COLUMNS:
+            value = metrics.get(column)
+            if value is not None:
+                enriched_df.loc[index, column] = round(float(value), 2)
+
+    if failed_symbols:
+        st.warning(
+            "Could not load TA metrics for: "
+            + ", ".join(failed_symbols[:10])
+            + ("..." if len(failed_symbols) > 10 else "")
+        )
+
+    return enriched_df
+
+
+def display_kite_holdings(df: pd.DataFrame, kite=None) -> pd.DataFrame | None:
     if df.empty:
         st.session_state["ltp_by_symbol"] = {}
         st.warning("No holdings found.")
-        return
+        return None
 
     df = df.copy()
+    if kite is not None:
+        df = enrich_holdings_with_ta_metrics(df, kite)
+
     _cache_ltp_by_symbol(df)
     print("portfolio holdings columns:\n")
     print(df.columns)
@@ -545,7 +602,8 @@ def display_kite_holdings(df: pd.DataFrame) -> None:
         "last_price",        
         "pnl",
         "pnl_pct",
-        "day_change_percentage"
+        "day_change_percentage",
+        *TA_METRIC_COLUMNS,
     ]
     display_cols = [column for column in display_cols if column in df.columns]
     display_df = df[display_cols] if display_cols else df
@@ -570,6 +628,8 @@ def display_kite_holdings(df: pd.DataFrame) -> None:
     total_pnl = pd.to_numeric(df["pnl"], errors="coerce").sum() if "pnl" in df.columns else 0
     st.metric("Total P&L", f"Rs {total_pnl:,.2f}", delta=f"{total_pnl:.2f}")
 
+    return df
+
 
 
 def fetch_and_display_holdings():
@@ -578,11 +638,11 @@ def fetch_and_display_holdings():
         holdings = kite.holdings()
         if holdings:
             df = pd.DataFrame(holdings)
-            display_kite_holdings(df)
+            enriched_df = display_kite_holdings(df, kite=kite)
 
             st.download_button(
             "Download Kite Holdings as CSV",
-            data=df.to_csv(index=False),
+            data=(enriched_df if enriched_df is not None else df).to_csv(index=False),
             file_name=f"holdings_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
             )

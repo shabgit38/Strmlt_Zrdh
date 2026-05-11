@@ -14,16 +14,16 @@ def get_stock_data(ticker: str) -> pd.DataFrame:
     yfinance ≥0.2 returns MultiIndex columns even for a single ticker;
     we flatten them to plain names (Close, High, Low, Open, Volume).
     """
-    import yfinance as yf
+    #import yfinance as yf
 
-    df = yf.download(ticker, period="2y", interval="1d", auto_adjust=True, progress=False)
-    df.dropna(inplace=True)
+    #df = yf.download(ticker, period="2y", interval="1d", auto_adjust=True, progress=False)
+    #df.dropna(inplace=True)
 
     # Flatten MultiIndex columns produced by newer yfinance versions
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+    #if isinstance(df.columns, pd.MultiIndex):
+    #    df.columns = df.columns.get_level_values(0)
 
-    return df
+    #return df
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,36 +52,6 @@ def get_monthly_close(df: pd.DataFrame):
 # We drop the current incomplete week before resampling so that a partial
 # Monday–Wednesday candle does not inflate the "1W High".
 # ─────────────────────────────────────────────────────────────────────────────
-
-def get_high_low_resampled(df: pd.DataFrame) -> dict:
-    """
-    Return {period: (high, low)} for 1W, 1M, 3M, 6M, 1Y.
-    All windows are trailing from the last *completed* Friday to avoid
-    counting an open, partial week.
-    """
-    df = df.copy()
-    df.index = pd.to_datetime(df.index)
-
-    # Find the last completed week boundary (Friday) and trim forward data
-    last_complete_date = df.resample("W-FRI").last().index[-2]
-    df = df[df.index <= last_complete_date]
-
-    weekly  = df.resample("W-FRI").agg({"High": "max", "Low": "min"})
-    monthly = df.resample("ME").agg({"High": "max", "Low": "min"})
-
-    latest = df.index.max()
-    df_3m  = df[df.index >= latest - pd.DateOffset(months=3)]
-    df_6m  = df[df.index >= latest - pd.DateOffset(months=6)]
-    df_1y  = df[df.index >= latest - pd.DateOffset(years=1)]
-
-    return {
-        "1W": (float(weekly.iloc[-1]["High"]),  float(weekly.iloc[-1]["Low"])),
-        "1M": (float(monthly.iloc[-1]["High"]), float(monthly.iloc[-1]["Low"])),
-        "3M": (float(df_3m["High"].max()),      float(df_3m["Low"].min())),
-        "6M": (float(df_6m["High"].max()),      float(df_6m["Low"].min())),
-        "1Y": (float(df_1y["High"].max()),      float(df_1y["Low"].min())),
-    }
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WEEKLY OHLC  (used for weekly pivot points)
