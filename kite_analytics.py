@@ -7,6 +7,14 @@ from kiteconnect import KiteConnect
 from indicators import add_ema
 
 
+def _normalize_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.index = pd.to_datetime(df.index)
+    if getattr(df.index, "tz", None) is not None:
+        df.index = df.index.tz_localize(None)
+    return df
+
+
 def get_kite_historical_data(
     kite: KiteConnect,
     instrument_token: int | str,
@@ -51,6 +59,7 @@ def get_kite_historical_data(
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"])
         df.set_index("date", inplace=True)
+        df = _normalize_datetime_index(df)
 
     rename_map = {
         "open": "Open",
@@ -96,7 +105,7 @@ def get_high_low_resampled(df: pd.DataFrame) -> dict:
     counting an open, partial week.
     """
     df = df.copy()
-    df.index = pd.to_datetime(df.index)
+    df = _normalize_datetime_index(df)
 
     completed_weeks = df.resample("W-FRI").last().dropna()
     if len(completed_weeks) < 2:
@@ -147,7 +156,7 @@ def build_metric_values(analytics_df: pd.DataFrame) -> dict[str, float]:
     metrics["2Y Low"] = float(analytics_df["Low"].min())
     metrics["2Y High"] = float(analytics_df["High"].max())
 
-    for span in [5, 10, 20, 100, 200]:
+    for span in [10, 20, 50,100, 200]:
         metrics[f"EMA{span}"] = float(latest[f"EMA{span}"])
 
     return metrics
@@ -170,8 +179,7 @@ def compute_period_returns(
     if analytics_df.empty or "Close" not in analytics_df.columns:
         return {}
 
-    df = analytics_df.copy()
-    df.index = pd.to_datetime(df.index)
+    df = _normalize_datetime_index(analytics_df)
     df.sort_index(inplace=True)
 
     latest_price = pd.to_numeric(ltp, errors="coerce")

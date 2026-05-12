@@ -10,6 +10,7 @@ import streamlit as st
 from kite_analytics import (
     build_metric_ladder,
     build_vertical_dashboard,
+    compute_period_returns,
     highlight_ltp_cells,
     load_analytics_history,
 )
@@ -91,6 +92,14 @@ def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame
     print(f"Resolved tickers to tokens: {resolved}")
     return resolved
 
+def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None = None) -> int:
+    visible_rows = max(row_count, min_rows)
+    if max_rows is not None:
+        visible_rows = min(visible_rows, max_rows)
+    header_height = 38
+    row_height = 35
+    border_padding = 4
+    return header_height + (visible_rows * row_height) + border_padding
 
 kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
 
@@ -116,12 +125,14 @@ if st.button("Fetch dashboard", type="primary"):
         token_map = resolve_tokens_from_tickers(raw_tickers, instruments_df)
 
         ladders: dict[str, list[tuple[str, float]]] = {}
+        return_rows: list[dict] = []
         for ticker, token in token_map.items():
             analytics_df = load_analytics_history(kite, token, as_of_date)
             if analytics_df.empty:
                 continue
 
             ladders[ticker] = build_metric_ladder(analytics_df)
+            return_rows.append({"Ticker": ticker, **compute_period_returns(analytics_df)})
 
         if not ladders:
             st.info("No dashboard data returned for the selected inputs.")
@@ -130,7 +141,11 @@ if st.button("Fetch dashboard", type="primary"):
             st.dataframe(
                 dashboard_df.style.map(highlight_ltp_cells),
                 width="stretch",
+                height=_dataframe_height(len(dashboard_df)), 
+                hide_index=True
             )
+            st.caption("Returns")
+            st.dataframe(pd.DataFrame(return_rows), width="stretch", height=_dataframe_height(len(return_rows)), hide_index=True)
 
     except Exception as exc:
         if is_token_error(exc):

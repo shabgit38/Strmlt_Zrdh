@@ -1,5 +1,6 @@
 import logging
 import os
+from html import escape
 
 import streamlit as st
 from kiteconnect import KiteConnect
@@ -76,7 +77,23 @@ def bootstrap_kite_app(page_title: str) -> tuple[KiteConnect, str, str]:
             login_url = kite.login_url()
             #print(f"Login URL: {login_url}")
             st.info("Please login to Zerodha to continue.")
-            st.link_button("Login to Kite", login_url)
+            st.markdown(
+                f"""
+                <a href="{escape(login_url, quote=True)}" target="_self" style="
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    min-height: 2.5rem;
+                    padding: 0.5rem 1rem;
+                    border-radius: 0.5rem;
+                    background: #ff4b4b;
+                    color: white;
+                    font-weight: 600;
+                    text-decoration: none;
+                ">Login to Kite</a>
+                """,
+                unsafe_allow_html=True,
+            )
             st.stop()
 
         try:

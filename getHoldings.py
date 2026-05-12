@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 import pandas as pd
 import streamlit as st
 
-from kite_analytics import build_metric_values, load_analytics_history
+from kite_analytics import build_metric_values, compute_period_returns, load_analytics_history
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 
 
@@ -63,12 +63,21 @@ TA_METRIC_COLUMNS = [
     "1Y Low",
     "1Y High",
     "2Y Low",
-    "2Y High",
-    "EMA5",
+    "2Y High",    
     "EMA10",
     "EMA20",
+    "EMA50",
     "EMA100",
     "EMA200",
+]
+RETURN_COLUMNS = [
+    "1W Return %",
+    "1M Return %",
+    "3M Return %",
+    "6M Return %",
+    "1Y Return %",
+    "2Y Return %",
+    "YTD Return %",
 ]
 
 
@@ -559,6 +568,12 @@ def enrich_holdings_with_ta_metrics(df: pd.DataFrame, kite) -> pd.DataFrame:
             if value is not None:
                 enriched_df.loc[index, column] = round(float(value), 2)
 
+        returns = compute_period_returns(analytics_df, enriched_df.loc[index].get("last_price"))
+        for column in RETURN_COLUMNS:
+            value = returns.get(column)
+            if value is not None:
+                enriched_df.loc[index, column] = round(float(value), 2)
+
     if failed_symbols:
         st.warning(
             "Could not load TA metrics for: "
@@ -567,6 +582,36 @@ def enrich_holdings_with_ta_metrics(df: pd.DataFrame, kite) -> pd.DataFrame:
         )
 
     return enriched_df
+
+
+def _single_row_table(row: pd.Series, columns: list[str]) -> pd.DataFrame:
+    return pd.DataFrame([{column: row.get(column) for column in columns if column in row.index}])
+
+
+def display_holding_ta_panels(df: pd.DataFrame) -> None:
+    available_ta_columns = [column for column in TA_METRIC_COLUMNS if column in df.columns]
+    available_return_columns = [column for column in RETURN_COLUMNS if column in df.columns]
+    if not available_ta_columns and not available_return_columns:
+        return
+
+    st.caption("Technical metrics")
+    for _, row in df.iterrows():
+        symbol = _format_display_value(row.get("tradingsymbol"))
+        with st.expander(symbol, expanded=False):
+            if available_ta_columns:
+                st.caption("High / Low / EMA")
+                st.dataframe(
+                    _single_row_table(row, available_ta_columns),
+                    width="stretch",
+                    hide_index=True,
+                )
+            if available_return_columns:
+                st.caption("Returns")
+                st.dataframe(
+                    _single_row_table(row, available_return_columns),
+                    width="stretch",
+                    hide_index=True,
+                )
 
 
 def display_kite_holdings(df: pd.DataFrame, kite=None) -> pd.DataFrame | None:
@@ -603,7 +648,6 @@ def display_kite_holdings(df: pd.DataFrame, kite=None) -> pd.DataFrame | None:
         "pnl",
         "pnl_pct",
         "day_change_percentage",
-        *TA_METRIC_COLUMNS,
     ]
     display_cols = [column for column in display_cols if column in df.columns]
     display_df = df[display_cols] if display_cols else df
@@ -620,7 +664,9 @@ def display_kite_holdings(df: pd.DataFrame, kite=None) -> pd.DataFrame | None:
             "day_change_percentage": "Day Change %",
         }
     )
+    #st.table(display_df, width="stretch", height=_dataframe_height(len(display_df)))
     st.dataframe(_style_pnl_columns(display_df), width="stretch",height=_dataframe_height(len(display_df)))
+    display_holding_ta_panels(df)
     
     total_invested = pd.to_numeric(df["invested"], errors="coerce").sum() if "invested" in df.columns else 0
     st.metric("Total Invested", f"Rs {total_invested:,.2f}", delta=f"{total_invested:.2f}")
@@ -638,16 +684,14 @@ def fetch_and_display_holdings():
         holdings = kite.holdings()
         if holdings:
             df = pd.DataFrame(holdings)
-            enriched_df = display_kite_holdings(df, kite=kite)
-
-            st.download_button(
-            "Download Kite Holdings as CSV",
-            data=(enriched_df if enriched_df is not None else df).to_csv(index=False),
-            file_name=f"holdings_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
+            enriched_df = enrich_holdings_with_ta_metrics(df, kite)
+            st.session_state["kite_holdings_df"] = enriched_df
+            st.session_state["kite_holdings_download_filename"] = (
+                f"holdings_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
             )
-
         else:
+            st.session_state.pop("kite_holdings_df", None)
+            st.session_state.pop("kite_holdings_download_filename", None)
             st.session_state["ltp_by_symbol"] = {}
             st.warning("No holdings found in this account.")
     except Exception as exc:
@@ -656,6 +700,10 @@ def fetch_and_display_holdings():
             st.error("Your session expired. Please login again to view holdings.")
             st.rerun()
         st.error(f"Error fetching holdings. Please try again. Details: {exc}")
+
+
+if "request_token" in st.query_params and "access_token" not in st.session_state:
+    bootstrap_kite_app("Zerodha Holdings")
 
 
 tab_upload_kite, tab_fetch_kite, tab_upload_holdings_breakdown = st.tabs(["Upload Kite Holdings", "Fetch from Kite","Upload Holdings Breakdown"])
@@ -679,6 +727,20 @@ with tab_upload_kite:
 with tab_fetch_kite:
     if st.button("Fetch Holdings from Kite", type="primary"):
         fetch_and_display_holdings()
+
+    kite_holdings_df = st.session_state.get("kite_holdings_df")
+    if kite_holdings_df is not None:
+        display_kite_holdings(kite_holdings_df)
+        st.download_button(
+            "Download Kite Holdings as CSV",
+            data=kite_holdings_df.to_csv(index=False),
+            file_name=st.session_state.get(
+                "kite_holdings_download_filename",
+                f"holdings_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            ),
+            mime="text/csv",
+            on_click="ignore",
+        )
 
 
 with tab_upload_holdings_breakdown:
@@ -713,7 +775,7 @@ with tab_upload_holdings_breakdown:
 
             display_holdings_breakdown_preview(holdings_breakdown_df)
             
-            #replace_holdings_breakdown_in_supabase(holdings_breakdown_df)
+            replace_holdings_breakdown_in_supabase(holdings_breakdown_df)
                         
         except ImportError as exc:
             st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
