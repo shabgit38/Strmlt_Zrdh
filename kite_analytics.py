@@ -87,7 +87,9 @@ def load_analytics_history(
     """
     Load one cached 2Y daily dataframe for levels and EMAs.
     """
+    # Define the end point as today
     end = datetime.combine(pd.to_datetime(to_date).date(), time(23, 59, 59))
+    # Calculate the start point two years prior at midnight
     start = datetime.combine((pd.Timestamp(end) - pd.DateOffset(years=2)).date(), time.min)
     return get_kite_historical_data(
         kite=_kite,
@@ -210,8 +212,20 @@ def compute_period_returns(
         if pd.isna(start_close) or float(start_close) == 0:
             returns[label] = None
             continue
+        #--add code start---
+        latest_price_f = float(latest_price)
+        start_close_f = float(start_close)
 
-        returns[label] = round((float(latest_price) - float(start_close)) / float(start_close) * 100, 2)
+        return_pct = round(
+            (latest_price_f - start_close_f)/ start_close_f * 100,2
+        )
+        returns[label] = {
+            "return_pct": return_pct,
+            "latest_price": round(latest_price_f, 2),
+            "start_close": round(start_close_f, 2)
+        }
+        #--add code end---
+        #returns[label] = round((float(latest_price) - float(start_close)) / float(start_close) * 100, 2)
 
     return returns
 
