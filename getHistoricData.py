@@ -32,6 +32,8 @@ from kite_analytics import (
 )
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 
+SUPABASE_INDICES_TABLE_NAME = "Indices_constituents"
+
 
 @st.cache_data(ttl=24 * 60 * 60)
 def load_instrument_token_from_supabase(tickers: list[str]) -> pd.DataFrame:
@@ -89,6 +91,48 @@ def load_instrument_token_from_supabase(tickers: list[str]) -> pd.DataFrame:
 
     return instrument_token_df
 
+@st.cache_data(ttl=24 * 60 * 60)
+def load_indices_from_supabase() -> dict[str, str]:
+    supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
+    supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
+    table_name = get_secret_value("SUPABASE_INDICES_TABLE_NAME").strip() or SUPABASE_INDICES_TABLE_NAME
+
+    if not supabase_url or not supabase_key:
+        raise ValueError(
+            "Missing Supabase config. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
+            "in .streamlit/secrets.toml or environment variables."
+        )
+
+    endpoint = (
+        f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
+        "?select=Index,Constituents&order=Index.asc"
+    )
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+    }
+
+    request = Request(endpoint, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase indices lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase indices lookup failed: {exc.reason}") from exc
+
+    indices: dict[str, str] = {}
+    for record in records:
+        index_name = str(record.get("Index") or "").strip()
+        constituents = str(record.get("Constituents") or "").strip()
+        if index_name and constituents:
+            indices[index_name] = constituents
+    return indices
+
+
 def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame) -> tuple[dict[str, int], list[str]]:
     """
     Map comma-separated tickers to instrument tokens using the instrument dump.
@@ -107,7 +151,7 @@ def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame
         # Prefer the first exact match. If the CSV contains duplicates, the user
         # can refine the lookup later by exchange/segment if needed.
         resolved[ticker] = int(matches.iloc[0]["instrument_token"])
-    print(f"Resolved tickers to tokens: {resolved}")
+    #print(f"Resolved tickers to tokens: {resolved}")
     return resolved, missing
 
 def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None = None) -> int:
@@ -122,9 +166,28 @@ def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None
 kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
 
 st.caption("Fetch cached 2Y daily Kite data and show a sorted price ladder per ticker.")
-#st.text_input()
+
+if "historic_tickers_input" not in st.session_state:
+    st.session_state["historic_tickers_input"] = ""
+
+try:
+    indices = load_indices_from_supabase()
+except Exception as exc:
+    indices = {}
+    st.warning(f"Could not load index constituents: {exc}")
+
+if indices:
+    index_names = ["Custom"] + list(indices.keys())
+    selected_index = st.selectbox("Select index", index_names, key="historic_selected_index")
+    if selected_index != "Custom":
+        selected_constituents = indices[selected_index]
+        if st.session_state["historic_tickers_input"] != selected_constituents:
+            st.session_state["historic_tickers_input"] = selected_constituents
+            st.rerun()
+
 tickers_input = st.text_area(    
     label="e.g. RELIANCE, INFY, TCS",
+    key="historic_tickers_input",
     help="Enter one or more stock ticker symbols separated by commas.",
 )
 

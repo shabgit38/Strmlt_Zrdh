@@ -155,6 +155,12 @@ def build_metric_values(analytics_df: pd.DataFrame) -> dict[str, float]:
         metrics[f"{period} Low"] = float(low)
         metrics[f"{period} High"] = float(high)
 
+    latest_date = pd.to_datetime(analytics_df.index[-1])
+    df_52w = analytics_df[analytics_df.index >= latest_date - pd.DateOffset(weeks=52)]
+    if not df_52w.empty:
+        metrics["52W Low"] = float(df_52w["Low"].min())
+        metrics["52W High"] = float(df_52w["High"].max())
+
     metrics["2Y Low"] = float(analytics_df["Low"].min())
     metrics["2Y High"] = float(analytics_df["High"].max())
 
