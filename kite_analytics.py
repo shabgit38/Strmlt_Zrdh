@@ -4,14 +4,18 @@ import pandas as pd
 import streamlit as st
 from kiteconnect import KiteConnect
 
-from indicators import add_ema
-
 
 def _normalize_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.index = pd.to_datetime(df.index)
     if getattr(df.index, "tz", None) is not None:
         df.index = df.index.tz_localize(None)
+    return df
+
+
+def add_ema(df: pd.DataFrame) -> pd.DataFrame:
+    for span in [10, 20, 50, 100, 200]:
+        df[f"EMA{span}"] = df["Close"].ewm(span=span, adjust=False).mean()
     return df
 
 
