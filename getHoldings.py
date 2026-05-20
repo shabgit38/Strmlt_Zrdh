@@ -1751,38 +1751,39 @@ with tab_historic_data:
 
         if not raw_tickers:
             st.warning("Enter at least one ticker symbol.")
-            st.stop()
+        else:
+            st.session_state["historic_pending_tickers"] = raw_tickers
 
-        as_of_date = datetime.now().date().isoformat()
-
+    pending_historic_tickers = st.session_state.get("historic_pending_tickers")
+    if pending_historic_tickers:
         try:
+            as_of_date = datetime.now().date().isoformat()
             historic_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
-            instruments_df = load_instrument_token_from_supabase(raw_tickers)
-            token_map, missing_tickers = resolve_tokens_from_tickers(raw_tickers, instruments_df)
+            instruments_df = load_instrument_token_from_supabase(pending_historic_tickers)
+            token_map, missing_tickers = resolve_tokens_from_tickers(pending_historic_tickers, instruments_df)
 
             if missing_tickers:
-                st.warning(f"Skipped tickers with no instrument token: {', '.join(missing_tickers)}")
+                st.session_state["historic_missing_tickers"] = missing_tickers
+            else:
+                st.session_state.pop("historic_missing_tickers", None)
 
             if not token_map:
                 st.error("No instrument tokens found for the selected tickers.")
-                st.stop()
-
-            token_rows = [
-                {"Ticker": ticker, "instrument_token": token}
-                for ticker, token in token_map.items()
-            ]
-            returns_df, dashboard_df, skipped_symbols = build_historic_dashboard_frames(
-                historic_kite,
-                token_rows,
-                as_of_date,
-            )
-            if skipped_symbols:
-                st.warning(
-                    "No dashboard data returned for: "
-                    + ", ".join(skipped_symbols[:10])
-                    + ("..." if len(skipped_symbols) > 10 else "")
+                st.session_state.pop("historic_pending_tickers", None)
+            else:
+                token_rows = [
+                    {"Ticker": ticker, "instrument_token": token}
+                    for ticker, token in token_map.items()
+                ]
+                returns_df, dashboard_df, skipped_symbols = build_historic_dashboard_frames(
+                    historic_kite,
+                    token_rows,
+                    as_of_date,
                 )
-            display_historic_dashboard_frames(returns_df, dashboard_df)
+                st.session_state["historic_returns_df"] = returns_df
+                st.session_state["historic_dashboard_df"] = dashboard_df
+                st.session_state["historic_skipped_symbols"] = skipped_symbols
+                st.session_state.pop("historic_pending_tickers", None)
 
         except Exception as exc:
             if is_token_error(exc):
@@ -1790,6 +1791,24 @@ with tab_historic_data:
                 st.error("Your session expired. Please login again to load dashboard data.")
                 st.rerun()
             st.error(f"Error fetching dashboard data: {exc}")
+
+    missing_tickers = st.session_state.get("historic_missing_tickers", [])
+    if missing_tickers:
+        st.warning(f"Skipped tickers with no instrument token: {', '.join(missing_tickers)}")
+
+    skipped_symbols = st.session_state.get("historic_skipped_symbols", [])
+    if skipped_symbols:
+        st.warning(
+            "No dashboard data returned for: "
+            + ", ".join(skipped_symbols[:10])
+            + ("..." if len(skipped_symbols) > 10 else "")
+        )
+
+    if "historic_returns_df" in st.session_state or "historic_dashboard_df" in st.session_state:
+        display_historic_dashboard_frames(
+            st.session_state.get("historic_returns_df", pd.DataFrame()),
+            st.session_state.get("historic_dashboard_df", pd.DataFrame()),
+        )
 
 
 
