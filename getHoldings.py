@@ -11,13 +11,17 @@ from urllib.request import Request, urlopen
 import pandas as pd
 import streamlit as st
 
-from kite_analytics import build_metric_values, compute_period_returns, load_analytics_history
+from kite_analytics import (
+    build_historic_dashboard_frames,
+    display_historic_dashboard_frames,
+)
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 
 st.set_page_config(layout="wide") 
 
 SUPABASE_BATCH_SIZE = 500
 HOLDINGS_TABLE_NAME = "holdings_breakdown"
+SUPABASE_INDICES_TABLE_NAME = "Indices_constituents"
 HOLDINGS_COLUMN_MAP = {
     "Row Type": "row_type",
     "Symbol": "symbol",
@@ -54,36 +58,108 @@ NUMERIC_HOLDINGS_COLUMNS = [
 ]
 INTEGER_HOLDINGS_COLUMNS = ["total_qty","age_days","batch_qty", "exit_qty"]
 SUPABASE_EXCLUDED_WRITE_COLUMNS = {"pnl_pct", "batch_pnl_pct"}
-TA_METRIC_COLUMNS = [
-    "Day Low",
-    "Day High",
-    "1W Low",
-    "1W High",
-    "1M Low",
-    "1M High",
-    "3M Low",
-    "3M High",
-    "6M Low",
-    "6M High",
-    "1Y Low",
-    "1Y High",
-    "2Y Low",
-    "2Y High",    
-    "EMA10",
-    "EMA20",
-    "EMA50",
-    "EMA100",
-    "EMA200",
-]
-RETURN_COLUMNS = [
-    "1W Return %",
-    "1M Return %",
-    "3M Return %",
-    "6M Return %",
-    "1Y Return %",
-    "2Y Return %",
-    "YTD Return %",
-]
+
+
+@st.cache_data(ttl=24 * 60 * 60)
+def load_instrument_token_from_supabase(tickers: list[str]) -> pd.DataFrame:
+    """
+    Load instrument rows from Supabase for the ticker symbols entered by the user.
+    """
+    normalized_tickers = sorted({ticker.strip().upper() for ticker in tickers if ticker.strip()})
+    if not normalized_tickers:
+        return pd.DataFrame()
+
+    supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
+    supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
+    table_name = get_secret_value("SUPABASE_TABLE_NAME").strip()
+
+    if not supabase_url or not supabase_key:
+        raise ValueError(
+            "Missing Supabase config. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
+            "in .streamlit/secrets.toml or environment variables."
+        )
+
+    ticker_filter = ",".join(f"tradingsymbol.eq.{quote(ticker, safe='')}" for ticker in normalized_tickers)
+    endpoint = (
+        f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
+        f"?select=*&or=({ticker_filter})"
+    )
+    request = Request(endpoint, headers=_supabase_headers(supabase_key), method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase instrument lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase instrument lookup failed: {exc.reason}") from exc
+
+    instrument_token_df = pd.DataFrame(records)
+    if instrument_token_df.empty:
+        return pd.DataFrame(columns=["tradingsymbol", "instrument_token"])
+
+    if "tradingsymbol" in instrument_token_df.columns:
+        instrument_token_df["tradingsymbol"] = (
+            instrument_token_df["tradingsymbol"].astype(str).str.strip().str.upper()
+        )
+    return instrument_token_df
+
+
+@st.cache_data(ttl=24 * 60 * 60)
+def load_indices_from_supabase() -> dict[str, str]:
+    supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
+    supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
+    table_name = get_secret_value("SUPABASE_INDICES_TABLE_NAME").strip() or SUPABASE_INDICES_TABLE_NAME
+
+    if not supabase_url or not supabase_key:
+        raise ValueError(
+            "Missing Supabase config. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
+            "in .streamlit/secrets.toml or environment variables."
+        )
+
+    endpoint = (
+        f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
+        "?select=Index,Constituents&order=Index.asc"
+    )
+    request = Request(endpoint, headers=_supabase_headers(supabase_key), method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase indices lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase indices lookup failed: {exc.reason}") from exc
+
+    indices: dict[str, str] = {}
+    for record in records:
+        index_name = str(record.get("Index") or "").strip()
+        constituents = str(record.get("Constituents") or "").strip()
+        if index_name and constituents:
+            indices[index_name] = constituents
+    return indices
+
+
+def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame) -> tuple[dict[str, int], list[str]]:
+    """
+    Map comma-separated tickers to instrument tokens using the instrument dump.
+    """
+    resolved: dict[str, int] = {}
+    missing: list[str] = []
+    normalized = instruments_df.copy()
+    normalized["tradingsymbol"] = normalized["tradingsymbol"].astype(str).str.strip().str.upper()
+
+    for ticker in tickers:
+        matches = normalized[normalized["tradingsymbol"] == ticker]
+        if matches.empty:
+            missing.append(ticker)
+            continue
+        resolved[ticker] = int(matches.iloc[0]["instrument_token"])
+    return resolved, missing
 
 
 def _json_safe_value(value: Any) -> Any:
@@ -1394,82 +1470,6 @@ def _cache_ltp_by_symbol(df: pd.DataFrame) -> None:
         st.session_state["ltp_by_symbol"] = {}
 
 
-def enrich_holdings_with_ta_metrics(df: pd.DataFrame, kite) -> pd.DataFrame:
-    if df.empty or "instrument_token" not in df.columns:
-        return df
-
-    enriched_df = df.copy()
-    as_of_date = datetime.now().date().isoformat()
-    failed_symbols: list[str] = []
-    for index, token in enriched_df["instrument_token"].items():
-        if pd.isna(token):
-            continue
-        try:
-            analytics_df = load_analytics_history(kite, token, as_of_date)
-            #print(f"Loaded analytics for token {token}, rows: {len(analytics_df)}")
-        except Exception:
-            failed_symbols.append(str(enriched_df.loc[index].get("tradingsymbol", token)))
-            print(f"Failed to load analytics" + str(enriched_df.loc[index].get("tradingsymbol", token)))
-            continue
-        
-        metrics = build_metric_values(analytics_df)
-        for column in TA_METRIC_COLUMNS:
-            value = metrics.get(column)
-            if value is not None:
-                enriched_df.loc[index, column] = round(float(value), 2)
-        #print(f"Computed TA metrics for token {token}: {metrics}")
-        
-        returns = compute_period_returns(analytics_df, enriched_df.loc[index].get("last_price"))
-        #print(f"Computed period returns for token {token}: {returns}")
-
-        for column in RETURN_COLUMNS:
-            data = returns.get(column)
-            if data is not None:
-                value = data["return_pct"] if isinstance(data, dict) else data
-                enriched_df.loc[index, column] = round(float(value), 2)
-    
-    #print(f"Failed to load TA metrics for symbols: {failed_symbols}")
-    if failed_symbols:
-        st.warning(
-            "Could not load TA metrics for: "
-            + ", ".join(failed_symbols[:10])
-            + ("..." if len(failed_symbols) > 10 else "")
-        )
-    #print("Enriched holdings DataFrame with TA metrics and returns." + str(enriched_df.head()))
-
-    return enriched_df
-
-
-def _single_row_table(row: pd.Series, columns: list[str]) -> pd.DataFrame:
-    return pd.DataFrame([{column: row.get(column) for column in columns if column in row.index}])
-
-
-def display_holding_ta_panels(df: pd.DataFrame) -> None:
-    available_ta_columns = [column for column in TA_METRIC_COLUMNS if column in df.columns]
-    available_return_columns = [column for column in RETURN_COLUMNS if column in df.columns]
-    if not available_ta_columns and not available_return_columns:
-        return
-
-    st.caption("Technical metrics")
-    for _, row in df.iterrows():
-        symbol = _format_display_value(row.get("tradingsymbol"))
-        with st.expander(symbol, expanded=False):
-            if available_ta_columns:
-                st.caption("High / Low / EMA")
-                st.dataframe(
-                    _single_row_table(row, available_ta_columns),
-                    width="stretch",
-                    hide_index=True,
-                )
-            if available_return_columns:
-                st.caption("Returns")
-                st.dataframe(
-                    _single_row_table(row, available_return_columns),
-                    width="stretch",
-                    hide_index=True,
-                )
-
-
 def display_supabase_holdings_breakdown() -> None:
     try:
         holdings_breakdown_df = load_holdings_breakdown_from_supabase()
@@ -1514,9 +1514,6 @@ def display_kite_holdings(df: pd.DataFrame, kite=None) -> pd.DataFrame | None:
         return None
 
     df = df.copy()
-    if kite is not None:
-        df = enrich_holdings_with_ta_metrics(df, kite)
-
     _cache_ltp_by_symbol(df)
     #print("portfolio holdings columns:\n")
     #print(df.columns)
@@ -1590,10 +1587,6 @@ def display_kite_holdings(df: pd.DataFrame, kite=None) -> pd.DataFrame | None:
             "DayChg%": st.column_config.NumberColumn("DayChg %", width="small", format="%.2f%%"),
         },
     )
-
-    
-    #display_holding_ta_panels(df)
-    
     return df
 
 
@@ -1605,15 +1598,28 @@ def fetch_and_display_holdings():
         if holdings:
             df = pd.DataFrame(holdings)
             #print("Fetched holdings:\n", df.head())
-            enriched_df = enrich_holdings_with_ta_metrics(df, kite)
-            #print("Enriched holdings:\n", enriched_df.head())
-            st.session_state["kite_holdings_df"] = enriched_df
+            as_of_date = datetime.now().date().isoformat()
+            returns_df, dashboard_df, failed_symbols = build_historic_dashboard_frames(
+                kite,
+                df.to_dict(orient="records"),
+                as_of_date,
+                symbol_key="tradingsymbol",
+                token_key="instrument_token",
+                ltp_key="last_price",
+            )
+            st.session_state["kite_holdings_df"] = df
+            st.session_state["kite_holdings_returns_df"] = returns_df
+            st.session_state["kite_holdings_dashboard_df"] = dashboard_df
+            st.session_state["kite_holdings_dashboard_failed_symbols"] = failed_symbols
             st.session_state["kite_holdings_download_filename"] = (
                 f"holdings_{pd.Timestamp.now().strftime('%Y-%m-%d_%H.%M.%S')}.csv"
             )
             #print("session state kite_holdings_download_filename:\n", st.session_state["kite_holdings_download_filename"])
         else:
             st.session_state.pop("kite_holdings_df", None)
+            st.session_state.pop("kite_holdings_returns_df", None)
+            st.session_state.pop("kite_holdings_dashboard_df", None)
+            st.session_state.pop("kite_holdings_dashboard_failed_symbols", None)
             st.session_state.pop("kite_holdings_download_filename", None)
             st.session_state["ltp_by_symbol"] = {}
             st.warning("No holdings found in this account.")
@@ -1629,7 +1635,9 @@ if "request_token" in st.query_params and "access_token" not in st.session_state
     bootstrap_kite_app("Zerodha Holdings")
 
 
-tab_upload_kite, tab_fetch_kite, tab_upload_holdings_breakdown = st.tabs(["Upload Kite Holdings", "Fetch from Kite","Upload Holdings Breakdown"])
+tab_upload_kite, tab_fetch_kite, tab_upload_holdings_breakdown, tab_historic_data = st.tabs(
+    ["Upload Kite Holdings", "Fetch from Kite", "Upload Holdings Breakdown", "Historic Data"]
+)
 
 with tab_upload_kite:
     uploaded_kite_holdings_file = st.file_uploader(
@@ -1641,8 +1649,9 @@ with tab_upload_kite:
     if uploaded_kite_holdings_file is not None:
         try:
             kite_holdings_df = _read_uploaded_file(uploaded_kite_holdings_file)
-            display_kite_holdings(kite_holdings_df)
-            display_supabase_holdings_breakdown()   
+            display_kite_holdings(kite_holdings_df)            
+            if st.checkbox("Show holdings breakdown", key="show_upload_kite_holdings_breakdown"):
+                display_supabase_holdings_breakdown()
         except ImportError as exc:
             st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
         except Exception as exc:
@@ -1669,6 +1678,17 @@ with tab_fetch_kite:
             on_click="ignore",
         )
         display_kite_holdings(kite_holdings_df)
+        failed_symbols = st.session_state.get("kite_holdings_dashboard_failed_symbols", [])
+        if failed_symbols:
+            st.warning(
+                "Could not load dashboard data for: "
+                + ", ".join(failed_symbols[:10])
+                + ("..." if len(failed_symbols) > 10 else "")
+            )
+        display_historic_dashboard_frames(
+            st.session_state.get("kite_holdings_returns_df", pd.DataFrame()),
+            st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame()),
+        )
         #display_supabase_holdings_breakdown()  
 
 with tab_upload_holdings_breakdown:
@@ -1697,6 +1717,79 @@ with tab_upload_holdings_breakdown:
             st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
         except Exception as exc:
             st.error(f"Failed to upload holdings breakdown: {exc}")
+
+
+with tab_historic_data:
+    st.caption("Fetch cached 2Y daily Kite data and show a sorted price ladder per ticker.")
+
+    if "historic_tickers_input" not in st.session_state:
+        st.session_state["historic_tickers_input"] = ""
+
+    try:
+        indices = load_indices_from_supabase()
+    except Exception as exc:
+        indices = {}
+        st.warning(f"Could not load index constituents: {exc}")
+
+    if indices:
+        index_names = ["Custom"] + list(indices.keys())
+        selected_index = st.selectbox("Select index", index_names, key="historic_selected_index")
+        if selected_index != "Custom":
+            selected_constituents = indices[selected_index]
+            if st.session_state["historic_tickers_input"] != selected_constituents:
+                st.session_state["historic_tickers_input"] = selected_constituents
+                st.rerun()
+
+    tickers_input = st.text_area(
+        label="e.g. RELIANCE, INFY, TCS",
+        key="historic_tickers_input",
+        help="Enter one or more stock ticker symbols separated by commas.",
+    )
+
+    if st.button("Fetch dashboard", type="primary", key="historic_fetch_dashboard"):
+        raw_tickers = [item.strip().upper() for item in tickers_input.split(",") if item.strip()]
+
+        if not raw_tickers:
+            st.warning("Enter at least one ticker symbol.")
+            st.stop()
+
+        as_of_date = datetime.now().date().isoformat()
+
+        try:
+            historic_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
+            instruments_df = load_instrument_token_from_supabase(raw_tickers)
+            token_map, missing_tickers = resolve_tokens_from_tickers(raw_tickers, instruments_df)
+
+            if missing_tickers:
+                st.warning(f"Skipped tickers with no instrument token: {', '.join(missing_tickers)}")
+
+            if not token_map:
+                st.error("No instrument tokens found for the selected tickers.")
+                st.stop()
+
+            token_rows = [
+                {"Ticker": ticker, "instrument_token": token}
+                for ticker, token in token_map.items()
+            ]
+            returns_df, dashboard_df, skipped_symbols = build_historic_dashboard_frames(
+                historic_kite,
+                token_rows,
+                as_of_date,
+            )
+            if skipped_symbols:
+                st.warning(
+                    "No dashboard data returned for: "
+                    + ", ".join(skipped_symbols[:10])
+                    + ("..." if len(skipped_symbols) > 10 else "")
+                )
+            display_historic_dashboard_frames(returns_df, dashboard_df)
+
+        except Exception as exc:
+            if is_token_error(exc):
+                clear_auth_state()
+                st.error("Your session expired. Please login again to load dashboard data.")
+                st.rerun()
+            st.error(f"Error fetching dashboard data: {exc}")
 
 
 

@@ -145,8 +145,8 @@ def build_metric_values(analytics_df: pd.DataFrame) -> dict[str, float]:
     high_low = get_high_low_resampled(analytics_df)
 
     metrics = {
-        "Day Low": float(latest["Low"]),
-        "Day High": float(latest["High"]),
+        #"Day Low": float(latest["Low"]),
+        #"Day High": float(latest["High"]),
         "LTP": float(latest["Close"]),
     }
 
@@ -254,6 +254,101 @@ def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float]]]) -> pd.
         cells.extend([""] * (max_rows - len(cells)))
         table[ticker] = cells
     return pd.DataFrame(table, index=range(1, max_rows + 1))
+
+
+RETURN_PERCENT_COLUMNS = [
+    "1W Return %",
+    "1M Return %",
+    "3M Return %",
+    "6M Return %",
+    "1Y Return %",
+    "2Y Return %",
+    "YTD Return %",
+]
+
+
+def build_historic_dashboard_frames(
+    _kite: KiteConnect,
+    token_rows: list[dict],
+    as_of_date: str,
+    *,
+    symbol_key: str = "Ticker",
+    token_key: str = "instrument_token",
+    ltp_key: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    """
+    Build the returns and sorted price ladder frames shared by historic screens.
+    """
+    ladders: dict[str, list[tuple[str, float]]] = {}
+    return_rows: list[dict] = []
+    skipped_symbols: list[str] = []
+
+    for row in token_rows:
+        symbol = str(row.get(symbol_key) or "").strip().upper()
+        token = row.get(token_key)
+        if not symbol or pd.isna(token):
+            continue
+
+        analytics_df = load_analytics_history(_kite, token, as_of_date)
+        if analytics_df.empty:
+            skipped_symbols.append(symbol)
+            continue
+
+        ltp = row.get(ltp_key) if ltp_key is not None else None
+        returns = compute_period_returns(analytics_df, ltp)
+        return_rows.append(
+            {
+                "Ticker": symbol,
+                **{
+                    period: (
+                        returns[period]["return_pct"]
+                        if isinstance(returns.get(period), dict)
+                        else returns.get(period)
+                    )
+                    for period in RETURN_PERCENT_COLUMNS
+                },
+            }
+        )
+        ladders[symbol] = build_metric_ladder(analytics_df)
+
+    return pd.DataFrame(return_rows), build_vertical_dashboard(ladders), skipped_symbols
+
+
+def _historic_dashboard_height(row_count: int, *, min_rows: int = 1, max_rows: int = 12) -> int:
+    visible_rows = min(max(row_count, min_rows), max_rows)
+    header_height = 38
+    row_height = 35
+    border_padding = 4
+    return (visible_rows * row_height) + header_height + border_padding
+
+
+def display_historic_dashboard_frames(
+    returns_df: pd.DataFrame,
+    dashboard_df: pd.DataFrame,
+    *,
+    max_rows: int = 12,
+) -> None:
+    """
+    Display the shared returns and sorted price ladder dashboard.
+    """
+    if not returns_df.empty:
+        st.dataframe(
+            returns_df,
+            width="stretch",
+            height=_historic_dashboard_height(len(returns_df), max_rows=max_rows),
+            hide_index=True,
+        )
+
+    if dashboard_df.empty:
+        st.info("No dashboard data returned for the selected inputs.")
+        return
+
+    st.dataframe(
+        dashboard_df.style.map(highlight_ltp_cells),
+        width="stretch",
+        height=_historic_dashboard_height(len(dashboard_df), max_rows=max_rows),
+        hide_index=True,
+    )
 
 
 def highlight_ltp_cells(value: str) -> str:

@@ -24,11 +24,8 @@ st.set_page_config(layout="wide")
 
 
 from kite_analytics import (
-    build_metric_ladder,
-    build_vertical_dashboard,
-    compute_period_returns,
-    highlight_ltp_cells,
-    load_analytics_history,
+    build_historic_dashboard_frames,
+    display_historic_dashboard_frames,
 )
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 
@@ -211,78 +208,22 @@ if st.button("Fetch dashboard", type="primary"):
             st.error("No instrument tokens found for the selected tickers.")
             st.stop()
 
-        ladders: dict[str, list[tuple[str, float]]] = {}
-        return_rows: list[dict] = []
-        for ticker, token in token_map.items():
-            #load the cached 2Y daily dataframe for each ticker
-            # -the start point two years prior and the end point as today
-            analytics_df = load_analytics_history(kite, token, as_of_date)
-            if analytics_df.empty:
-                continue
-
-            ladders[ticker] = build_metric_ladder(analytics_df)
-            #print(f"Computed metric ladder for {ticker}: {ladders[ticker]}")
-            return_rows.append({"Ticker": ticker, **compute_period_returns(analytics_df)})
-        
-            #print(f"Computed period returns for tickers: {return_rows}")
-
-
-        flattened_rows = []
-
-        for row in return_rows:
-
-            flat_row = {
-                "Ticker": row["Ticker"]
-            }
-
-            for period in [
-                "1W Return %",
-                "1M Return %",
-                "3M Return %",
-                "6M Return %",
-                "1Y Return %",
-                "2Y Return %",
-                "YTD Return %"
-            ]:
-
-                data = row.get(period)
-
-                if data is None:
-                    flat_row[period] = None
-                    #flat_row[f"{period} Start"] = None
-                    #flat_row[f"{period} LTP"] = None
-
-                else:
-                    flat_row[period] = data["return_pct"]
-                    #flat_row[f"{period} Start"] = data["start_close"]
-                    #flat_row[f"{period} LTP"] = data["latest_price"]
-
-            flattened_rows.append(flat_row)
-
-        df_display = pd.DataFrame(flattened_rows)
-
-        st.caption("Returns")
-        #st.dataframe(pd.DataFrame(return_rows), width="stretch", height=_dataframe_height(len(return_rows)), hide_index=True)
-        
-        st.dataframe(
-            df_display,
-            width="stretch",
-            height=_dataframe_height(len(df_display)),
-            hide_index=True
+        token_rows = [
+            {"Ticker": ticker, "instrument_token": token}
+            for ticker, token in token_map.items()
+        ]
+        returns_df, dashboard_df, failed_symbols = build_historic_dashboard_frames(
+            kite,
+            token_rows,
+            as_of_date,
         )
-
-
-        if not ladders:
-            st.info("No dashboard data returned for the selected inputs.")
-        else:           
-            dashboard_df = build_vertical_dashboard(ladders)
-            #print("Constructed vertical dashboard DataFrame:\n", dashboard_df.head())
-            st.dataframe(
-                dashboard_df.style.map(highlight_ltp_cells),
-                width="stretch",
-                height=_dataframe_height(len(dashboard_df)), 
-                hide_index=True
+        if failed_symbols:
+            st.warning(
+                "Could not load dashboard data for: "
+                + ", ".join(failed_symbols[:10])
+                + ("..." if len(failed_symbols) > 10 else "")
             )
+        display_historic_dashboard_frames(returns_df, dashboard_df)
                 
     except Exception as exc:
         if is_token_error(exc):
