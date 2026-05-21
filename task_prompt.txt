@@ -1,0 +1,169 @@
+# Task: Implement Mini Stock Structure Cards in Streamlit
+
+## Goal
+Replace the current dense vertical stock metric columns with compact mini cards for each stock.
+
+Each card should summarize:
+- Symbol
+- LTP
+- Trend label
+- Range position %
+- Mini horizontal structure bar
+- Distance from EMA20
+- Distance from EMA200
+- Expandable raw details
+
+## Context
+The current dashboard displays each stock as a vertical list of metrics such as:
+
+- 2Y Low
+- 1Y Low
+- 52W Low
+- 6M Low
+- 3M Low
+- EMA200
+- LTP
+- EMA20
+- EMA10
+- 1W High
+- 1M High
+
+This is too dense for scanning multiple stocks.
+
+## Required Design
+
+### Card layout
+Each stock should render like:
+
+SYMBOL        ₹LTP
+Trend Label   Range Position %
+
+[mini structure bar]
+
+EMA20 distance: +/-%  
+EMA200 distance: +/-%  
+
+Expandable: Raw levels
+
+## Data Assumption
+Input data may arrive as a dictionary like:
+
+{
+  "BEL": {
+    "2Y Low": 230.00,
+    "1Y Low": 340.60,
+    "52W Low": 361.05,
+    "EMA200": 411.82,
+    "LTP": 413.55,
+    "EMA20": 430.37,
+    "EMA10": 425.85,
+    "1W High": 421.00
+  }
+}
+
+Do not hardcode symbols. Build reusable functions.
+
+## Functions to Create
+
+### 1. calculate_range_position(levels)
+Use:
+- range_low = lowest available value containing "Low"
+- range_high = highest available value containing "High"
+- ltp = levels["LTP"]
+
+Return:
+- range_position_pct = ((ltp - range_low) / (range_high - range_low)) * 100
+- Clamp between 0 and 100
+- Handle missing or zero-range data safely
+
+### 2. calculate_distance_pct(ltp, reference_value)
+Return:
+((ltp - reference_value) / reference_value) * 100
+
+Handle missing reference values.
+
+### 3. get_trend_label(levels)
+Use simple rules:
+
+- Strong Bullish:
+  LTP > EMA20 > EMA50 > EMA100 > EMA200
+
+- Bullish:
+  LTP > EMA20 and LTP > EMA200
+
+- Pullback:
+  LTP < EMA20 and LTP > EMA200
+
+- Weak:
+  LTP < EMA20 and LTP < EMA200
+
+- Unknown:
+  insufficient data
+
+### 4. render_structure_bar(levels)
+Create a compact horizontal visual using Plotly.
+
+Requirements:
+- X-axis should be normalized between lowest low and highest high
+- Show markers for:
+  - LTP
+  - EMA20
+  - EMA50
+  - EMA100
+  - EMA200
+  - nearest low
+  - nearest high
+- Chart height should be small: 90–130 px
+- Hide y-axis
+- Minimize gridlines and clutter
+- Use hover labels for exact values
+- Do not show all labels directly on chart unless necessary
+
+### 5. render_stock_card(symbol, levels)
+Render a card using Streamlit.
+
+Card should include:
+- symbol
+- LTP
+- trend label
+- range position %
+- mini structure bar
+- EMA20 distance %
+- EMA200 distance %
+- st.expander for raw levels
+
+Use clean CSS or Streamlit containers.
+
+## UI Requirements
+
+- Use a grid layout with 3–5 cards per row depending on screen width.
+- Prefer `st.columns`.
+- Keep each card compact.
+- Avoid rendering long vertical lists by default.
+- Raw values should only appear inside expanders.
+- LTP should be visually prominent.
+- Trend label should be color-coded:
+  - Strong Bullish / Bullish: green
+  - Pullback: amber/yellow
+  - Weak: red
+  - Unknown: gray
+
+## Output Requirements
+
+- Refactor into reusable functions.
+- Keep existing data pipeline intact.
+- Do not change Kite API logic.
+- Do not change Excel upload logic.
+- Only modify dashboard rendering layer unless absolutely necessary.
+- Add comments where logic may need tuning later.
+- Ensure app still runs with existing data.
+- If some metrics are missing, card should still render gracefully.
+
+## Done When
+
+- Dashboard displays each holding as a compact mini card.
+- Raw metric lists are hidden inside expanders.
+- User can scan multiple stocks without excessive vertical scrolling.
+- Mini structure bar renders correctly for each stock.
+- Missing EMA or high/low values do not crash the app.
+- `streamlit run app.py` works.

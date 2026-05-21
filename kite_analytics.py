@@ -174,6 +174,23 @@ def build_metric_values(analytics_df: pd.DataFrame) -> dict[str, float]:
     return metrics
 
 
+def calculate_range_position(metrics: dict[str, float]) -> tuple[float, float, float] | None:
+    lows = [value for label, value in metrics.items() if "Low" in label]
+    highs = [value for label, value in metrics.items() if "High" in label]
+    ltp = metrics.get("LTP")
+
+    if ltp is None or not lows or not highs:
+        return None
+
+    range_low = min(lows)
+    range_high = max(highs)
+    if range_high == range_low:
+        return None
+
+    position = ((ltp - range_low) / (range_high - range_low)) * 100
+    return round(min(max(position, 0), 100), 1), range_low, range_high
+
+
 def compute_period_returns(
     analytics_df: pd.DataFrame,
     ltp: float | None = None,
@@ -240,21 +257,34 @@ def compute_period_returns(
     return returns
 
 
-def build_metric_ladder(analytics_df: pd.DataFrame) -> list[tuple[str, float]]:
+def build_metric_ladder(analytics_df: pd.DataFrame) -> list[tuple[str, float | tuple[float, float, float] | None]]:
     """
     Build an ascending price ladder from the cached 2Y daily dataframe.
     """
-    return sorted(build_metric_values(analytics_df).items(), key=lambda item: item[1])
+    metrics = build_metric_values(analytics_df)
+    range_position = calculate_range_position(metrics)
+    ladder: list[tuple[str, float | tuple[float, float, float] | None]] = [
+        ("Range Position", range_position),
+        ("Range Used", range_position),
+    ]
+    ladder.extend(sorted(metrics.items(), key=lambda item: item[1]))
+    return ladder
 
 
-def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float]]]) -> pd.DataFrame:
+def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float | tuple[float, float, float] | None]]]) -> pd.DataFrame:
     """
     Build a vertical table with one sorted metric ladder column per ticker.
     """
     max_rows = max((len(ladder) for ladder in ladders.values()), default=0)
     table: dict[str, list[str]] = {}
     for ticker, ladder in ladders.items():
-        cells = [f"{label}: {value:.2f}" for label, value in ladder]
+        cells = [
+            f"Rng:{value[0]:.1f}%" if label == "Range Position" and value is not None
+            else f"[{value[1]:.2f} - {value[2]:.2f}]" if label == "Range Used" and value is not None
+            else f"{label}: {value:.2f}" if value is not None
+            else f"{label}: -"
+            for label, value in ladder
+        ]
         cells.extend([""] * (max_rows - len(cells)))
         table[ticker] = cells
     return pd.DataFrame(table, index=range(1, max_rows + 1))
@@ -326,22 +356,15 @@ def _historic_dashboard_height(row_count: int, *, min_rows: int = 1, max_rows: i
     return (visible_rows * row_height) + header_height + border_padding
 
 
-def display_historic_dashboard_frames(
-    returns_df: pd.DataFrame,
+def display_historic_dashboard_frames(    
     dashboard_df: pd.DataFrame,
+    returns_df: pd.DataFrame,
     *,
     max_rows: int = 12,
 ) -> None:
     """
     Display the shared returns and sorted price ladder dashboard.
     """
-    if not returns_df.empty:
-        st.dataframe(
-            returns_df,
-            width="stretch",
-            height=_historic_dashboard_height(len(returns_df), max_rows=max_rows),
-            hide_index=True,
-        )
 
     if dashboard_df.empty:
         st.info("No dashboard data returned for the selected inputs.")
@@ -354,8 +377,31 @@ def display_historic_dashboard_frames(
         hide_index=True,
     )
 
+    if not returns_df.empty:
+        st.dataframe(
+            returns_df,
+            width="stretch",
+            height=_historic_dashboard_height(len(returns_df), max_rows=max_rows),
+            hide_index=True,
+        )
+
 
 def highlight_ltp_cells(value: str) -> str:
+    if isinstance(value, str) and value.startswith("Rng:"):
+        try:
+            range_pct = float(value.removeprefix("Rng:").removesuffix("%"))
+        except ValueError:
+            return "font-weight: 700"
+
+        if range_pct < 25:
+            return "background-color: #dc2626; color: #ffffff; font-weight: 700"
+        if range_pct < 50:
+            return "background-color: #f97316; color: #ffffff; font-weight: 700"
+        if range_pct < 75:
+            return "background-color: #84cc16; color: #1a2e05; font-weight: 700"
+        return "background-color: #16a34a; color: #ffffff; font-weight: 700"
+    if isinstance(value, str) and value.startswith("[") and value.endswith("]"):
+        return "background-color: #bae6fd; color: #082f49; font-weight: 600"
     if isinstance(value, str) and value.startswith("LTP:"):
-        return "background-color: #fff3cd; color: #7a4d00; font-weight: 700"
+        return "background-color: #facc15; color: #422006; font-weight: 700"
     return ""

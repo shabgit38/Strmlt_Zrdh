@@ -1635,8 +1635,8 @@ if "request_token" in st.query_params and "access_token" not in st.session_state
     bootstrap_kite_app("Zerodha Holdings")
 
 
-tab_upload_kite, tab_fetch_kite, tab_upload_holdings_breakdown, tab_historic_data = st.tabs(
-    ["Upload Kite Holdings", "Fetch from Kite", "Upload Holdings Breakdown", "Historic Data"]
+tab_historic_data, tab_upload_kite, tab_fetch_kite, tab_upload_holdings_breakdown = st.tabs(
+    ["Historic Data", "Upload Kite Holdings", "Fetch from Kite", "Upload Holdings Breakdown"]
 )
 
 with tab_upload_kite:
@@ -1686,8 +1686,9 @@ with tab_fetch_kite:
                 + ("..." if len(failed_symbols) > 10 else "")
             )
         display_historic_dashboard_frames(
-            st.session_state.get("kite_holdings_returns_df", pd.DataFrame()),
             st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame()),
+            st.session_state.get("kite_holdings_returns_df", pd.DataFrame()),
+            
         )
         #display_supabase_holdings_breakdown()  
 
@@ -1805,9 +1806,9 @@ with tab_historic_data:
         )
 
     if "historic_returns_df" in st.session_state or "historic_dashboard_df" in st.session_state:
-        display_historic_dashboard_frames(
-            st.session_state.get("historic_returns_df", pd.DataFrame()),
+        display_historic_dashboard_frames(           
             st.session_state.get("historic_dashboard_df", pd.DataFrame()),
+            st.session_state.get("historic_returns_df", pd.DataFrame()),
         )
 
 
