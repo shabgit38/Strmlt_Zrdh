@@ -712,7 +712,7 @@ def _sort_historic_dashboard_by_rng(dashboard_df: pd.DataFrame) -> pd.DataFrame:
         value = dashboard_df[column].iloc[0]
         if isinstance(value, str) and value.startswith("Rng:"):
             try:
-                return float(value.removeprefix("Rng:").removesuffix("%"))
+                return float(value.removeprefix("Rng:").split("%", 1)[0])
             except ValueError:
                 return float("-inf")
         return float("-inf")

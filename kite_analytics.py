@@ -191,6 +191,14 @@ def calculate_range_position(metrics: dict[str, float]) -> tuple[float, float, f
     return round(min(max(position, 0), 100), 1), range_low, range_high
 
 
+def calculate_distance_pct(ltp: float | None, reference_value: float | None) -> float | None:
+    ltp_value = pd.to_numeric(ltp, errors="coerce")
+    reference = pd.to_numeric(reference_value, errors="coerce")
+    if pd.isna(ltp_value) or pd.isna(reference) or float(reference) == 0:
+        return None
+    return round(((float(ltp_value) - float(reference)) / float(reference)) * 100, 2)
+
+
 def compute_period_returns(
     analytics_df: pd.DataFrame,
     ltp: float | None = None,
@@ -257,21 +265,29 @@ def compute_period_returns(
     return returns
 
 
-def build_metric_ladder(analytics_df: pd.DataFrame) -> list[tuple[str, float | tuple[float, float, float] | None]]:
+def build_metric_ladder(analytics_df: pd.DataFrame) -> list[tuple[str, float | tuple[float, ...] | None]]:
     """
     Build an ascending price ladder from the cached 2Y daily dataframe.
     """
     metrics = build_metric_values(analytics_df)
     range_position = calculate_range_position(metrics)
-    ladder: list[tuple[str, float | tuple[float, float, float] | None]] = [
-        ("Range Position", range_position),
+    ltp = metrics.get("LTP")
+    range_with_ltp = (
+        (range_position[0], range_position[1], range_position[2], ltp)
+        if range_position is not None and ltp is not None
+        else None
+    )
+    ladder: list[tuple[str, float | tuple[float, ...] | None]] = [
+        ("Range Position", range_with_ltp),
         ("Range Used", range_position),
     ]
+    for span in [20, 50, 100, 200]:
+        ladder.append((f"EMA{span}", calculate_distance_pct(ltp, metrics.get(f"EMA{span}"))))
     ladder.extend(sorted(metrics.items(), key=lambda item: item[1]))
     return ladder
 
 
-def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float | tuple[float, float, float] | None]]]) -> pd.DataFrame:
+def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float | tuple[float, ...] | None]]]) -> pd.DataFrame:
     """
     Build a vertical table with one sorted metric ladder column per ticker.
     """
@@ -279,8 +295,10 @@ def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float | tuple[fl
     table: dict[str, list[str]] = {}
     for ticker, ladder in ladders.items():
         cells = [
-            f"Rng:{value[0]:.1f}%" if label == "Range Position" and value is not None
+            f"Rng:{value[0]:.1f}% [{value[3]:.2f}]" if label == "Range Position" and value is not None and len(value) > 3
+            else f"Rng:{value[0]:.1f}%" if label == "Range Position" and value is not None
             else f"[{value[1]:.2f} - {value[2]:.2f}]" if label == "Range Used" and value is not None
+            else f"{label}: {value:+.2f}%" if label.endswith(" Dist") and value is not None
             else f"{label}: {value:.2f}" if value is not None
             else f"{label}: -"
             for label, value in ladder
@@ -417,7 +435,7 @@ def highlight_return_cells(data: pd.DataFrame) -> pd.DataFrame:
 def highlight_ltp_cells(value: str) -> str:
     if isinstance(value, str) and value.startswith("Rng:"):
         try:
-            range_pct = float(value.removeprefix("Rng:").removesuffix("%"))
+            range_pct = float(value.removeprefix("Rng:").split("%", 1)[0])
         except ValueError:
             return "font-weight: 700"
 
