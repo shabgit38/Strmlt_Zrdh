@@ -702,6 +702,23 @@ def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None
     return header_height + (visible_rows * row_height) 
 
 
+def _sort_historic_dashboard_by_rng(dashboard_df: pd.DataFrame) -> pd.DataFrame:
+    if dashboard_df.empty:
+        return dashboard_df
+
+    def rng_value(column: str) -> float:
+        value = dashboard_df[column].iloc[0]
+        if isinstance(value, str) and value.startswith("Rng:"):
+            try:
+                return float(value.removeprefix("Rng:").removesuffix("%"))
+            except ValueError:
+                return float("-inf")
+        return float("-inf")
+
+    sorted_columns = sorted(dashboard_df.columns, key=rng_value, reverse=True)
+    return dashboard_df.loc[:, sorted_columns]
+
+
 def _summary_expander_label(summary: pd.Series, batch_count: int) -> str:
     return (
         f"{summary.get('symbol', '-')}"
@@ -1559,7 +1576,7 @@ def display_kite_holdings(df: pd.DataFrame, kite=None) -> pd.DataFrame | None:
     with col1:
         total_invested = pd.to_numeric(df["invested"], errors="coerce").sum() if "invested" in df.columns else 0
         #st.write("Total Invested\n", f"{total_invested:,.2f}")
-        st.metric("Total Invested", f"{total_invested:,.2f}", delta=f"{total_invested:.2f}")
+        st.metric("Total Invested", f"{total_invested:,.2f}")
 
     with col2:
         total_pnl = pd.to_numeric(df["pnl"], errors="coerce").sum() if "pnl" in df.columns else 0
@@ -1703,7 +1720,7 @@ with tab_upload_holdings_breakdown:
         try:
             brkdown_df = _read_uploaded_file(uploaded_brkholdings_file)
             upload_columns = _mapped_holdings_upload_columns(brkdown_df)
-            print("holdings breakdown upload columns:\n", upload_columns)
+            #print("holdings breakdown upload columns:\n", upload_columns)
             #print("holdings breakdown before cleaning:\n", brkdown_df.head())
             holdings_breakdown_df = clean_holdings_breakdown_for_supabase(brkdown_df)
 
@@ -1807,7 +1824,9 @@ with tab_historic_data:
 
     if "historic_returns_df" in st.session_state or "historic_dashboard_df" in st.session_state:
         display_historic_dashboard_frames(           
-            st.session_state.get("historic_dashboard_df", pd.DataFrame()),
+            _sort_historic_dashboard_by_rng(
+                st.session_state.get("historic_dashboard_df", pd.DataFrame())
+            ),
             st.session_state.get("historic_returns_df", pd.DataFrame()),
         )
 

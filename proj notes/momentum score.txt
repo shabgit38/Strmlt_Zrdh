@@ -1,0 +1,227 @@
+**Momentum Score**
+
+A momentum score is a single number that ranks each stock by how strong its recent price trend is. In your app, it could help answer:
+
+“Which holdings are gaining strength, losing strength, or worth watching?”
+
+A simple version can be built from price returns and trend indicators you already compute in `kite_analytics.py`.
+
+Example inputs:
+
+```text
+1D Return %
+1W Return %
+1M Return %
+3M Return %
+6M Return %
+Price vs EMA20
+Price vs EMA50
+Price vs EMA100
+Distance from 52W high
+Range position
+Volume trend, if available later
+```
+
+A practical first formula:
+
+```text
+Momentum Score =
+  0.10 * 1W Return Score
++ 0.25 * 1M Return Score
++ 0.30 * 3M Return Score
++ 0.20 * 6M Return Score
++ 0.15 * Trend Score
+```
+
+Where each component is normalized to `0-100`.
+
+Example interpretation:
+
+```text
+80-100  Strong momentum
+60-79   Positive momentum
+40-59   Neutral / mixed
+20-39   Weak momentum
+0-19    Negative momentum
+```
+
+For your portfolio, the table could show:
+
+| Symbol | 1W % | 1M % | 3M % | EMA Trend | Momentum Score | Signal |
+|---|---:|---:|---:|---|---:|---|
+| TCS | 2.4 | 7.8 | 18.2 | Above EMA20/50/100 | 86 | Strong |
+| INFY | -1.1 | 2.0 | 5.5 | Above EMA50 only | 57 | Neutral |
+| ABC | -4.8 | -9.2 | -15.0 | Below EMAs | 18 | Weak |
+
+**Better Portfolio Version**
+
+For a serious portfolio project, don’t use raw returns directly. Normalize each stock against a benchmark or peer group:
+
+```text
+Relative Momentum = Stock Return - Nifty 50 Return
+```
+
+Example:
+
+```text
+Stock 3M return: 12%
+Nifty 3M return: 5%
+Relative 3M momentum: +7%
+```
+
+That is more meaningful than saying “12% is good” without context.
+
+**Good First Implementation**
+
+Start with a transparent rule-based score:
+
+```text
+Return Score:
+- rank stocks by 1M, 3M, 6M returns
+- convert rank to percentile 0-100
+
+Trend Score:
++25 if price > EMA20
++25 if price > EMA50
++25 if price > EMA100
++25 if EMA20 > EMA50
+```
+
+Then:
+
+```text
+Momentum Score =
+0.25 * 1M percentile
++ 0.35 * 3M percentile
++ 0.20 * 6M percentile
++ 0.20 * Trend Score
+```
+
+This is explainable, easy to test, and good enough for a portfolio demo before adding ML.
+
+########################################################################
+
+With ML, the “Momentum Score” becomes less of a hand-written formula and more of a **model-estimated probability/ranking**.
+
+Instead of saying:
+
+```text
+Momentum Score = weighted average of 1M return, 3M return, EMA trend
+```
+
+You train a model to learn:
+
+```text
+Given this stock's recent behavior, how likely is it to outperform over the next N days?
+```
+
+Example target:
+
+```text
+Target = 1 if stock's next 20-day return > Nifty 50 next 20-day return
+Target = 0 otherwise
+```
+
+Then the model outputs:
+
+```text
+TCS  -> 0.74 probability of outperforming
+INFY -> 0.52 probability
+ABC  -> 0.21 probability
+```
+
+You can display that as:
+
+```text
+Momentum Score = model probability * 100
+```
+
+So `0.74` becomes `74`.
+
+**What Features Go Into ML**
+
+For each stock/date, build features like:
+
+```text
+1D return
+1W return
+1M return
+3M return
+6M return
+volatility 20D
+volatility 60D
+drawdown from recent high
+price vs EMA20
+price vs EMA50
+price vs EMA100
+EMA20 vs EMA50
+range position
+sector
+relative return vs Nifty
+relative return vs sector index
+```
+
+Each training row looks like:
+
+```text
+symbol | date | features today | future outcome
+TCS    | 2025-01-01 | returns/EMA/volatility | outperformed next 20D: yes
+```
+
+**Good ML Models To Start With**
+
+Use these in order:
+
+1. Logistic Regression  
+   Simple, explainable baseline.
+
+2. Random Forest / XGBoost / LightGBM  
+   Better for nonlinear patterns.
+
+3. Learning-to-rank model  
+   Best if your real goal is “rank my holdings from strongest to weakest.”
+
+For a portfolio project, I’d use:
+
+```text
+Baseline: rule-based score
+ML v1: Logistic Regression
+ML v2: LightGBM / XGBoost ranking model
+```
+
+**What The App Would Show**
+
+Your holdings table could become:
+
+| Symbol | Momentum Score | ML Signal | Confidence | Main Reasons |
+|---|---:|---|---:|---|
+| TCS | 78 | Strong | High | 3M relative strength, above EMA50, low drawdown |
+| INFY | 54 | Neutral | Medium | mixed returns, near EMA50 |
+| ABC | 22 | Weak | High | negative relative return, below EMA20/50 |
+
+The important part is the “Main Reasons” column. Without explanations, ML looks like a black box.
+
+**Best Portfolio Project Version**
+
+Use ML as a ranking assistant, not a trading oracle:
+
+```text
+"Rank current holdings by probability of outperforming the benchmark over the next 20 trading days."
+```
+
+Then add:
+
+```text
+Risk-adjusted Momentum Score =
+ML probability of outperformance
+adjusted down for high volatility, drawdown, and portfolio concentration
+```
+
+That gives you a stronger project story:
+
+```text
+This app combines broker portfolio data, historical market data, technical indicators,
+and ML ranking to identify strengthening and weakening holdings.
+```
+
+That is much more impressive than simply showing P&L tables.

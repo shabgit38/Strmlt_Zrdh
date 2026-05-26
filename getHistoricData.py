@@ -223,7 +223,7 @@ if st.button("Fetch dashboard", type="primary"):
                 + ", ".join(failed_symbols[:10])
                 + ("..." if len(failed_symbols) > 10 else "")
             )
-        display_historic_dashboard_frames(returns_df, dashboard_df)
+        display_historic_dashboard_frames(dashboard_df,returns_df)
                 
     except Exception as exc:
         if is_token_error(exc):

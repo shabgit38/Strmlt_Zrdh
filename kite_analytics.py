@@ -379,11 +379,39 @@ def display_historic_dashboard_frames(
 
     if not returns_df.empty:
         st.dataframe(
-            returns_df,
+            returns_df.style.apply(highlight_return_cells, axis=None),
             width="stretch",
             height=_historic_dashboard_height(len(returns_df), max_rows=max_rows),
             hide_index=True,
         )
+
+
+def highlight_return_cells(data: pd.DataFrame) -> pd.DataFrame:
+    styles = pd.DataFrame("", index=data.index, columns=data.columns)
+    for column in RETURN_PERCENT_COLUMNS:
+        if column not in data.columns:
+            continue
+
+        values = pd.to_numeric(data[column], errors="coerce")
+        min_value = values.min(skipna=True)
+        max_value = values.max(skipna=True)
+        if pd.isna(min_value) or pd.isna(max_value) or min_value == max_value:
+            continue
+
+        for index, value in values.items():
+            if pd.isna(value):
+                continue
+
+            position = (value - min_value) / (max_value - min_value) * 100
+            if position < 25:
+                styles.at[index, column] = "background-color: #dc2626; color: #ffffff; font-weight: 700"
+            elif position < 50:
+                styles.at[index, column] = "background-color: #f97316; color: #ffffff; font-weight: 700"
+            elif position < 75:
+                styles.at[index, column] = "background-color: #84cc16; color: #1a2e05; font-weight: 700"
+            else:
+                styles.at[index, column] = "background-color: #16a34a; color: #ffffff; font-weight: 700"
+    return styles
 
 
 def highlight_ltp_cells(value: str) -> str:
