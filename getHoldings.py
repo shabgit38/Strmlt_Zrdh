@@ -1227,7 +1227,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
 
 
 def _render_add_holdings_breakdown_entries_form(ltp_by_symbol: dict[str, float]) -> list[str]:
-    st.subheader("Add Holdings Breakdown Entries")
+    #st.subheader("Add Holdings Breakdown Entries")
     with st.form("add_holdings_breakdown_entries_form"):
         entries_df = st.data_editor(
             _empty_add_breakdown_entries_df(),
