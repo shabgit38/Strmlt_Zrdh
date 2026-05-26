@@ -22,6 +22,8 @@ st.set_page_config(layout="wide")
 SUPABASE_BATCH_SIZE = 500
 HOLDINGS_TABLE_NAME = "holdings_breakdown"
 SUPABASE_INDICES_TABLE_NAME = "Indices_constituents"
+HOLDINGS_BREAKDOWN_DF_STATE_KEY = "holdings_breakdown_df"
+HOLDINGS_BREAKDOWN_VIEW_STATE_KEY = "holdings_breakdown_view_enabled"
 HOLDINGS_COLUMN_MAP = {
     "Row Type": "row_type",
     "Symbol": "symbol",
@@ -874,6 +876,8 @@ def _render_summary_form(summary: pd.Series, *, key_prefix: str, ltp_by_symbol: 
             ltp_by_symbol,
         )
         update_holdings_breakdown_row(row_id, record)
+        _refresh_holdings_breakdown_state_for_symbols([summary.get("symbol")])
+        st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
         st.session_state.pop("holdings_breakdown_editor", None)
         st.rerun()
 
@@ -922,6 +926,8 @@ def _render_batch_form(
         else:
             insert_holdings_breakdown_row(record)
         _recalculate_summary_from_supabase_batches(summary, ltp_by_symbol)
+        _refresh_holdings_breakdown_state_for_symbols([source.get("symbol")])
+        st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
         st.session_state.pop("holdings_breakdown_editor", None)
         st.rerun()
 
@@ -1028,8 +1034,215 @@ def _render_exit_form(
 
         if summary is not None:
             _recalculate_summary_from_supabase_batches(summary, ltp_by_symbol or {})
+        affected_symbols = {
+            str(row.get("symbol") or "").upper().strip()
+            for row in rows
+            if str(row.get("symbol") or "").strip()
+        }
+        if summary is not None and str(summary.get("symbol") or "").strip():
+            affected_symbols.add(str(summary.get("symbol")).upper().strip())
+        _refresh_holdings_breakdown_state_for_symbols(sorted(affected_symbols))
+        st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
         st.session_state.pop("holdings_breakdown_editor", None)
         st.rerun()
+
+
+def _empty_add_breakdown_entries_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Row Type": "SUMMARY",
+                "Symbol": "",
+                "Sector": "",
+                "Total Qty": None,
+                "Buy Avg": None,
+                "Invested": None,
+                "Batch Qty": None,
+                "Batch Price": None,
+                "Exit?": False,
+                "Exit Date": None,
+                "Exit Qty": None,
+                "Exit Price": None,
+            }
+        ]
+    )
+
+
+def _add_breakdown_entries_column_config() -> dict[str, Any]:
+    return {
+        "Row Type": st.column_config.SelectboxColumn("Row Type", options=["SUMMARY", "BATCH"], required=True),
+        "Symbol": st.column_config.TextColumn("Symbol", required=True),
+        "Sector": st.column_config.TextColumn("Sector"),
+        "Total Qty": st.column_config.NumberColumn("Total Qty", min_value=0, step=1, format="%d"),
+        "Buy Avg": st.column_config.NumberColumn("Buy Avg", min_value=0.0, format="%.2f"),
+        "Invested": st.column_config.NumberColumn("Invested", format="%.2f"),
+        "Batch Qty": st.column_config.NumberColumn("Batch Qty", min_value=0, step=1, format="%d"),
+        "Batch Price": st.column_config.NumberColumn("Batch Price", min_value=0.0, format="%.2f"),
+        "Exit?": st.column_config.CheckboxColumn("Exit?"),
+        "Exit Date": st.column_config.DateColumn("Exit Date"),
+        "Exit Qty": st.column_config.NumberColumn("Exit Qty", min_value=0, step=1, format="%d"),
+        "Exit Price": st.column_config.NumberColumn("Exit Price", min_value=0.0, format="%.2f"),
+    }
+
+
+def _has_add_breakdown_entry_values(row: pd.Series) -> bool:
+    value_columns = [
+        "Symbol",
+        "Sector",
+        "Total Qty",
+        "Buy Avg",
+        "Batch Qty",
+        "Batch Price",
+        "Exit Qty",
+        "Exit Price",
+    ]
+    return any(pd.notna(row.get(column)) and str(row.get(column)).strip() != "" for column in value_columns)
+
+
+def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dict[str, float]) -> list[str]:
+    affected_symbols: set[str] = set()
+    errors: list[str] = []
+    pending_records: list[dict[str, Any]] = []
+    submitted_batch_symbols = {
+        str(row.get("Symbol") or "").upper().strip()
+        for _, row in entries_df.iterrows()
+        if str(row.get("Row Type") or "").upper().strip() == "BATCH"
+        and str(row.get("Symbol") or "").strip()
+    }
+
+    for row_number, row in entries_df.iterrows():
+        if not _has_add_breakdown_entry_values(row):
+            continue
+
+        row_type = str(row.get("Row Type") or "").upper().strip()
+        symbol = str(row.get("Symbol") or "").upper().strip()
+        sector = _json_safe_value(row.get("Sector"))
+        is_exit = bool(row.get("Exit?"))
+
+        if row_type not in {"SUMMARY", "BATCH"}:
+            errors.append(f"Row {row_number + 1}: select SUMMARY or BATCH.")
+            continue
+        if not symbol:
+            errors.append(f"Row {row_number + 1}: Symbol is required.")
+            continue
+
+        if row_type == "SUMMARY":
+            total_qty = _record_integer_value(row.get("Total Qty"))
+            buy_avg = _record_numeric_value(row.get("Buy Avg"))
+            symbol_df = load_holdings_breakdown_for_symbols([symbol])
+            has_existing_batch = (
+                not symbol_df.empty
+                and "row_type" in symbol_df.columns
+                and symbol_df["row_type"].astype(str).str.upper().str.strip().eq("BATCH").any()
+            )
+            has_batch_context = has_existing_batch or symbol in submitted_batch_symbols
+            if not has_batch_context and (total_qty is None or buy_avg is None):
+                errors.append(
+                    f"Row {row_number + 1}: Total Qty and Buy Avg are required for SUMMARY when no batch rows exist."
+                )
+                continue
+            record = _recompute_breakdown_record(
+                {
+                    "row_type": "SUMMARY",
+                    "symbol": symbol,
+                    "sector": sector,
+                    "total_qty": total_qty if total_qty is not None else 0,
+                    "buy_avg": buy_avg if buy_avg is not None else 0,
+                    "ltp": ltp_by_symbol.get(symbol),
+                },
+                ltp_by_symbol,
+            )
+        else:
+            batch_qty = _record_integer_value(row.get("Batch Qty"))
+            batch_price = _record_numeric_value(row.get("Batch Price"))
+            if batch_qty is None or batch_price is None:
+                errors.append(f"Row {row_number + 1}: Batch Qty and Batch Price are required for BATCH.")
+                continue
+            exit_date = row.get("Exit Date")
+            exit_price = _record_numeric_value(row.get("Exit Price"))
+            exit_qty = _record_integer_value(row.get("Exit Qty"))
+            if is_exit and (pd.isna(exit_date) or exit_price is None or exit_qty is None):
+                errors.append(f"Row {row_number + 1}: Exit Date, Exit Qty, and Exit Price are required for BATCH exit rows.")
+                continue
+
+            base_record = {
+                "row_type": "BATCH",
+                "symbol": symbol,
+                "sector": sector,
+                "trade_date": date.today(),
+                "batch_qty": batch_qty,
+                "batch_price": batch_price,
+                "ltp": ltp_by_symbol.get(symbol),
+            }
+            record = (
+                _exit_batch_record(
+                    pd.Series(base_record),
+                    _date_input_value(exit_date),
+                    float(exit_price),
+                    int(exit_qty),
+                )
+                if is_exit
+                else _recompute_breakdown_record(base_record, ltp_by_symbol)
+            )
+
+        if is_exit and row_type == "SUMMARY":
+            record["holding_status"] = "Exited"
+
+        if is_exit and row_type == "BATCH":
+            record["holding_status"] = "Exited"
+            record["exit_date"] = _normalize_trade_date(_date_input_value(exit_date))
+            record["exit_qty"] = exit_qty
+            record["exit_price"] = exit_price
+
+        pending_records.append(record)
+        affected_symbols.add(symbol)
+
+    if errors:
+        raise ValueError(" ".join(errors))
+
+    for record in pending_records:
+        row_type = str(record.get("row_type") or "").upper().strip()
+        symbol = str(record.get("symbol") or "").upper().strip()
+        if row_type == "SUMMARY":
+            symbol_df = load_holdings_breakdown_for_symbols([symbol])
+            summary_rows = (
+                symbol_df[symbol_df["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY")]
+                if not symbol_df.empty and "row_type" in symbol_df.columns
+                else pd.DataFrame()
+            )
+            if not summary_rows.empty:
+                update_holdings_breakdown_row(_row_id(summary_rows.iloc[0]), record)
+                continue
+        insert_holdings_breakdown_row(record)
+
+    for symbol in sorted(affected_symbols):
+        symbol_df = load_holdings_breakdown_for_symbols([symbol])
+        if symbol_df.empty or "row_type" not in symbol_df.columns:
+            continue
+        summaries = symbol_df[symbol_df["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY")]
+        for _, summary in summaries.iterrows():
+            _recalculate_summary_from_supabase_batches(summary, ltp_by_symbol)
+
+    return sorted(affected_symbols)
+
+
+def _render_add_holdings_breakdown_entries_form(ltp_by_symbol: dict[str, float]) -> list[str]:
+    st.subheader("Add Holdings Breakdown Entries")
+    with st.form("add_holdings_breakdown_entries_form"):
+        entries_df = st.data_editor(
+            _empty_add_breakdown_entries_df(),
+            width="stretch",
+            hide_index=True,
+            num_rows="dynamic",
+            disabled=["Invested"],
+            column_config=_add_breakdown_entries_column_config(),
+        )
+        submitted = st.form_submit_button("Add entries", type="primary")
+
+    if not submitted:
+        return []
+
+    return _insert_added_breakdown_entries(entries_df, ltp_by_symbol)
 
 
 def _batch_display_df(batch_df: pd.DataFrame) -> pd.DataFrame:
@@ -1416,24 +1629,7 @@ def update_holdings_breakdown_row(row_id: Any, record: dict[str, Any]) -> None:
         raise RuntimeError(f"Supabase holdings update failed: {exc.reason}") from exc
 
 
-def load_holdings_breakdown_from_supabase() -> pd.DataFrame:
-    supabase_url, supabase_key, table_name = _get_supabase_holdings_config()
-    encoded_table_name = quote(table_name, safe="")
-    endpoint = f"{supabase_url}/rest/v1/{encoded_table_name}?select=*&order=id.asc"
-    headers = _supabase_headers(supabase_key)
-
-    request = Request(endpoint, headers=headers, method="GET")
-    try:
-        with urlopen(request, timeout=60) as response:
-            records = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(
-            f"Supabase holdings breakdown lookup failed with HTTP {exc.code}: {body or exc.reason}"
-        ) from exc
-    except URLError as exc:
-        raise RuntimeError(f"Supabase holdings breakdown lookup failed: {exc.reason}") from exc
-
+def _prepare_holdings_breakdown_df(records: list[dict[str, Any]]) -> pd.DataFrame:
     holdings_breakdown_df = pd.DataFrame(records)
     if holdings_breakdown_df.empty:
         return pd.DataFrame()
@@ -1456,6 +1652,115 @@ def load_holdings_breakdown_from_supabase() -> pd.DataFrame:
         holdings_breakdown_df["exit_date"] = holdings_breakdown_df["exit_date"].apply(_normalize_trade_date)
 
     return holdings_breakdown_df
+
+
+def load_holdings_breakdown_from_supabase() -> pd.DataFrame:
+    supabase_url, supabase_key, table_name = _get_supabase_holdings_config()
+    encoded_table_name = quote(table_name, safe="")
+    endpoint = f"{supabase_url}/rest/v1/{encoded_table_name}?select=*&order=id.asc"
+    headers = _supabase_headers(supabase_key)
+
+    request = Request(endpoint, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase holdings breakdown lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase holdings breakdown lookup failed: {exc.reason}") from exc
+
+    return _prepare_holdings_breakdown_df(records)
+
+
+def load_holdings_breakdown_for_symbols(symbols: list[str]) -> pd.DataFrame:
+    normalized_symbols = sorted({str(symbol).upper().strip() for symbol in symbols if str(symbol).strip()})
+    if not normalized_symbols:
+        return pd.DataFrame()
+
+    supabase_url, supabase_key, table_name = _get_supabase_holdings_config()
+    encoded_table_name = quote(table_name, safe="")
+    symbol_filter = ",".join(quote(symbol, safe="") for symbol in normalized_symbols)
+    endpoint = (
+        f"{supabase_url}/rest/v1/{encoded_table_name}"
+        f"?select=*&symbol=in.({symbol_filter})&order=id.asc"
+    )
+    headers = _supabase_headers(supabase_key)
+
+    request = Request(endpoint, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase holdings breakdown lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase holdings breakdown lookup failed: {exc.reason}") from exc
+
+    return _prepare_holdings_breakdown_df(records)
+
+
+def _normalized_symbol_values(symbols: list[str]) -> list[str]:
+    return sorted({str(symbol).upper().strip() for symbol in symbols if str(symbol).strip()})
+
+
+def _holdings_breakdown_state_df() -> pd.DataFrame:
+    state_df = st.session_state.get(HOLDINGS_BREAKDOWN_DF_STATE_KEY)
+    if isinstance(state_df, pd.DataFrame):
+        return state_df.copy()
+    return pd.DataFrame()
+
+
+def _set_holdings_breakdown_state(df: pd.DataFrame) -> None:
+    st.session_state[HOLDINGS_BREAKDOWN_DF_STATE_KEY] = df.copy()
+
+
+def _load_holdings_breakdown_state() -> pd.DataFrame:
+    df = load_holdings_breakdown_from_supabase()
+    _set_holdings_breakdown_state(df)
+    return df
+
+
+def _merge_holdings_breakdown_symbols(
+    current_df: pd.DataFrame,
+    fresh_df: pd.DataFrame,
+    symbols: list[str],
+) -> pd.DataFrame:
+    normalized_symbols = set(_normalized_symbol_values(symbols))
+    if not normalized_symbols:
+        return current_df
+
+    if current_df.empty or "symbol" not in current_df.columns:
+        merged_df = fresh_df.copy()
+    else:
+        symbol_key = current_df["symbol"].astype(str).str.upper().str.strip()
+        merged_df = pd.concat(
+            [current_df[~symbol_key.isin(normalized_symbols)], fresh_df],
+            ignore_index=True,
+        )
+
+    if "id" in merged_df.columns:
+        merged_df = merged_df.sort_values("id", kind="stable")
+    return merged_df.reset_index(drop=True)
+
+
+def _refresh_holdings_breakdown_state_for_symbols(symbols: list[str]) -> pd.DataFrame:
+    normalized_symbols = _normalized_symbol_values(symbols)
+    if not normalized_symbols:
+        return _holdings_breakdown_state_df()
+
+    current_df = _holdings_breakdown_state_df()
+    if current_df.empty:
+        return _load_holdings_breakdown_state()
+
+    fresh_df = load_holdings_breakdown_for_symbols(normalized_symbols)
+    merged_df = _merge_holdings_breakdown_symbols(current_df, fresh_df, normalized_symbols)
+    _set_holdings_breakdown_state(merged_df)
+    return merged_df
 
 
 st.subheader("Portfolio Holdings")
@@ -1487,13 +1792,7 @@ def _cache_ltp_by_symbol(df: pd.DataFrame) -> None:
         st.session_state["ltp_by_symbol"] = {}
 
 
-def display_supabase_holdings_breakdown() -> None:
-    try:
-        holdings_breakdown_df = load_holdings_breakdown_from_supabase()
-    except Exception as exc:
-        st.warning(f"Could not load holdings breakdown from Supabase: {exc}")
-        return
-
+def display_holdings_breakdown_df(holdings_breakdown_df: pd.DataFrame) -> None:
     if holdings_breakdown_df.empty:
         st.info("No holdings breakdown found in Supabase.")
         return
@@ -1513,7 +1812,8 @@ def display_supabase_holdings_breakdown() -> None:
 
     active_breakdown_df = _active_breakdown_df(holdings_breakdown_df)
     if active_breakdown_df.empty:
-        st.info("No current holdings breakdown found in Supabase.")
+        if _exited_holdings_summary_df(holdings_breakdown_df).empty:
+            st.info("No active holdings found.")
     else:
         display_holdings_breakdown_preview(
             active_breakdown_df,
@@ -1524,6 +1824,20 @@ def display_supabase_holdings_breakdown() -> None:
     display_exited_holdings_summary(holdings_breakdown_df)
 
 
+def display_supabase_holdings_breakdown(symbols: list[str] | None = None) -> None:
+    try:
+        holdings_breakdown_df = (
+            load_holdings_breakdown_for_symbols(symbols)
+            if symbols
+            else load_holdings_breakdown_from_supabase()
+        )
+    except Exception as exc:
+        st.warning(f"Could not load holdings breakdown from Supabase: {exc}")
+        return
+
+    display_holdings_breakdown_df(holdings_breakdown_df)
+
+
 def display_kite_holdings(df: pd.DataFrame, kite=None) -> pd.DataFrame | None:
     if df.empty:
         st.session_state["ltp_by_symbol"] = {}
@@ -1532,6 +1846,7 @@ def display_kite_holdings(df: pd.DataFrame, kite=None) -> pd.DataFrame | None:
 
     df = df.copy()
     _cache_ltp_by_symbol(df)
+    
     #print("portfolio holdings columns:\n")
     #print(df.columns)
     
@@ -1668,7 +1983,9 @@ with tab_upload_kite:
             kite_holdings_df = _read_uploaded_file(uploaded_kite_holdings_file)
             display_kite_holdings(kite_holdings_df)            
             if st.checkbox("Show holdings breakdown", key="show_upload_kite_holdings_breakdown"):
-                display_supabase_holdings_breakdown()
+                if _holdings_breakdown_state_df().empty:
+                    _load_holdings_breakdown_state()
+                display_holdings_breakdown_df(_holdings_breakdown_state_df())
         except ImportError as exc:
             st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
         except Exception as exc:
@@ -1711,6 +2028,15 @@ with tab_fetch_kite:
 
 with tab_upload_holdings_breakdown:
 
+    if st.button("View holdings breakdown", key="view_upload_holdings_breakdown"):
+        try:
+            _load_holdings_breakdown_state()
+            st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
+        except Exception as exc:
+            st.warning(f"Could not load holdings breakdown from Supabase: {exc}")
+
+    affected_symbols_to_refresh: list[str] = []
+
     uploaded_brkholdings_file = st.file_uploader(
         "Upload holdings breakdown CSV or XLSX",
         type=["csv", "xlsx"],
@@ -1727,14 +2053,33 @@ with tab_upload_holdings_breakdown:
             #print("holdings breakdown after cleaning:\n", holdings_breakdown_df.head())
 
             upsert_holdings_breakdown_in_supabase(holdings_breakdown_df, upload_columns)
-
-            holdings_breakdown_df = load_holdings_breakdown_from_supabase()
-            display_holdings_breakdown_preview(holdings_breakdown_df)
+            if "symbol" in holdings_breakdown_df.columns:
+                affected_symbols_to_refresh.extend(
+                    holdings_breakdown_df["symbol"].dropna().astype(str).str.upper().str.strip().unique().tolist()
+                )
 
         except ImportError as exc:
             st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
         except Exception as exc:
             st.error(f"Failed to upload holdings breakdown: {exc}")
+
+    try:
+        added_symbols = _render_add_holdings_breakdown_entries_form(
+            st.session_state.get("ltp_by_symbol", {})
+        )
+        affected_symbols_to_refresh.extend(added_symbols)
+    except Exception as exc:
+        st.error(f"Failed to add holdings breakdown entries: {exc}")
+
+    if affected_symbols_to_refresh:
+        try:
+            _refresh_holdings_breakdown_state_for_symbols(affected_symbols_to_refresh)
+            st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
+        except Exception as exc:
+            st.warning(f"Could not refresh holdings breakdown from Supabase: {exc}")
+
+    if st.session_state.get(HOLDINGS_BREAKDOWN_VIEW_STATE_KEY):
+        display_holdings_breakdown_df(_holdings_breakdown_state_df())
 
 
 with tab_historic_data:
