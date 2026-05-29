@@ -56,17 +56,17 @@ def get_kite_historical_data(
         continuous=int(bool(continuous)),
         oi=int(bool(oi)),
     )
-    print(
-        "Kite historical_data response:",
-        {
-            "instrument_token": int(instrument_token),
-            "interval": interval,
-            "from_date": start,
-            "to_date": end,
-            "row_count": len(candles),
-            "sample": candles[-5:] if candles else [],
-        },
-    )
+    #print(
+    #    "Kite historical_data response:",
+    #    {
+    #        "instrument_token": int(instrument_token),
+    #        "interval": interval,
+    #        "from_date": start,
+    #        "to_date": end,
+    #        "row_count": len(candles),
+    #        "sample": candles[-5:] if candles else [],
+    #    },
+    #)
 
     df = pd.DataFrame(candles)
     if df.empty:
@@ -293,7 +293,51 @@ def compute_period_returns(
     return returns
 
 
-def build_metric_ladder(analytics_df: pd.DataFrame) -> list[tuple[str, float | tuple[float, ...] | None]]:
+def compute_volume_gains(analytics_df: pd.DataFrame) -> dict[str, float | None]:
+    """
+    Compute completed weekly and monthly volume gain percentages.
+    """
+    if analytics_df.empty or "Volume" not in analytics_df.columns:
+        return {}
+
+    df = _normalize_datetime_index(analytics_df)
+    df.sort_index(inplace=True)
+    volume = pd.to_numeric(df["Volume"], errors="coerce")
+
+    weekly_volume = volume.resample("W-FRI").sum(min_count=1).dropna()
+    monthly_volume = volume.resample("ME").sum(min_count=1).dropna()
+
+    def gain_pct(period_volume: pd.Series) -> float | None:
+        if len(period_volume) < 3:
+            return None
+
+        current_completed = pd.to_numeric(period_volume.iloc[-2], errors="coerce")
+        previous_completed = pd.to_numeric(period_volume.iloc[-3], errors="coerce")
+        if (
+            pd.isna(current_completed)
+            or pd.isna(previous_completed)
+            or float(previous_completed) == 0
+        ):
+            return None
+
+        return round(
+            ((float(current_completed) - float(previous_completed)) / float(previous_completed)) * 100,
+            2,
+        )
+
+    return {
+        "1W Volume Gain %": gain_pct(weekly_volume),
+        "1M Volume Gain %": gain_pct(monthly_volume),
+    }
+
+
+def build_metric_ladder(
+    analytics_df: pd.DataFrame,
+    *,
+    buy_avg: float | None = None,
+    quantity: float | None = None,
+    invested: float | None = None,
+) -> list[tuple[str, float | tuple[float, ...] | None]]:
     """
     Build an ascending price ladder from the cached 2Y daily dataframe.
     """
@@ -307,8 +351,20 @@ def build_metric_ladder(analytics_df: pd.DataFrame) -> list[tuple[str, float | t
     )
     ladder: list[tuple[str, float | tuple[float, ...] | None]] = [
         ("Range Position", range_with_ltp),
-        ("Range Used", range_position),
     ]
+    if range_position is not None and buy_avg is not None:
+        range_low = range_position[1]
+        range_high = range_position[2]
+        if range_high != range_low:
+            buy_avg_rng = ((buy_avg - range_low) / (range_high - range_low)) * 100
+            buy_avg_rng = round(min(max(buy_avg_rng, 0), 100), 1)
+            ladder.append(("Buy", (buy_avg_rng, range_low, range_high, buy_avg)))
+    if invested is not None:
+        ladder.append(("Invested", invested))
+    if quantity is not None:
+        ladder.append(("Qty", quantity))
+
+    ladder.append(("Range Used", range_position))
     for span in [20, 50, 100, 200]:
         label = f"EMA{span}"
         ladder.append((f"__EMA_DISTANCE__{label}", calculate_distance_pct(ltp, metrics.get(label))))
@@ -326,6 +382,7 @@ def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float | tuple[fl
         cells = [
             f"Rng:{value[0]:.1f}% [{value[3]:.2f}]" if label == "Range Position" and value is not None and len(value) > 3
             else f"Rng:{value[0]:.1f}%" if label == "Range Position" and value is not None
+            else f"Buy:{value[0]:.1f}% [{value[3]:.2f}]" if label == "Buy" and value is not None and len(value) > 3
             else f"[{value[1]:.2f} - {value[2]:.2f}]" if label == "Range Used" and value is not None
             else f"{label.removeprefix('__EMA_DISTANCE__')}\n{value:+.2f}%" if label.startswith("__EMA_DISTANCE__") and value is not None
             else f"{label}: {value:.2f}" if value is not None
@@ -348,6 +405,11 @@ RETURN_PERCENT_COLUMNS = [
     "YTD Return %",
 ]
 
+VOLUME_GAIN_COLUMNS = [
+    "1W Volume Gain %",
+    "1M Volume Gain %",
+]
+
 
 def build_historic_dashboard_frames(
     _kite: KiteConnect,
@@ -357,6 +419,9 @@ def build_historic_dashboard_frames(
     symbol_key: str = "Ticker",
     token_key: str = "instrument_token",
     ltp_key: str | None = None,
+    buy_avg_key: str | None = None,
+    quantity_key: str | None = None,
+    invested_key: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     """
     Build the returns and sorted price ladder frames shared by historic screens.
@@ -377,7 +442,15 @@ def build_historic_dashboard_frames(
             continue
 
         ltp = row.get(ltp_key) if ltp_key is not None else None
+        buy_avg = pd.to_numeric(row.get(buy_avg_key), errors="coerce") if buy_avg_key is not None else None
+        quantity = pd.to_numeric(row.get(quantity_key), errors="coerce") if quantity_key is not None else None
+        invested = pd.to_numeric(row.get(invested_key), errors="coerce") if invested_key is not None else None
+        if pd.isna(invested) and buy_avg_key is not None and quantity_key is not None:
+            if pd.notna(buy_avg) and pd.notna(quantity):
+                invested = float(buy_avg) * float(quantity)
+
         returns = compute_period_returns(analytics_df, ltp)
+        #volume_gains = compute_volume_gains(analytics_df)
         return_rows.append(
             {
                 "Ticker": symbol,
@@ -389,9 +462,15 @@ def build_historic_dashboard_frames(
                     )
                     for period in RETURN_PERCENT_COLUMNS
                 },
+                #**{column: volume_gains.get(column) for column in VOLUME_GAIN_COLUMNS},
             }
         )
-        ladders[symbol] = build_metric_ladder(analytics_df)
+        ladders[symbol] = build_metric_ladder(
+            analytics_df,
+            buy_avg=float(buy_avg) if pd.notna(buy_avg) else None,
+            quantity=float(quantity) if pd.notna(quantity) else None,
+            invested=float(invested) if pd.notna(invested) else None,
+        )
 
     return pd.DataFrame(return_rows), build_vertical_dashboard(ladders), skipped_symbols
 
@@ -433,9 +512,10 @@ def display_historic_dashboard_frames(
     )
 
     if not returns_df.empty:
+        formatted_percent_columns = RETURN_PERCENT_COLUMNS + VOLUME_GAIN_COLUMNS
         st.dataframe(
             returns_df.style.format(
-                {column: "{:.1f}" for column in RETURN_PERCENT_COLUMNS}
+                {column: "{:.1f}" for column in formatted_percent_columns}
             ).apply(highlight_return_cells, axis=None),
             width="stretch",
             height=_historic_dashboard_height(len(returns_df), max_rows=max_rows),
@@ -503,7 +583,7 @@ def _format_symbol_color_summary(color_groups: dict[str, list[str]]) -> str:
 
 def highlight_return_cells(data: pd.DataFrame) -> pd.DataFrame:
     styles = pd.DataFrame("", index=data.index, columns=data.columns)
-    for column in RETURN_PERCENT_COLUMNS:
+    for column in RETURN_PERCENT_COLUMNS + VOLUME_GAIN_COLUMNS:
         if column not in data.columns:
             continue
 
@@ -542,9 +622,12 @@ def highlight_ltp_cells(value: str) -> str:
             return "color: #b91c1c; font-weight: 700"
         return "color: #475569; font-weight: 700"
 
-    if isinstance(value, str) and value.startswith("Rng:"):
+    if isinstance(value, str) and (
+        value.startswith("Rng:") # or value.startswith("Buy:")
+    ):
         try:
-            range_pct = float(value.removeprefix("Rng:").split("%", 1)[0])
+            range_text = value.split(":", 1)[1] if ":" in value else value
+            range_pct = float(range_text.split("%", 1)[0])
         except ValueError:
             return "font-weight: 700"
 

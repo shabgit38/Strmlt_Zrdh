@@ -663,6 +663,52 @@ def _style_pnl_columns(df: pd.DataFrame):
     return styler
 
 
+def _rng_symbol_color(range_pct: float | None) -> str:
+    if range_pct is None:
+        return ""
+    if range_pct < 25:
+        return "color: #dc2626; font-weight: 700"
+    if range_pct < 50:
+        return "color: #f97316; font-weight: 700"
+    if range_pct < 75:
+        return "color: #84cc16; font-weight: 700"
+    return "color: #16a34a; font-weight: 700"
+
+
+def _rng_color_by_symbol(dashboard_df: pd.DataFrame) -> dict[str, str]:
+    colors: dict[str, str] = {}
+    if dashboard_df.empty:
+        return colors
+
+    for symbol in dashboard_df.columns:
+        values = dashboard_df[symbol]
+        range_pct = None
+        for value in values:
+            if not isinstance(value, str) or not value.startswith("Rng:"):
+                continue
+            try:
+                range_pct = float(value.removeprefix("Rng:").split("%", 1)[0])
+            except ValueError:
+                range_pct = None
+            break
+
+        color = _rng_symbol_color(range_pct)
+        if color:
+            colors[str(symbol).strip().upper()] = color
+    return colors
+
+
+def _style_kite_holdings(display_df: pd.DataFrame, rng_colors: dict[str, str]):
+    styler = _style_pnl_columns(display_df)
+    if "Symbol" not in display_df.columns or not rng_colors:
+        return styler
+
+    def symbol_style(value: Any) -> str:
+        return rng_colors.get(str(value).strip().upper(), "")
+
+    return styler.map(symbol_style, subset=["Symbol"])
+
+
 def _summary_display_df(summary: pd.Series) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -1902,8 +1948,13 @@ def display_kite_holdings(df: pd.DataFrame, kite=None) -> pd.DataFrame | None:
     with col3:
         st.metric("As of", st.session_state.get("kite_holdings_download_filename").split("_")[1]) 
         
+    rng_colors = _rng_color_by_symbol(
+        _sort_historic_dashboard_by_rng(
+            st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame())
+        )
+    )
     st.dataframe(
-        _style_pnl_columns(display_df),
+        _style_kite_holdings(display_df, rng_colors),
         width="stretch",
         height=_dataframe_height(len(display_df)),
         hide_index=False,
@@ -1938,6 +1989,8 @@ def fetch_and_display_holdings():
                 symbol_key="tradingsymbol",
                 token_key="instrument_token",
                 ltp_key="last_price",
+                buy_avg_key="average_price",
+                quantity_key="quantity",
             )
             st.session_state["kite_holdings_df"] = df
             st.session_state["kite_holdings_returns_df"] = returns_df
@@ -2020,7 +2073,9 @@ with tab_fetch_kite:
                 + ("..." if len(failed_symbols) > 10 else "")
             )
         display_historic_dashboard_frames(
-            st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame()),
+            _sort_historic_dashboard_by_rng(
+                st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame())
+            ),
             st.session_state.get("kite_holdings_returns_df", pd.DataFrame()),
             
         )
