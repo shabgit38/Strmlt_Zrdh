@@ -1,4 +1,5 @@
 from datetime import datetime, time
+from html import escape
 
 import pandas as pd
 import streamlit as st
@@ -54,6 +55,17 @@ def get_kite_historical_data(
         interval=interval,
         continuous=int(bool(continuous)),
         oi=int(bool(oi)),
+    )
+    print(
+        "Kite historical_data response:",
+        {
+            "instrument_token": int(instrument_token),
+            "interval": interval,
+            "from_date": start,
+            "to_date": end,
+            "row_count": len(candles),
+            "sample": candles[-5:] if candles else [],
+        },
     )
 
     df = pd.DataFrame(candles)
@@ -146,20 +158,21 @@ def build_metric_values(analytics_df: pd.DataFrame) -> dict[str, float]:
 
     analytics_df = add_ema(analytics_df.copy())
     latest = analytics_df.iloc[-1]
+    latest_date = pd.to_datetime(analytics_df.index[-1])
     high_low = get_high_low_resampled(analytics_df)
 
     metrics = {
-        #"Day Low": float(latest["Low"]),
-        #"Day High": float(latest["High"]),
         "LTP": float(latest["Close"]),
     }
+    if latest_date.date() == datetime.now().date():
+        metrics["Today Low"] = float(latest["Low"])
+        metrics["Today High"] = float(latest["High"])
 
     for period in ["1W", "1M", "3M", "6M", "1Y"]:
         high, low = high_low[period]
         metrics[f"{period} Low"] = float(low)
         metrics[f"{period} High"] = float(high)
 
-    latest_date = pd.to_datetime(analytics_df.index[-1])
     df_52w = analytics_df[analytics_df.index >= latest_date - pd.DateOffset(weeks=52)]
     if not df_52w.empty:
         metrics["52W Low"] = float(df_52w["Low"].min())
@@ -225,7 +238,24 @@ def compute_period_returns(
     if pd.isna(latest_price):
         return {}
 
+    returns: dict[str, float | None] = {}
     latest_date = pd.to_datetime(df.index[-1])
+    if latest_date.date() == datetime.now().date() and len(df) >= 2:
+        previous_close = pd.to_numeric(df.iloc[-2]["Close"], errors="coerce")
+        if pd.notna(previous_close) and float(previous_close) != 0:
+            returns["Today Return %"] = {
+                "return_pct": round(
+                    ((float(latest_price) - float(previous_close)) / float(previous_close)) * 100,
+                    2,
+                ),
+                "latest_price": round(float(latest_price), 2),
+                "start_close": round(float(previous_close), 2),
+            }
+        else:
+            returns["Today Return %"] = None
+    else:
+        returns["Today Return %"] = None
+
     periods = {
         "1W Return %": latest_date - pd.DateOffset(weeks=1),
         "1M Return %": latest_date - pd.DateOffset(months=1),
@@ -235,8 +265,6 @@ def compute_period_returns(
         "2Y Return %": latest_date - pd.DateOffset(years=2),
         "YTD Return %": pd.Timestamp(year=latest_date.year, month=1, day=1),
     }
-
-    returns: dict[str, float | None] = {}
     for label, start_date in periods.items():
         start_rows = df[df.index >= start_date]
         if start_rows.empty:
@@ -282,7 +310,8 @@ def build_metric_ladder(analytics_df: pd.DataFrame) -> list[tuple[str, float | t
         ("Range Used", range_position),
     ]
     for span in [20, 50, 100, 200]:
-        ladder.append((f"EMA{span}", calculate_distance_pct(ltp, metrics.get(f"EMA{span}"))))
+        label = f"EMA{span}"
+        ladder.append((f"__EMA_DISTANCE__{label}", calculate_distance_pct(ltp, metrics.get(label))))
     ladder.extend(sorted(metrics.items(), key=lambda item: item[1]))
     return ladder
 
@@ -298,7 +327,7 @@ def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float | tuple[fl
             f"Rng:{value[0]:.1f}% [{value[3]:.2f}]" if label == "Range Position" and value is not None and len(value) > 3
             else f"Rng:{value[0]:.1f}%" if label == "Range Position" and value is not None
             else f"[{value[1]:.2f} - {value[2]:.2f}]" if label == "Range Used" and value is not None
-            else f"{label}: {value:+.2f}%" if label.endswith(" Dist") and value is not None
+            else f"{label.removeprefix('__EMA_DISTANCE__')}\n{value:+.2f}%" if label.startswith("__EMA_DISTANCE__") and value is not None
             else f"{label}: {value:.2f}" if value is not None
             else f"{label}: -"
             for label, value in ladder
@@ -309,6 +338,7 @@ def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float | tuple[fl
 
 
 RETURN_PERCENT_COLUMNS = [
+    "Today Return %",
     "1W Return %",
     "1M Return %",
     "3M Return %",
@@ -388,6 +418,13 @@ def display_historic_dashboard_frames(
         st.info("No dashboard data returned for the selected inputs.")
         return
 
+    symbol_color_groups = _group_dashboard_symbols_by_range_color(dashboard_df)
+    if any(symbol_color_groups.values()):
+        st.markdown(
+            _format_symbol_color_summary(symbol_color_groups),
+            unsafe_allow_html=True,
+        )
+
     st.dataframe(
         dashboard_df.style.map(highlight_ltp_cells),
         width="stretch",
@@ -397,11 +434,71 @@ def display_historic_dashboard_frames(
 
     if not returns_df.empty:
         st.dataframe(
-            returns_df.style.apply(highlight_return_cells, axis=None),
+            returns_df.style.format(
+                {column: "{:.1f}" for column in RETURN_PERCENT_COLUMNS}
+            ).apply(highlight_return_cells, axis=None),
             width="stretch",
             height=_historic_dashboard_height(len(returns_df), max_rows=max_rows),
             hide_index=True,
         )
+
+
+def _group_dashboard_symbols_by_range_color(dashboard_df: pd.DataFrame) -> dict[str, list[str]]:
+    color_groups = {
+        "green": [],
+        "light_green": [],
+        "orange": [],
+        "red": [],
+    }
+    for symbol in dashboard_df.columns:
+        range_pct = _get_symbol_range_pct(dashboard_df[symbol])
+        if range_pct is None:
+            continue
+
+        if range_pct < 25:
+            color_groups["red"].append(str(symbol))
+        elif range_pct < 50:
+            color_groups["orange"].append(str(symbol))
+        elif range_pct < 75:
+            color_groups["light_green"].append(str(symbol))
+        else:
+            color_groups["green"].append(str(symbol))
+    return color_groups
+
+
+def _get_symbol_range_pct(symbol_values: pd.Series) -> float | None:
+    for value in symbol_values:
+        if not isinstance(value, str) or not value.startswith("Rng:"):
+            continue
+        try:
+            return float(value.removeprefix("Rng:").split("%", 1)[0])
+        except ValueError:
+            return None
+    return None
+
+
+def _format_symbol_color_summary(color_groups: dict[str, list[str]]) -> str:
+    summary_items = [
+        (">= 75", "#16a34a", "#ffffff", color_groups["green"]),
+        (">= 50 and < 75", "#84cc16", "#1a2e05", color_groups["light_green"]),
+        (">= 25 and < 50", "#f97316", "#ffffff", color_groups["orange"]),
+        ("< 25", "#dc2626", "#ffffff", color_groups["red"]),
+    ]
+    rows = []
+    for label, background, foreground, symbols in summary_items:
+        symbol_text = escape(", ".join(symbols)) if symbols else "-"
+        rows.append(
+            "<div style='display:flex;align-items:center;gap:0.5rem;'>"
+            f"<span style='min-width:6.5rem;font-weight:700;color:{background};'>{label}</span>"
+            f"<span style='background:{background};color:{foreground};font-weight:700;"
+            "padding:0.2rem 0.45rem;border-radius:0.25rem;'>"
+            f"{symbol_text}</span></div>"
+        )
+    return (
+        "<div style='display:grid;gap:0.35rem;margin:0 0 0.75rem 0;'>"
+        + "".join(rows)
+        + "</div>"
+    )
 
 
 def highlight_return_cells(data: pd.DataFrame) -> pd.DataFrame:
@@ -422,17 +519,29 @@ def highlight_return_cells(data: pd.DataFrame) -> pd.DataFrame:
 
             position = (value - min_value) / (max_value - min_value) * 100
             if position < 25:
-                styles.at[index, column] = "background-color: #dc2626; color: #ffffff; font-weight: 700"
+                styles.at[index, column] = "color: #dc2626; font-weight: 700"
             elif position < 50:
-                styles.at[index, column] = "background-color: #f97316; color: #ffffff; font-weight: 700"
+                styles.at[index, column] = "color: #f97316; font-weight: 700"
             elif position < 75:
-                styles.at[index, column] = "background-color: #84cc16; color: #1a2e05; font-weight: 700"
+                styles.at[index, column] = "color: #84cc16; font-weight: 700"
             else:
-                styles.at[index, column] = "background-color: #16a34a; color: #ffffff; font-weight: 700"
+                styles.at[index, column] = "color: #16a34a; font-weight: 700"
     return styles
 
 
 def highlight_ltp_cells(value: str) -> str:
+    if isinstance(value, str) and value.startswith("EMA") and "\n" in value and "%" in value:
+        try:
+            distance_pct = float(value.splitlines()[-1].strip().removesuffix("%"))
+        except (IndexError, ValueError):
+            return "font-weight: 700"
+
+        if distance_pct > 0:
+            return "color: #047857; font-weight: 700"
+        if distance_pct < 0:
+            return "color: #b91c1c; font-weight: 700"
+        return "color: #475569; font-weight: 700"
+
     if isinstance(value, str) and value.startswith("Rng:"):
         try:
             range_pct = float(value.removeprefix("Rng:").split("%", 1)[0])

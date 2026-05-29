@@ -1,0 +1,392 @@
+# Task: Build Scheduler + Portfolio Intelligence Layer for Streamlit Dashboard
+
+## Goal
+
+Implement a background scheduler system for the portfolio dashboard.
+
+Current dashboard:
+
+* Fetches holdings from Zerodha Kite
+* Stores local snapshots
+* Shows portfolio analytics
+
+New functionality:
+
+1. Daily holdings refresh
+2. Periodic LTP refresh
+3. Rule-based alerts
+4. Agent-generated portfolio summaries
+5. Structure code so MCP integration can be added later
+
+Do not modify current dashboard logic unless necessary.
+
+---
+
+# Existing Architecture
+
+Current:
+
+Kite API
+↓
+Holdings Snapshot
+↓
+Dashboard
+
+Target:
+
+Kite API
+↓
+Scheduler Jobs
+↓
+Local Storage
+↓
+Alert Engine
+↓
+Agent Summary
+↓
+Streamlit Dashboard
+
+---
+
+# Folder Structure
+
+Create:
+
+portfolio-dashboard/
+
+├── app.py
+│
+├── scheduler.py
+│
+├── jobs/
+│      ├── fetch_holdings.py
+│      ├── fetch_ltp.py
+│      ├── generate_alerts.py
+│      ├── generate_summary.py
+│
+├── agents/
+│      ├── portfolio_agent.py
+│
+├── utils/
+│      ├── calculations.py
+│      ├── storage.py
+│
+├── data/
+│      ├── holdings_snapshot.csv
+│      ├── ltp_snapshot.csv
+│      ├── alerts.csv
+│      ├── daily_summary.md
+│
+├── requirements.txt
+
+---
+
+# Dependencies
+
+Add:
+
+apscheduler
+pandas
+streamlit
+streamlit-autorefresh
+
+Do not install unnecessary packages.
+
+---
+
+# Scheduler Requirements
+
+Use APScheduler BlockingScheduler.
+
+Create jobs:
+
+Daily holdings fetch:
+
+Time:
+9:30 AM IST
+
+Purpose:
+Fetch holdings from Kite and store snapshot
+
+---
+
+LTP refresh:
+
+Frequency:
+Every 2 minutes
+
+Conditions:
+
+Only during:
+
+Monday-Friday
+9:15–15:30 IST
+
+Purpose:
+
+Refresh only LTP values
+
+Do NOT fetch holdings repeatedly
+
+---
+
+Alert generation:
+
+Frequency:
+Every 2 minutes
+
+Purpose:
+
+Generate alert file
+
+---
+
+Daily summary:
+
+Time:
+3:45 PM IST
+
+Purpose:
+
+Generate AI summary after market close
+
+---
+
+# Job Logic
+
+## fetch_holdings_job()
+
+Input:
+
+Kite holdings API
+
+Output:
+
+data/holdings_snapshot.csv
+
+Store:
+
+tradingsymbol
+quantity
+avg_price
+invested_amount
+
+Handle API failures safely.
+
+---
+
+## fetch_ltp_job()
+
+Input:
+
+symbols from holdings snapshot
+
+Fetch:
+
+latest prices only
+
+Output:
+
+data/ltp_snapshot.csv
+
+Columns:
+
+timestamp
+tradingsymbol
+LTP
+
+Do not re-fetch holdings.
+
+---
+
+## generate_alerts_job()
+
+Input:
+
+holdings + LTP + indicator data
+
+Generate alerts:
+
+1.
+
+Near EMA20
+
+Rule:
+
+abs(LTP−EMA20)/EMA20 <=1%
+
+2.
+
+Near 52W High
+
+Rule:
+
+(52WHigh−LTP)/52WHigh <=3%
+
+3.
+
+Below EMA200
+
+Rule:
+
+LTP < EMA200
+
+4.
+
+High concentration
+
+Rule:
+
+allocation >15%
+
+Output:
+
+alerts.csv
+
+Columns:
+
+symbol
+alert_type
+message
+timestamp
+
+---
+
+# Agent Layer
+
+Create:
+
+agents/portfolio_agent.py
+
+Purpose:
+
+Read:
+
+holdings
+alerts
+sector allocations
+
+Generate human-readable summary.
+
+Function:
+
+generate_portfolio_summary()
+
+Example output:
+
+Portfolio Summary
+
+* BEL near EMA200 support
+* IT allocation increased to 28%
+* Two holdings near yearly highs
+* One position exceeds allocation threshold
+
+Save:
+
+daily_summary.md
+
+Do not create autonomous decision making.
+
+Only generate observations.
+
+No buy/sell recommendations.
+
+---
+
+# Dashboard Changes
+
+Do not rewrite dashboard.
+
+Add:
+
+Top section:
+
+Portfolio Alerts
+
+Read:
+
+alerts.csv
+
+Display:
+
+badge-style alerts
+
+---
+
+Add:
+
+Portfolio Summary section
+
+Read:
+
+daily_summary.md
+
+Display below alerts.
+
+---
+
+# Future MCP Preparation
+
+Do not implement MCP yet.
+
+But structure functions so they can later become MCP tools.
+
+Future tools may include:
+
+get_holdings()
+
+get_alerts()
+
+get_sector_exposure()
+
+get_price_structure(symbol)
+
+generate_portfolio_summary()
+
+Keep functions modular.
+
+---
+
+# Constraints
+
+Do not:
+
+* modify Kite authentication flow
+* modify Excel upload pipeline
+* hardcode stock symbols
+* hardcode dates
+* place scheduler inside Streamlit app
+
+Scheduler must run independently.
+
+---
+
+# Error Handling
+
+If API fails:
+
+* log error
+* keep previous snapshot
+* avoid dashboard crash
+
+If CSV missing:
+
+* return empty dataframe safely
+
+---
+
+# Done When
+
+✓ Holdings refresh daily
+
+✓ LTP refreshes every 2 minutes
+
+✓ Alerts generate automatically
+
+✓ Daily summary generated
+
+✓ Streamlit reads generated files
+
+✓ Scheduler independent of dashboard
+
+✓ Functions reusable for future MCP integration
