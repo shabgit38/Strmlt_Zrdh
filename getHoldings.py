@@ -13,15 +13,19 @@ import streamlit as st
 
 from kite_analytics import (
     build_historic_dashboard_frames,
-    display_historic_dashboard_frames,
+    display_historic_price_ladder_frame,
+    display_historic_returns_frame,
+    highlight_numeric_scale_cells,
 )
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
+from momentum_score import calculate_momentum_scores_from_kite
 
 st.set_page_config(layout="wide") 
 
 SUPABASE_BATCH_SIZE = 500
 HOLDINGS_TABLE_NAME = "holdings_breakdown"
 SUPABASE_INDICES_TABLE_NAME = "Indices_constituents"
+DEFAULT_MOMENTUM_BENCHMARK = "NIFTY 50"
 HOLDINGS_BREAKDOWN_DF_STATE_KEY = "holdings_breakdown_df"
 HOLDINGS_BREAKDOWN_VIEW_STATE_KEY = "holdings_breakdown_view_enabled"
 HOLDINGS_COLUMN_MAP = {
@@ -765,6 +769,237 @@ def _sort_historic_dashboard_by_rng(dashboard_df: pd.DataFrame) -> pd.DataFrame:
 
     sorted_columns = sorted(dashboard_df.columns, key=rng_value, reverse=True)
     return dashboard_df.loc[:, sorted_columns]
+
+
+def _parse_prefixed_float(value: Any, prefix: str) -> float | None:
+    if not isinstance(value, str) or not value.startswith(prefix):
+        return None
+    try:
+        return float(value.split(":", 1)[1].strip().split()[0])
+    except (IndexError, ValueError):
+        return None
+
+
+def _extract_historic_ladder_summary(dashboard_df: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    if dashboard_df.empty:
+        return pd.DataFrame()
+
+    for symbol in dashboard_df.columns:
+        row: dict[str, Any] = {"Ticker": str(symbol).strip().upper()}
+        for value in dashboard_df[symbol]:
+            if not isinstance(value, str):
+                continue
+
+            if value.startswith("Rng:"):
+                try:
+                    row["Range %"] = float(value.removeprefix("Rng:").split("%", 1)[0])
+                except ValueError:
+                    pass
+            elif "\n" in value and value.startswith("EMA") and value.endswith("%"):
+                lines = value.splitlines()
+                try:
+                    row[f"{lines[0]} Dist %"] = float(lines[-1].strip().removesuffix("%"))
+                except (IndexError, ValueError):
+                    pass
+            elif value.startswith("52W High:"):
+                row["52W High"] = _parse_prefixed_float(value, "52W High:")
+            elif value.startswith("52W Low:"):
+                row["52W Low"] = _parse_prefixed_float(value, "52W Low:")
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+def build_consolidated_momentum_dashboard(
+    momentum_df: pd.DataFrame,
+    returns_df: pd.DataFrame,
+    dashboard_df: pd.DataFrame,
+) -> pd.DataFrame:
+    if momentum_df.empty:
+        return pd.DataFrame()
+
+    consolidated = momentum_df.copy()
+    if "ticker" in consolidated.columns:
+        consolidated = consolidated.rename(columns={"ticker": "Ticker"})
+    consolidated["Ticker"] = consolidated["Ticker"].astype(str).str.strip().str.upper()
+
+    rename_map = {
+        "ltp": "LTP",
+        "ret_6m": "6M Momentum",
+        "ret_12_1": "12-1 Momentum",
+        "rs_vs_nifty": "RS vs Nifty",
+        "dist_52w_high": "52W High Proximity",
+        "above_ema200": "Above EMA200",
+        "ema50_gt_ema200": "EMA50 > EMA200",
+        "vol_adj_momentum": "Vol Adj Momentum",
+        "momentum_score": "Momentum Score",
+        "momentum_label": "Label",
+        "data_status": "Status",
+    }
+    consolidated = consolidated.rename(columns=rename_map)
+
+    if not returns_df.empty and "Ticker" in returns_df.columns:
+        return_columns = [
+            column
+            for column in ["Ticker", "Today Return %", "1W Return %", "1M Return %", "3M Return %", "6M Return %", "1Y Return %", "YTD Return %"]
+            if column in returns_df.columns
+        ]
+        returns_summary = returns_df[return_columns].copy()
+        returns_summary["Ticker"] = returns_summary["Ticker"].astype(str).str.strip().str.upper()
+        consolidated = consolidated.merge(returns_summary, on="Ticker", how="left")
+
+    ladder_summary = _extract_historic_ladder_summary(dashboard_df)
+    if not ladder_summary.empty:
+        consolidated = consolidated.merge(ladder_summary, on="Ticker", how="left")
+
+    preferred_columns = [
+        "Ticker",
+        "Momentum Score",
+        "Label",
+        "Status",
+        "LTP",
+        "Range %",
+        "6M Momentum",
+        "12-1 Momentum",
+        "RS vs Nifty",
+        "52W High Proximity",
+        "Today Return %",
+        "1W Return %",
+        "1M Return %",
+        "3M Return %",
+        "6M Return %",
+        "1Y Return %",
+        "YTD Return %",
+        "Above EMA200",
+        "EMA50 > EMA200",
+        "EMA20 Dist %",
+        "EMA50 Dist %",
+        "EMA100 Dist %",
+        "EMA200 Dist %",
+        "Vol Adj Momentum",
+        "52W High",
+        "52W Low",
+    ]
+    ordered_columns = [column for column in preferred_columns if column in consolidated.columns]
+    extra_columns = [column for column in consolidated.columns if column not in ordered_columns]
+    return consolidated[ordered_columns + extra_columns]
+
+
+def display_consolidated_momentum_dashboard(consolidated_df: pd.DataFrame) -> None:
+    if consolidated_df.empty:
+        return
+
+    percent_fraction_columns = [
+        column
+        for column in ["6M Momentum", "12-1 Momentum", "RS vs Nifty", "52W High Proximity"]
+        if column in consolidated_df.columns
+    ]
+    percent_point_columns = [
+        column
+        for column in ["Today Return %", "1W Return %", "1M Return %", "3M Return %", "6M Return %", "1Y Return %", "YTD Return %", "Range %", "EMA20 Dist %", "EMA50 Dist %", "EMA100 Dist %", "EMA200 Dist %"]
+        if column in consolidated_df.columns
+    ]
+    formatters = {
+        "Momentum Score": "{:.1f}",
+        "LTP": "{:.2f}",
+        "Vol Adj Momentum": "{:.2f}",
+        "52W High": "{:.2f}",
+        "52W Low": "{:.2f}",
+        **{column: "{:.2%}" for column in percent_fraction_columns},
+        **{column: "{:.2f}" for column in percent_point_columns},
+    }
+
+    st.dataframe(
+        consolidated_df.style.format(formatters, na_rep="-"),
+        width="stretch",
+        height=_dataframe_height(len(consolidated_df), max_rows=18),
+        hide_index=True,
+    )
+
+
+def build_correlation_matrix(close_prices_df: pd.DataFrame) -> pd.DataFrame:
+    if close_prices_df.empty:
+        return pd.DataFrame()
+
+    numeric_prices = close_prices_df.apply(pd.to_numeric, errors="coerce")
+    daily_returns = numeric_prices.pct_change(fill_method=None).dropna(how="all")
+    if daily_returns.empty:
+        return pd.DataFrame()
+
+    return daily_returns.corr()
+
+
+def _correlation_cell_style(value: Any) -> str:
+    value = pd.to_numeric(value, errors="coerce")
+    if pd.isna(value):
+        return ""
+
+    value = float(value)
+    if value >= 0.8:
+        return "background-color: #dc2626; color: #ffffff; font-weight: 700"
+    if value >= 0.6:
+        return "background-color: #f97316; color: #ffffff; font-weight: 700"
+    if value >= 0.3:
+        return "background-color: #facc15; color: #422006; font-weight: 700"
+    if value >= 0:
+        return "background-color: #bbf7d0; color: #14532d; font-weight: 700"
+    return "background-color: #bfdbfe; color: #1e3a8a; font-weight: 700"
+
+
+def display_correlation_matrix(close_prices_df: pd.DataFrame) -> None:
+    correlation_df = build_correlation_matrix(close_prices_df)
+    if correlation_df.empty:
+        st.info("No correlation data available.")
+        return
+
+    st.markdown(
+        """
+        **Correlation Legend**
+
+        - `+1.00`: stocks move almost together
+        - `0.70+`: highly correlated
+        - `0.30 to 0.70`: moderate correlation
+        - `0.00 to 0.30`: low correlation
+        - `< 0`: often move opposite
+        """
+    )
+    st.dataframe(
+        correlation_df.style.format("{:.2f}", na_rep="-").map(_correlation_cell_style),
+        width="stretch",
+        height=_dataframe_height(len(correlation_df), max_rows=18),
+    )
+
+
+def highlight_momentum_rank_cells(data: pd.DataFrame) -> pd.DataFrame:
+    styles = pd.DataFrame("", index=data.index, columns=data.columns)
+    highlight_columns = [
+        column
+        for column in ["ticker", "momentum_label", "rank", "momentum_score"]
+        if column in data.columns
+    ]
+    if not highlight_columns or "momentum_score" not in data.columns:
+        return styles
+
+    scores = pd.to_numeric(data["momentum_score"], errors="coerce")
+    for index, score in scores.items():
+        if pd.isna(score):
+            continue
+
+        if score < 25:
+            style = "background-color: #dc2626; color: #ffffff; font-weight: 700"
+        elif score < 50:
+            style = "background-color: #f97316; color: #ffffff; font-weight: 700"
+        elif score < 75:
+            style = "background-color: #84cc16; color: #1a2e05; font-weight: 700"
+        else:
+            style = "background-color: #16a34a; color: #ffffff; font-weight: 700"
+
+        for column in highlight_columns:
+            styles.at[index, column] = style
+
+    return styles
 
 
 def _summary_expander_label(summary: pd.Series, batch_count: int) -> str:
@@ -1848,7 +2083,7 @@ def display_holdings_breakdown_df(holdings_breakdown_df: pd.DataFrame) -> None:
         st.session_state.get("ltp_by_symbol", {}),
     )
 
-    st.subheader("Holdings Breakdown")
+    #st.subheader("Holdings Breakdown")
     if unmatched_symbols:
         st.warning(
             "No live LTP found for: "
@@ -1982,7 +2217,7 @@ def fetch_and_display_holdings():
             df = pd.DataFrame(holdings)
             #print("Fetched holdings:\n", df.head())
             as_of_date = datetime.now().date().isoformat()
-            returns_df, dashboard_df, failed_symbols = build_historic_dashboard_frames(
+            returns_df, dashboard_df, failed_symbols, close_prices_df = build_historic_dashboard_frames(
                 kite,
                 df.to_dict(orient="records"),
                 as_of_date,
@@ -1995,6 +2230,7 @@ def fetch_and_display_holdings():
             st.session_state["kite_holdings_df"] = df
             st.session_state["kite_holdings_returns_df"] = returns_df
             st.session_state["kite_holdings_dashboard_df"] = dashboard_df
+            st.session_state["kite_holdings_close_prices_df"] = close_prices_df
             st.session_state["kite_holdings_dashboard_failed_symbols"] = failed_symbols
             st.session_state["kite_holdings_download_filename"] = (
                 f"holdings_{pd.Timestamp.now().strftime('%Y-%m-%d_%H.%M.%S')}.csv"
@@ -2004,6 +2240,7 @@ def fetch_and_display_holdings():
             st.session_state.pop("kite_holdings_df", None)
             st.session_state.pop("kite_holdings_returns_df", None)
             st.session_state.pop("kite_holdings_dashboard_df", None)
+            st.session_state.pop("kite_holdings_close_prices_df", None)
             st.session_state.pop("kite_holdings_dashboard_failed_symbols", None)
             st.session_state.pop("kite_holdings_download_filename", None)
             st.session_state["ltp_by_symbol"] = {}
@@ -2050,45 +2287,62 @@ with tab_fetch_kite:
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
 
     kite_holdings_df = st.session_state.get("kite_holdings_df")
-    if kite_holdings_df is not None:
-        
-        kite_holdings_download_filename = st.session_state.get("kite_holdings_download_filename", "Unknown")
-        Holdings_fetchDate = kite_holdings_download_filename.split("_")[1] 
+    tab_portfolio_holdings, tab_price_ladder, tab_returns, tab_holdings_breakdown = st.tabs(
+        ["Portfolio Holdings", "Price Ladder", "Returns", "Holdings Breakdown"]
+    )
 
-        #print("Holdings fetch date:", Holdings_fetchDate , "kite_holdings_download_filename:", kite_holdings_download_filename )
-        
-        st.download_button(
-            "Download Kite Holdings as CSV",
-            data=kite_holdings_df.to_csv(index=False),
-            file_name=kite_holdings_download_filename,
-            mime="text/csv",
-            on_click="ignore",
-        )
-        display_kite_holdings(kite_holdings_df)
-        failed_symbols = st.session_state.get("kite_holdings_dashboard_failed_symbols", [])
-        if failed_symbols:
-            st.warning(
-                "Could not load dashboard data for: "
-                + ", ".join(failed_symbols[:10])
-                + ("..." if len(failed_symbols) > 10 else "")
+    with tab_portfolio_holdings:
+        if kite_holdings_df is None:
+            st.info("Fetch holdings from Kite to display portfolio holdings.")
+        else:
+            kite_holdings_download_filename = st.session_state.get("kite_holdings_download_filename", "Unknown")
+            Holdings_fetchDate = kite_holdings_download_filename.split("_")[1] 
+
+            #print("Holdings fetch date:", Holdings_fetchDate , "kite_holdings_download_filename:", kite_holdings_download_filename )
+            
+            st.download_button(
+                "Download Kite Holdings as CSV",
+                data=kite_holdings_df.to_csv(index=False),
+                file_name=kite_holdings_download_filename,
+                mime="text/csv",
+                on_click="ignore",
             )
-        display_historic_dashboard_frames(
+            display_kite_holdings(kite_holdings_df)
+            failed_symbols = st.session_state.get("kite_holdings_dashboard_failed_symbols", [])
+            if failed_symbols:
+                st.warning(
+                    "Could not load dashboard data for: "
+                    + ", ".join(failed_symbols[:10])
+                    + ("..." if len(failed_symbols) > 10 else "")
+                )
+
+    with tab_price_ladder:
+        display_historic_price_ladder_frame(
             _sort_historic_dashboard_by_rng(
                 st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame())
             ),
-            st.session_state.get("kite_holdings_returns_df", pd.DataFrame()),
-            
+            max_rows=12,
         )
-        #display_supabase_holdings_breakdown()  
+
+    with tab_returns:
+        display_historic_returns_frame(
+            st.session_state.get("kite_holdings_returns_df", pd.DataFrame()),
+            max_rows=18,
+        )
+
+    with tab_holdings_breakdown:
+        if st.button("View holdings breakdown", key="view_fetch_kite_holdings_breakdown"):
+            try:
+                _load_holdings_breakdown_state()
+                st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
+            except Exception as exc:
+                st.warning(f"Could not load holdings breakdown from Supabase: {exc}")
+
+        if st.session_state.get(HOLDINGS_BREAKDOWN_VIEW_STATE_KEY):
+            display_holdings_breakdown_df(_holdings_breakdown_state_df())
+    #display_supabase_holdings_breakdown()  
 
 with tab_upload_holdings_breakdown:
-
-    if st.button("View holdings breakdown", key="view_upload_holdings_breakdown"):
-        try:
-            _load_holdings_breakdown_state()
-            st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
-        except Exception as exc:
-            st.warning(f"Could not load holdings breakdown from Supabase: {exc}")
 
     affected_symbols_to_refresh: list[str] = []
 
@@ -2133,9 +2387,6 @@ with tab_upload_holdings_breakdown:
         except Exception as exc:
             st.warning(f"Could not refresh holdings breakdown from Supabase: {exc}")
 
-    if st.session_state.get(HOLDINGS_BREAKDOWN_VIEW_STATE_KEY):
-        display_holdings_breakdown_df(_holdings_breakdown_state_df())
-
 
 with tab_historic_data:
     st.caption("Fetch cached 2Y daily Kite data and show a sorted price ladder per ticker.")
@@ -2151,12 +2402,28 @@ with tab_historic_data:
 
     if indices:
         index_names = ["Custom"] + list(indices.keys())
-        selected_index = st.selectbox("Select index", index_names, key="historic_selected_index")
+        index_column, benchmark_column = st.columns([2, 1])
+        with index_column:
+            selected_index = st.selectbox("Select index", index_names, key="historic_selected_index")
+        with benchmark_column:
+            benchmark_symbol = st.text_input(
+                "Momentum benchmark",
+                value=DEFAULT_MOMENTUM_BENCHMARK,
+                key="historic_momentum_benchmark",
+                help="Used for relative strength in the Quant Momentum score.",
+            )
         if selected_index != "Custom":
             selected_constituents = indices[selected_index]
             if st.session_state["historic_tickers_input"] != selected_constituents:
                 st.session_state["historic_tickers_input"] = selected_constituents
                 st.rerun()
+    else:
+        benchmark_symbol = st.text_input(
+            "Momentum benchmark",
+            value=DEFAULT_MOMENTUM_BENCHMARK,
+            key="historic_momentum_benchmark",
+            help="Used for relative strength in the Quant Momentum score.",
+        )
 
     tickers_input = st.text_area(
         label="e.g. RELIANCE, INFY, TCS",
@@ -2166,24 +2433,37 @@ with tab_historic_data:
 
     if st.button("Fetch dashboard", type="primary", key="historic_fetch_dashboard"):
         raw_tickers = [item.strip().upper() for item in tickers_input.split(",") if item.strip()]
+        benchmark_symbol = benchmark_symbol.strip().upper()
 
         if not raw_tickers:
             st.warning("Enter at least one ticker symbol.")
+        elif not benchmark_symbol:
+            st.warning("Enter a benchmark symbol.")
         else:
             st.session_state["historic_pending_tickers"] = raw_tickers
+            st.session_state["historic_pending_benchmark"] = benchmark_symbol
 
     pending_historic_tickers = st.session_state.get("historic_pending_tickers")
     if pending_historic_tickers:
         try:
             as_of_date = datetime.now().date().isoformat()
             historic_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
-            instruments_df = load_instrument_token_from_supabase(pending_historic_tickers)
+            pending_benchmark = st.session_state.get("historic_pending_benchmark", DEFAULT_MOMENTUM_BENCHMARK)
+            instruments_df = load_instrument_token_from_supabase(
+                pending_historic_tickers + [pending_benchmark]
+            )
             token_map, missing_tickers = resolve_tokens_from_tickers(pending_historic_tickers, instruments_df)
+            benchmark_token_map, missing_benchmark = resolve_tokens_from_tickers([pending_benchmark], instruments_df)
 
             if missing_tickers:
                 st.session_state["historic_missing_tickers"] = missing_tickers
             else:
                 st.session_state.pop("historic_missing_tickers", None)
+
+            if missing_benchmark:
+                st.session_state["historic_missing_benchmark"] = pending_benchmark
+            else:
+                st.session_state.pop("historic_missing_benchmark", None)
 
             if not token_map:
                 st.error("No instrument tokens found for the selected tickers.")
@@ -2193,15 +2473,39 @@ with tab_historic_data:
                     {"Ticker": ticker, "instrument_token": token}
                     for ticker, token in token_map.items()
                 ]
-                returns_df, dashboard_df, skipped_symbols = build_historic_dashboard_frames(
+                returns_df, dashboard_df, skipped_symbols, close_prices_df = build_historic_dashboard_frames(
                     historic_kite,
                     token_rows,
                     as_of_date,
                 )
                 st.session_state["historic_returns_df"] = returns_df
                 st.session_state["historic_dashboard_df"] = dashboard_df
+                st.session_state["historic_close_prices_df"] = close_prices_df
                 st.session_state["historic_skipped_symbols"] = skipped_symbols
+                st.session_state["historic_momentum_benchmark_used"] = pending_benchmark
+
+                if benchmark_token_map:
+                    try:
+                        momentum_df, momentum_failed_symbols = calculate_momentum_scores_from_kite(
+                            historic_kite,
+                            token_rows,
+                            benchmark_token_map[pending_benchmark],
+                            as_of_date,
+                        )
+                        st.session_state["historic_momentum_df"] = momentum_df
+                        st.session_state["historic_momentum_failed_symbols"] = momentum_failed_symbols
+                        st.session_state.pop("historic_momentum_error", None)
+                    except Exception as momentum_exc:
+                        st.session_state.pop("historic_momentum_df", None)
+                        st.session_state.pop("historic_momentum_failed_symbols", None)
+                        st.session_state["historic_momentum_error"] = str(momentum_exc)
+                else:
+                    st.session_state.pop("historic_momentum_df", None)
+                    st.session_state.pop("historic_momentum_failed_symbols", None)
+                    st.session_state.pop("historic_momentum_error", None)
+
                 st.session_state.pop("historic_pending_tickers", None)
+                st.session_state.pop("historic_pending_benchmark", None)
 
         except Exception as exc:
             if is_token_error(exc):
@@ -2214,6 +2518,10 @@ with tab_historic_data:
     if missing_tickers:
         st.warning(f"Skipped tickers with no instrument token: {', '.join(missing_tickers)}")
 
+    missing_benchmark = st.session_state.get("historic_missing_benchmark")
+    if missing_benchmark:
+        st.warning(f"Momentum benchmark token not found: {missing_benchmark}")
+
     skipped_symbols = st.session_state.get("historic_skipped_symbols", [])
     if skipped_symbols:
         st.warning(
@@ -2222,13 +2530,94 @@ with tab_historic_data:
             + ("..." if len(skipped_symbols) > 10 else "")
         )
 
-    if "historic_returns_df" in st.session_state or "historic_dashboard_df" in st.session_state:
-        display_historic_dashboard_frames(           
-            _sort_historic_dashboard_by_rng(
-                st.session_state.get("historic_dashboard_df", pd.DataFrame())
-            ),
-            st.session_state.get("historic_returns_df", pd.DataFrame()),
+    momentum_failed_symbols = st.session_state.get("historic_momentum_failed_symbols", [])
+    if momentum_failed_symbols:
+        st.warning(
+            "No momentum data returned for: "
+            + ", ".join(momentum_failed_symbols[:10])
+            + ("..." if len(momentum_failed_symbols) > 10 else "")
         )
+
+    momentum_error = st.session_state.get("historic_momentum_error")
+    if momentum_error:
+        st.warning(f"Momentum dashboard could not be calculated: {momentum_error}")
+
+    if "historic_returns_df" in st.session_state or "historic_dashboard_df" in st.session_state:
+        sorted_dashboard_df = _sort_historic_dashboard_by_rng(
+            st.session_state.get("historic_dashboard_df", pd.DataFrame())
+        )
+        returns_df = st.session_state.get("historic_returns_df", pd.DataFrame())
+        momentum_df = st.session_state.get("historic_momentum_df", pd.DataFrame())
+        close_prices_df = st.session_state.get("historic_close_prices_df", pd.DataFrame())
+        benchmark_used = st.session_state.get("historic_momentum_benchmark_used")
+        if benchmark_used and not momentum_df.empty:
+            st.caption(f"Relative strength benchmark: {benchmark_used}")
+        tab_momentum, tab_returns, tab_ladder, tab_correlation = st.tabs(
+            ["Momentum Ranking", "Returns", "Price Ladder", "Correlation"]
+        )
+        with tab_momentum:
+            if momentum_df.empty:
+                st.info("No momentum score data available.")
+            else:
+                momentum_display_df = momentum_df.copy()
+                momentum_display_df.insert(0, "rank", range(1, len(momentum_display_df) + 1))
+                momentum_display_columns = [
+                    "ticker",
+                    "ltp",
+                    "momentum_label",
+                    "rank",
+                    "momentum_score",
+                    "ret_12_1",
+                    "ret_12_1_rank",
+                    "ret_6m",
+                    "ret_6m_rank",
+                    "rs_vs_nifty",
+                    "rs_rank",
+                    "dist_52w_high",
+                    "dist_52w_score",
+                    "above_ema200",
+                    "above_ema200_score",
+                    "ema50_gt_ema200",
+                    "ema_trend_score",
+                    "vol_adj_momentum",
+                    "vol_adj_rank",
+                ]
+                momentum_display_df = momentum_display_df[
+                    [column for column in momentum_display_columns if column in momentum_display_df.columns]
+                ]
+                st.dataframe(
+                    momentum_display_df.style.format(
+                        {
+                            "ltp": "{:.2f}",
+                            "momentum_score": "{:.1f}",
+                            "ret_6m": "{:.2%}",
+                            "ret_6m_rank": "{:.1f}",
+                            "ret_12_1": "{:.2%}",
+                            "ret_12_1_rank": "{:.1f}",
+                            "rs_vs_nifty": "{:.2%}",
+                            "rs_rank": "{:.1f}",
+                            "dist_52w_high": "{:.2%}",
+                            "dist_52w_score": "{:.1f}",
+                            "above_ema200_score": "{:.1f}",
+                            "ema_trend_score": "{:.1f}",
+                            "vol_adj_momentum": "{:.2f}",
+                            "vol_adj_rank": "{:.1f}",
+                        },
+                        na_rep="-",
+                    ).apply(highlight_momentum_rank_cells, axis=None),
+                    width="stretch",
+                    height=_dataframe_height(len(momentum_display_df), max_rows=18),
+                    hide_index=True,
+                )
+        with tab_returns:
+            display_historic_returns_frame(returns_df, max_rows=18)
+        with tab_ladder:
+            display_historic_price_ladder_frame(
+                sorted_dashboard_df,
+                max_rows=12,
+            )
+        with tab_correlation:
+            display_correlation_matrix(close_prices_df)
 
 
 

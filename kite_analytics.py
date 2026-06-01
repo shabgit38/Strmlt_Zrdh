@@ -422,11 +422,12 @@ def build_historic_dashboard_frames(
     buy_avg_key: str | None = None,
     quantity_key: str | None = None,
     invested_key: str | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame]:
     """
     Build the returns and sorted price ladder frames shared by historic screens.
     """
     ladders: dict[str, list[tuple[str, float]]] = {}
+    close_prices: dict[str, pd.Series] = {}
     return_rows: list[dict] = []
     skipped_symbols: list[str] = []
 
@@ -440,6 +441,8 @@ def build_historic_dashboard_frames(
         if analytics_df.empty:
             skipped_symbols.append(symbol)
             continue
+        if "Close" in analytics_df.columns:
+            close_prices[symbol] = pd.to_numeric(analytics_df["Close"], errors="coerce")
 
         ltp = row.get(ltp_key) if ltp_key is not None else None
         buy_avg = pd.to_numeric(row.get(buy_avg_key), errors="coerce") if buy_avg_key is not None else None
@@ -472,7 +475,8 @@ def build_historic_dashboard_frames(
             invested=float(invested) if pd.notna(invested) else None,
         )
 
-    return pd.DataFrame(return_rows), build_vertical_dashboard(ladders), skipped_symbols
+    close_prices_df = pd.DataFrame(close_prices).sort_index()
+    return pd.DataFrame(return_rows), build_vertical_dashboard(ladders), skipped_symbols, close_prices_df
 
 
 def _historic_dashboard_height(row_count: int, *, min_rows: int = 1, max_rows: int = 12) -> int:
@@ -493,6 +497,19 @@ def display_historic_dashboard_frames(
     Display the shared returns and sorted price ladder dashboard.
     """
 
+    display_historic_price_ladder_frame(dashboard_df, max_rows=max_rows)
+    display_historic_returns_frame(returns_df, max_rows=max_rows)
+
+
+def display_historic_price_ladder_frame(
+    dashboard_df: pd.DataFrame,
+    *,
+    max_rows: int = 12,
+) -> None:
+    """
+    Display the sorted price ladder dashboard.
+    """
+
     if dashboard_df.empty:
         st.info("No dashboard data returned for the selected inputs.")
         return
@@ -511,16 +528,34 @@ def display_historic_dashboard_frames(
         hide_index=True,
     )
 
-    if not returns_df.empty:
-        formatted_percent_columns = RETURN_PERCENT_COLUMNS + VOLUME_GAIN_COLUMNS
-        st.dataframe(
-            returns_df.style.format(
-                {column: "{:.1f}" for column in formatted_percent_columns}
-            ).apply(highlight_return_cells, axis=None),
-            width="stretch",
-            height=_historic_dashboard_height(len(returns_df), max_rows=max_rows),
-            hide_index=True,
-        )
+
+def display_historic_returns_frame(
+    returns_df: pd.DataFrame,
+    *,
+    max_rows: int = 12,
+) -> None:
+    """
+    Display the returns dashboard with shared return highlighting.
+    """
+
+    if returns_df.empty:
+        st.info("No returns data available.")
+        return
+
+    formatted_percent_columns = [
+        column
+        for column in RETURN_PERCENT_COLUMNS + VOLUME_GAIN_COLUMNS
+        if column in returns_df.columns
+    ]
+    st.dataframe(
+        returns_df.style.format(
+            {column: "{:.1f}" for column in formatted_percent_columns},
+            na_rep="-",
+        ).apply(highlight_return_cells, axis=None),
+        width="stretch",
+        height=_historic_dashboard_height(len(returns_df), max_rows=max_rows),
+        hide_index=True,
+    )
 
 
 def _group_dashboard_symbols_by_range_color(dashboard_df: pd.DataFrame) -> dict[str, list[str]]:
@@ -582,8 +617,12 @@ def _format_symbol_color_summary(color_groups: dict[str, list[str]]) -> str:
 
 
 def highlight_return_cells(data: pd.DataFrame) -> pd.DataFrame:
+    return highlight_numeric_scale_cells(data, RETURN_PERCENT_COLUMNS + VOLUME_GAIN_COLUMNS)
+
+
+def highlight_numeric_scale_cells(data: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     styles = pd.DataFrame("", index=data.index, columns=data.columns)
-    for column in RETURN_PERCENT_COLUMNS + VOLUME_GAIN_COLUMNS:
+    for column in columns:
         if column not in data.columns:
             continue
 

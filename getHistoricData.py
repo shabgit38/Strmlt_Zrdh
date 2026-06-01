@@ -212,7 +212,7 @@ if st.button("Fetch dashboard", type="primary"):
             {"Ticker": ticker, "instrument_token": token}
             for ticker, token in token_map.items()
         ]
-        returns_df, dashboard_df, failed_symbols = build_historic_dashboard_frames(
+        returns_df, dashboard_df, failed_symbols, _close_prices_df = build_historic_dashboard_frames(
             kite,
             token_rows,
             as_of_date,
