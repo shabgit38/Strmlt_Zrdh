@@ -833,9 +833,9 @@ def build_consolidated_momentum_dashboard(
         "dist_52w_high": "52W High Proximity",
         "above_ema200": "Above EMA200",
         "ema50_gt_ema200": "EMA50 > EMA200",
-        "vol_adj_momentum": "Vol Adj Momentum",
-        "momentum_score": "Momentum Score",
-        "momentum_label": "Label",
+        "vol_adj_mtm": "Vol Adj Mtm",
+        "mtm_score": "Mtm Score",
+        "mtm_label": "Label",
         "data_status": "Status",
     }
     consolidated = consolidated.rename(columns=rename_map)
@@ -976,25 +976,27 @@ def highlight_momentum_rank_cells(data: pd.DataFrame) -> pd.DataFrame:
     styles = pd.DataFrame("", index=data.index, columns=data.columns)
     highlight_columns = [
         column
-        for column in ["ticker", "momentum_label", "rank", "momentum_score"]
+        for column in ["ticker", "mtm_label", "rank", "mtm_score"]
         if column in data.columns
     ]
-    if not highlight_columns or "momentum_score" not in data.columns:
+    if not highlight_columns or "mtm_score" not in data.columns:
         return styles
 
-    scores = pd.to_numeric(data["momentum_score"], errors="coerce")
+    scores = pd.to_numeric(data["mtm_score"], errors="coerce")
     for index, score in scores.items():
         if pd.isna(score):
             continue
 
-        if score < 25:
+        if score < 40:
             style = "background-color: #dc2626; color: #ffffff; font-weight: 700"
-        elif score < 50:
+        elif score < 55:
             style = "background-color: #f97316; color: #ffffff; font-weight: 700"
-        elif score < 75:
-            style = "background-color: #84cc16; color: #1a2e05; font-weight: 700"
-        else:
+        elif score < 70:
+            style = "background-color: #facc15; color: #422006; font-weight: 700"
+        elif score < 85:
             style = "background-color: #16a34a; color: #ffffff; font-weight: 700"
+        else:
+            style = "background-color: #047857; color: #ffffff; font-weight: 700"
 
         for column in highlight_columns:
             styles.at[index, column] = style
@@ -2258,12 +2260,12 @@ if "request_token" in st.query_params and "access_token" not in st.session_state
 
 
 tab_historic_data, tab_upload_kite, tab_fetch_kite, tab_upload_holdings_breakdown = st.tabs(
-    ["Historic Data", "Upload Kite Holdings", "Fetch from Kite", "Upload Holdings Breakdown"]
+    ["Historic Data", "Upload Holdings", "Fetch Holdings", "Upload Holdings Breakdown"]
 )
 
 with tab_upload_kite:
     uploaded_kite_holdings_file = st.file_uploader(
-        "Upload Kite holdings CSV or XLSX",
+        "Upload holdings CSV or XLSX",
         type=["csv", "xlsx"],
         key="kite_holdings_upload",
     )
@@ -2287,8 +2289,8 @@ with tab_fetch_kite:
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
 
     kite_holdings_df = st.session_state.get("kite_holdings_df")
-    tab_portfolio_holdings, tab_price_ladder, tab_returns, tab_holdings_breakdown = st.tabs(
-        ["Portfolio Holdings", "Price Ladder", "Returns", "Holdings Breakdown"]
+    tab_price_ladder, tab_portfolio_holdings, tab_returns, tab_holdings_breakdown = st.tabs(
+        ["Price Ladder", "Portfolio Holdings", "Returns", "Holdings Breakdown"]
     )
 
     with tab_portfolio_holdings:
@@ -2550,10 +2552,11 @@ with tab_historic_data:
         momentum_df = st.session_state.get("historic_momentum_df", pd.DataFrame())
         close_prices_df = st.session_state.get("historic_close_prices_df", pd.DataFrame())
         benchmark_used = st.session_state.get("historic_momentum_benchmark_used")
-        if benchmark_used and not momentum_df.empty:
-            st.caption(f"Relative strength benchmark: {benchmark_used}")
-        tab_momentum, tab_returns, tab_ladder, tab_correlation = st.tabs(
-            ["Momentum Ranking", "Returns", "Price Ladder", "Correlation"]
+        #if benchmark_used and not momentum_df.empty:
+        #    st.caption(f"Relative strength benchmark: {benchmark_used}")
+
+        tab_momentum, tab_ladder, tab_returns, tab_correlation = st.tabs(
+            ["Momentum Ranking", "Price Ladder","Returns", "Correlation"]
         )
         with tab_momentum:
             if momentum_df.empty:
@@ -2564,9 +2567,9 @@ with tab_historic_data:
                 momentum_display_columns = [
                     "ticker",
                     "ltp",
-                    "momentum_label",
+                    "mtm_label",
                     "rank",
-                    "momentum_score",
+                    "mtm_score",
                     "ret_12_1",
                     "ret_12_1_rank",
                     "ret_6m",
@@ -2579,7 +2582,7 @@ with tab_historic_data:
                     "above_ema200_score",
                     "ema50_gt_ema200",
                     "ema_trend_score",
-                    "vol_adj_momentum",
+                    "vol_adj_mtm",
                     "vol_adj_rank",
                 ]
                 momentum_display_df = momentum_display_df[
@@ -2589,7 +2592,7 @@ with tab_historic_data:
                     momentum_display_df.style.format(
                         {
                             "ltp": "{:.2f}",
-                            "momentum_score": "{:.1f}",
+                            "mtm_score": "{:.1f}",
                             "ret_6m": "{:.2%}",
                             "ret_6m_rank": "{:.1f}",
                             "ret_12_1": "{:.2%}",
@@ -2600,7 +2603,7 @@ with tab_historic_data:
                             "dist_52w_score": "{:.1f}",
                             "above_ema200_score": "{:.1f}",
                             "ema_trend_score": "{:.1f}",
-                            "vol_adj_momentum": "{:.2f}",
+                            "vol_adj_mtm": "{:.2f}",
                             "vol_adj_rank": "{:.1f}",
                         },
                         na_rep="-",

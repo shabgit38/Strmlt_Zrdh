@@ -9,7 +9,7 @@ import streamlit as st
 
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 from momentum_score import calculate_momentum_scores_from_kite
-
+from stock_memory_cards import render_stock_memory_card
 
 DEFAULT_BENCHMARK_SYMBOL = "NIFTY 50"
 DISPLAY_COLUMNS = [
@@ -21,9 +21,9 @@ DISPLAY_COLUMNS = [
     "dist_52w_high",
     "above_ema200",
     "ema50_gt_ema200",
-    "vol_adj_momentum",
-    "momentum_score",
-    "momentum_label",
+    "vol_adj_mtm",
+    "mtm_score",
+    "mtm_label",
     "data_status",
 ]
 
@@ -160,8 +160,20 @@ if st.button("Calculate Momentum Scores", type="primary"):
             st.info("No momentum score data returned.")
             st.stop()
 
-        visible_columns = [column for column in DISPLAY_COLUMNS if column in score_df.columns]
-        st.dataframe(
+        st.session_state["momentum_score_check_df"] = score_df
+    except Exception as exc:
+        if is_token_error(exc):
+            clear_auth_state()
+            st.error("Your session expired. Please login again.")
+            st.rerun()
+        st.error(f"Momentum score check failed: {exc}")
+
+score_df = st.session_state.get("momentum_score_check_df")
+if score_df is not None and not score_df.empty:
+    visible_columns = [column for column in DISPLAY_COLUMNS if column in score_df.columns]
+    left_col, right_col = st.columns([3, 1])
+    with left_col:
+        selection = st.dataframe(
             score_df[visible_columns].style.format(
                 {
                     "ltp": "{:.2f}",
@@ -169,20 +181,23 @@ if st.button("Calculate Momentum Scores", type="primary"):
                     "ret_12_1": "{:.2%}",
                     "rs_vs_nifty": "{:.2%}",
                     "dist_52w_high": "{:.2%}",
-                    "vol_adj_momentum": "{:.2f}",
-                    "momentum_score": "{:.1f}",
+                    "vol_adj_mtm": "{:.2f}",
+                    "mtm_score": "{:.1f}",
                 },
                 na_rep="-",
             ),
             width="stretch",
             hide_index=True,
+            key="momentum_score_check_table",
+            on_select="rerun",
+            selection_mode="single-row",
         )
-    except Exception as exc:
-        if is_token_error(exc):
-            clear_auth_state()
-            st.error("Your session expired. Please login again.")
-            st.rerun()
-        st.error(f"Momentum score check failed: {exc}")
+    selected_rows = selection.selection.rows if selection.selection else []
+    with right_col:
+        if selected_rows:
+            render_stock_memory_card(score_df.iloc[selected_rows[0]])
+        else:
+            st.info("Select a stock row to view notes.")
 
 if "access_token" in st.session_state:
     if st.sidebar.button("Logout"):

@@ -31,7 +31,7 @@ REQUIRED_FEATURE_COLUMNS = [
     "ret_12_1",
     "rs_vs_nifty",
     "dist_52w_score",
-    "vol_adj_momentum",
+    "vol_adj_mtm",
 ]
 
 
@@ -168,7 +168,7 @@ def calculate_momentum_features(
             "above_ema200_score": 0,
             "ema50_gt_ema200": False,
             "ema_trend_score": 0,
-            "vol_adj_momentum": np.nan,
+            "vol_adj_mtm": np.nan,
             "data_status": "Insufficient Data",
         }
 
@@ -188,13 +188,13 @@ def calculate_momentum_features(
     ema50_gt_ema200 = bool(ema_50.iloc[-1] > ema_200.iloc[-1]) if pd.notna(ema_50.iloc[-1]) and pd.notna(ema_200.iloc[-1]) else False
 
     vol_126d = calculate_annualized_volatility(stock_close, 126)
-    vol_adj_momentum = ret_6m / vol_126d if pd.notna(ret_6m) and pd.notna(vol_126d) and vol_126d != 0 else np.nan
+    vol_adj_mtm = ret_6m / vol_126d if pd.notna(ret_6m) and pd.notna(vol_126d) and vol_126d != 0 else np.nan
     data_status = "OK"
     if pd.isna(vol_126d) or vol_126d == 0:
         data_status = "Zero Volatility"
     elif any(
         pd.isna(value)
-        for value in [ret_6m, ret_12_1, rs_vs_nifty, dist_52w_score, vol_adj_momentum]
+        for value in [ret_6m, ret_12_1, rs_vs_nifty, dist_52w_score, vol_adj_mtm]
     ):
         data_status = "Insufficient Data"
 
@@ -210,7 +210,7 @@ def calculate_momentum_features(
         "above_ema200_score": 100 if above_ema200 else 0,
         "ema50_gt_ema200": ema50_gt_ema200,
         "ema_trend_score": 100 if ema50_gt_ema200 else 0,
-        "vol_adj_momentum": vol_adj_momentum,
+        "vol_adj_mtm": vol_adj_mtm,
         "data_status": data_status,
     }
 
@@ -221,7 +221,7 @@ def add_percentile_ranks(features_df: pd.DataFrame) -> pd.DataFrame:
         "ret_12_1": "ret_12_1_rank",
         "ret_6m": "ret_6m_rank",
         "rs_vs_nifty": "rs_rank",
-        "vol_adj_momentum": "vol_adj_rank",
+        "vol_adj_mtm": "vol_adj_rank",
     }
 
     for source_column, rank_column in rank_columns.items():
@@ -247,16 +247,16 @@ def calculate_final_momentum_score(features_df: pd.DataFrame) -> pd.DataFrame:
             scored_df[column] = np.nan
         weighted_parts.append(pd.to_numeric(scored_df[column], errors="coerce") * weight)
 
-    scored_df["momentum_score"] = sum(weighted_parts)
+    scored_df["mtm_score"] = sum(weighted_parts)
     if "data_status" not in scored_df.columns:
         scored_df["data_status"] = "OK"
     missing_required = scored_df[REQUIRED_FEATURE_COLUMNS].isna().any(axis=1)
     scored_df.loc[missing_required & scored_df["data_status"].eq("OK"), "data_status"] = "Insufficient Data"
-    scored_df.loc[scored_df["data_status"].ne("OK"), "momentum_score"] = np.nan
-    scored_df["momentum_label"] = scored_df["momentum_score"].apply(get_momentum_label)
+    scored_df.loc[scored_df["data_status"].ne("OK"), "mtm_score"] = np.nan
+    scored_df["mtm_label"] = scored_df["mtm_score"].apply(get_momentum_label)
 
     return scored_df.sort_values(
-        by="momentum_score",
+        by="mtm_score",
         ascending=False,
         na_position="last",
     ).reset_index(drop=True)

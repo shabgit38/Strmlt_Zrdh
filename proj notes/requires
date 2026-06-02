@@ -1,0 +1,272 @@
+# Phase1: Add Portfolio Operating Dashboard Layers
+
+## Objective
+
+Improve the existing Streamlit portfolio dashboard by adding:
+
+1. Portfolio Summary counts
+2. Attention Strip
+3. Stock Memory Cards with compact research tags
+4. Research Age indicator
+
+The goal is a dense but simple dashboard that helps review all holdings quickly without repeatedly reopening each stock unless a trigger is met.
+
+---
+
+## Before coding, ask clarification
+
+Ask the user the following before implementation:
+
+### 1. Portfolio Summary
+
+- Should `Strong`, `Pullback`, and `Weak` be calculated only from EMA rules?
+- Should `Near High` mean:
+  - range position > 95%, or
+  - within 2% of 52-week high, or
+  - within 2% of selected period high?
+- Should summary counts include all searched symbols or only actual holdings?
+
+### 2. Attention Strip
+
+- Which alert types should be shown first?
+  - Near High
+  - Near EMA20
+  - Below EMA200
+  - Pullback
+  - Weak trend
+  - Research overdue
+  - High allocation
+- Should the strip show only top 5 alerts or all alerts?
+- Should clicking an alert filter/highlight the related stock cards?
+
+### 3. Stock Memory Cards
+
+- Where should notes be stored?
+  - local JSON file
+  - CSV file
+  - Google Sheet
+  - database later
+- Confirm required note tags:
+  - Why
+  - Moat
+  - Risk
+- Should each tag be limited to one short line?
+- Should missing notes show `No notes added` or remain hidden?
+
+#### Add stock memory cards
+
+Each card should show:
+
+BEL ₹416
+Strong Bullish
+
+Rng: 77%
+
+EMA20: +2%
+EMA200: +18%
+
+Why: Defense orderbook growth
+Moat: PSU scale
+Risk: Govt capex slowdown
+
+Reviewed: 38d ago
+
+Card should stay compact.
+
+Use:
+
+# Task: Integrate Stock Memory Card Into Momentum Ranking Tab
+
+## Goal
+
+In the existing Streamlit Momentum Ranking tab, add a compact stock memory card in the same frame without creating a separate dataframe/table for notes.
+
+The dashboard should continue showing the momentum ranking table, but when a user selects/clicks a stock row, a compact memory card should appear beside the table.
+
+---
+
+## Layout Requirement
+
+Inside the `Momentum Ranking` tab, replace the full-width dataframe-only layout with a two-column layout:
+
+```python
+left_col, right_col = st.columns([3, 1])
+
+
+
+
+### 4. Research Age
+
+- What field should define research age?
+  - `last_review_date`
+  - `last_note_update`
+  - manual review date
+- What thresholds should be used?
+  - Fresh: 0–30 days
+  - Watch: 31–90 days
+  - Overdue: >90 days
+- Should overdue research create an attention-strip alert?
+
+F. Add research age calculation
+def calculate_research_age(last_review_date):
+    """
+    Return number of days since last review.
+    """
+
+Display:
+
+Reviewed: 38d ago
+
+Status rules:
+
+0–30 days: Fresh
+31–90 days: Watch
+>90 days: Overdue
+Missing: Unknown
+
+
+
+---
+# PHASE 2 — Daily digest
+
+Run once daily:
+
+Supabase Cron / external scheduler
+↓
+Edge Function or Python script
+↓
+Fetch active alerts
+↓
+Send email / Telegram summary
+
+Example digest:
+
+Portfolio Alerts — Today
+
+Near High:
+BHEL, TATASTEEL
+
+Below EMA200:
+ITC
+
+Research Overdue:
+RELIANCE, LIC
+
+
+# PHASE 3  - LIVE ALERTS
+Use two modes, not one.
+
+Best approach
+Mode	How it works	Use case
+Auto-refresh polling	Fetch LTP every 1–5 mins	Portfolio dashboard MVP
+WebSocket streaming	Live tick feed from Kite	Trading / near real-time alerts
+
+For your dashboard, start with polling. Kite’s REST quote/LTP APIs support fetching LTP/quotes for many instruments in one request, while WebSocket is meant for live streaming using instrument tokens.
+
+Option 1: Polling MVP
+
+Install:
+
+uv add streamlit-autorefresh
+
+Use:
+
+from streamlit_autorefresh import st_autorefresh
+
+### REFRESH every 2 minutes
+st_autorefresh(interval=120_000, key="ltp_refresh")
+
+Then fetch only LTP:
+
+def fetch_live_ltp(kite, symbols):
+    instruments = [f"NSE:{s}" for s in symbols]
+    data = kite.ltp(instruments)
+
+    rows = []
+    for key, value in data.items():
+        symbol = key.split(":")[1]
+        rows.append({
+            "Symbol": symbol,
+            "LTP": value["last_price"]
+        })
+
+    return pd.DataFrame(rows)
+
+Merge with dashboard data:
+
+ltp_df = fetch_live_ltp(kite, symbols)
+
+dashboard_df = dashboard_df.drop(columns=["LTP"], errors="ignore")
+dashboard_df = dashboard_df.merge(ltp_df, on="Symbol", how="left")
+Recommended flow
+App starts
+↓
+Load holdings from Supabase
+↓
+Load historical metrics from Supabase/cache
+↓
+Every 2 mins:
+    fetch only LTP from Kite
+    update Streamlit session_state
+    recompute:
+        P&L
+        EMA distance
+        range position
+        alerts
+↓
+Render dashboard
+
+Do not refetch historical data every 2 minutes.
+
+Option 2: WebSocket live feed
+
+Use only if you need true live ticks.
+
+Kite WebSocket
+↓
+Background listener
+↓
+Store latest LTP in memory/Supabase
+↓
+Streamlit reads latest prices
+
+Problem:
+
+Streamlit reruns often
+WebSocket should not restart on every rerun
+Better to run WebSocket as a separate worker process
+
+Recommended structure:
+
+streamlit_app.py
+workers/kite_ws_worker.py
+supabase
+
+The worker writes latest prices to Supabase:
+
+live_prices
+- symbol
+- instrument_token
+- ltp
+- updated_at
+
+Streamlit reads from Supabase every 1–2 minutes.
+
+Practical recommendation
+
+For your current stage:
+
+Button click fetch → replace with 2-min polling
+
+Later:
+
+2-min polling → separate WebSocket worker
+
+Use WebSocket only when:
+
+you need intraday tick charts
+instant price alerts
+live trading signals
+very fast LTP updates
+
+For portfolio review, 2-minute polling is enough.
