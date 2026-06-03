@@ -454,6 +454,41 @@ def _normalized_symbol_series(series: pd.Series) -> pd.Series:
     return series.astype(str).str.upper().str.strip()
 
 
+def _normalized_symbol_value(symbol: Any) -> str:
+    return str(symbol or "").upper().strip()
+
+
+def _ltp_match_symbol(symbol: Any) -> str:
+    normalized_symbol = _normalized_symbol_value(symbol)
+    for suffix in ("-RR", "-IV"):
+        if normalized_symbol.endswith(suffix):
+            return normalized_symbol.removesuffix(suffix)
+    return normalized_symbol
+
+
+def _ltp_lookup_maps(ltp_by_symbol: dict[str, float]) -> tuple[dict[str, float], dict[str, float]]:
+    exact_ltp_by_symbol: dict[str, float] = {}
+    fallback_ltp_by_symbol: dict[str, float] = {}
+    for symbol, ltp in (ltp_by_symbol or {}).items():
+        if symbol is None or pd.isna(ltp):
+            continue
+        exact_key = _normalized_symbol_value(symbol)
+        fallback_key = _ltp_match_symbol(symbol)
+        if exact_key:
+            exact_ltp_by_symbol[exact_key] = ltp
+        if fallback_key and fallback_key not in fallback_ltp_by_symbol:
+            fallback_ltp_by_symbol[fallback_key] = ltp
+    return exact_ltp_by_symbol, fallback_ltp_by_symbol
+
+
+def _lookup_ltp(ltp_by_symbol: dict[str, float], symbol: Any, default: Any = None) -> Any:
+    exact_ltp_by_symbol, fallback_ltp_by_symbol = _ltp_lookup_maps(ltp_by_symbol)
+    symbol_key = _normalized_symbol_value(symbol)
+    if symbol_key in exact_ltp_by_symbol:
+        return exact_ltp_by_symbol[symbol_key]
+    return fallback_ltp_by_symbol.get(_ltp_match_symbol(symbol), default)
+
+
 def enrich_holdings_breakdown_with_ltp(
     df: pd.DataFrame, ltp_by_symbol: dict[str, float]
 ) -> tuple[pd.DataFrame, list[str]]:
@@ -463,13 +498,12 @@ def enrich_holdings_breakdown_with_ltp(
     if "symbol" not in df.columns:
         return df, []
 
-    normalized_ltp_by_symbol = {
-        str(symbol).upper().strip(): ltp
-        for symbol, ltp in ltp_by_symbol.items()
-        if symbol is not None and pd.notna(ltp)
-    } if ltp_by_symbol else {}
+    normalized_ltp_by_symbol, fallback_ltp_by_symbol = _ltp_lookup_maps(ltp_by_symbol)
     symbol_key = _normalized_symbol_series(df["symbol"])
     live_ltp = pd.to_numeric(symbol_key.map(normalized_ltp_by_symbol), errors="coerce")
+    fallback_symbol_key = symbol_key.apply(_ltp_match_symbol)
+    fallback_live_ltp = pd.to_numeric(fallback_symbol_key.map(fallback_ltp_by_symbol), errors="coerce")
+    live_ltp = live_ltp.where(live_ltp.notna(), fallback_live_ltp)
     row_type = df["row_type"].astype(str).str.upper().str.strip()
     exited_rows = df.get("holding_status", pd.Series(index=df.index, dtype=object)).apply(_is_exited_status)
     active_rows = ~exited_rows
@@ -1042,7 +1076,7 @@ def _date_input_value(value: Any) -> date:
 def _recompute_breakdown_record(record: dict[str, Any], ltp_by_symbol: dict[str, float]) -> dict[str, Any]:
     record = _json_safe_record(record)
     symbol_key = str(record.get("symbol") or "").upper().strip()
-    ltp = ltp_by_symbol.get(symbol_key, record.get("ltp"))
+    ltp = _lookup_ltp(ltp_by_symbol, symbol_key, record.get("ltp"))
     ltp = _record_numeric_value(ltp)
     if ltp is not None:
         record["ltp"] = ltp
@@ -1109,7 +1143,7 @@ def _recalculate_summary_from_supabase_batches(summary: pd.Series, ltp_by_symbol
         invested = float((qty * price).sum())
 
     buy_avg = invested / total_qty if total_qty else 0.0
-    ltp = _record_numeric_value(ltp_by_symbol.get(symbol_key, summary.get("ltp")))
+    ltp = _record_numeric_value(_lookup_ltp(ltp_by_symbol, symbol_key, summary.get("ltp")))
     present_value = total_qty * ltp if ltp is not None else None
     pnl = present_value - invested if present_value is not None else None
     pnl_pct = pnl / invested * 100 if pnl is not None and invested else None
@@ -1431,7 +1465,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                     "sector": sector,
                     "total_qty": total_qty if total_qty is not None else 0,
                     "buy_avg": buy_avg if buy_avg is not None else 0,
-                    "ltp": ltp_by_symbol.get(symbol),
+                    "ltp": _lookup_ltp(ltp_by_symbol, symbol),
                 },
                 ltp_by_symbol,
             )
@@ -1455,7 +1489,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                 "trade_date": date.today(),
                 "batch_qty": batch_qty,
                 "batch_price": batch_price,
-                "ltp": ltp_by_symbol.get(symbol),
+                "ltp": _lookup_ltp(ltp_by_symbol, symbol),
             }
             record = (
                 _exit_batch_record(
@@ -2065,12 +2099,17 @@ def _read_uploaded_file(uploaded_file) -> pd.DataFrame:
 
 def _cache_ltp_by_symbol(df: pd.DataFrame) -> None:
     if {"tradingsymbol", "last_price"}.issubset(df.columns):
-        st.session_state["ltp_by_symbol"] = (
-            df.assign(symbol=_normalized_symbol_series(df["tradingsymbol"]))
-            .set_index("symbol")["last_price"]
-            .dropna()
-            .to_dict()
-        )
+        ltp_by_symbol: dict[str, Any] = {}
+        for symbol, ltp in zip(df["tradingsymbol"], df["last_price"]):
+            if pd.isna(ltp):
+                continue
+            symbol_key = _normalized_symbol_value(symbol)
+            fallback_key = _ltp_match_symbol(symbol)
+            if symbol_key:
+                ltp_by_symbol[symbol_key] = ltp
+            if fallback_key and fallback_key not in ltp_by_symbol:
+                ltp_by_symbol[fallback_key] = ltp
+        st.session_state["ltp_by_symbol"] = ltp_by_symbol
     else:
         st.session_state["ltp_by_symbol"] = {}
 
@@ -2259,8 +2298,8 @@ if "request_token" in st.query_params and "access_token" not in st.session_state
     bootstrap_kite_app("Zerodha Holdings")
 
 
-tab_historic_data, tab_upload_kite, tab_fetch_kite, tab_upload_holdings_breakdown = st.tabs(
-    ["Historic Data", "Upload Holdings", "Fetch Holdings", "Upload Holdings Breakdown"]
+tab_historic_data, tab_fetch_kite, tab_upload_kite,  tab_upload_holdings_breakdown = st.tabs(
+    ["Historic Data", "Fetch Holdings", "Upload Holdings", "Upload Holdings Breakdown"]
 )
 
 with tab_upload_kite:
