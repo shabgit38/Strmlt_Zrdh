@@ -2,6 +2,7 @@ import json
 import math
 import calendar
 from datetime import date, datetime
+from html import escape
 from time import strptime
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -1036,6 +1037,59 @@ def highlight_momentum_rank_cells(data: pd.DataFrame) -> pd.DataFrame:
             styles.at[index, column] = style
 
     return styles
+
+
+def _group_momentum_symbols_by_label(momentum_df: pd.DataFrame) -> dict[str, list[str]]:
+    label_groups = {
+        "Elite": [],
+        "Strong": [],
+        "Watch": [],
+        "Weak": [],
+        "Avoid": [],
+    }
+    if momentum_df.empty or not {"ticker", "mtm_label"}.issubset(momentum_df.columns):
+        return label_groups
+
+    for _, row in momentum_df.iterrows():
+        label = str(row.get("mtm_label") or "").strip().title()
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if label in label_groups and ticker:
+            label_groups[label].append(ticker)
+    return label_groups
+
+
+def _format_momentum_label_summary(label_groups: dict[str, list[str]]) -> str:
+    summary_items = [
+        ("Elite", "#047857", "#ffffff", label_groups["Elite"]),
+        ("Strong", "#16a34a", "#ffffff", label_groups["Strong"]),
+        ("Watch", "#facc15", "#422006", label_groups["Watch"]),
+        ("Weak", "#f97316", "#ffffff", label_groups["Weak"]),
+        ("Avoid", "#dc2626", "#ffffff", label_groups["Avoid"]),
+    ]
+    rows = []
+    for label, background, foreground, symbols in summary_items:
+        symbol_text = escape(", ".join(symbols)) if symbols else "-"
+        rows.append(
+            "<div style='display:flex;align-items:center;gap:0.5rem;'>"
+            f"<span style='min-width:5rem;font-weight:700;color:{background};'>{label}</span>"
+            f"<span style='background:{background};color:{foreground};font-weight:700;"
+            "padding:0.2rem 0.45rem;border-radius:0.25rem;'>"
+            f"{symbol_text}</span></div>"
+        )
+    return (
+        "<div style='display:grid;gap:0.35rem;margin:0 0 0.75rem 0;'>"
+        + "".join(rows)
+        + "</div>"
+    )
+
+
+def display_momentum_label_summary(momentum_df: pd.DataFrame) -> None:
+    label_groups = _group_momentum_symbols_by_label(momentum_df)
+    if any(label_groups.values()):
+        st.markdown(
+            _format_momentum_label_summary(label_groups),
+            unsafe_allow_html=True,
+        )
 
 
 def _summary_expander_label(summary: pd.Series, batch_count: int) -> str:
@@ -2627,6 +2681,7 @@ with tab_historic_data:
                 momentum_display_df = momentum_display_df[
                     [column for column in momentum_display_columns if column in momentum_display_df.columns]
                 ]
+                display_momentum_label_summary(momentum_display_df)
                 st.dataframe(
                     momentum_display_df.style.format(
                         {
