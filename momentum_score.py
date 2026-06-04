@@ -8,9 +8,14 @@ import streamlit as st
 from quant_calcs import (
     calculate_12_1_momentum,
     calculate_annualized_volatility,
+    calculate_atr,
+    calculate_donchian,
     calculate_ema,
     calculate_return,
     calculate_rolling_high,
+    calculate_rsi,
+    calculate_volume_ma,
+    calculate_zscore,
     get_momentum_label,
 )
 
@@ -33,6 +38,14 @@ REQUIRED_FEATURE_COLUMNS = [
     "dist_52w_score",
     "vol_adj_mtm",
 ]
+
+ENTRY_SIGNAL_LABELS = {
+    "strong": "Strong Entry",
+    "watch_below_ema20": "Watchlist - Below EMA20",
+    "near": "Near Entry",
+    "wait": "Wait",
+    "avoid": "Avoid",
+}
 
 
 def _normalize_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
@@ -145,6 +158,123 @@ def _get_ticker(stock_df: pd.DataFrame, fallback: str | None = None) -> str:
     return str(fallback or "").strip().upper()
 
 
+def _latest_float(series: pd.Series) -> float:
+    if series.empty:
+        return np.nan
+    value = pd.to_numeric(series.iloc[-1], errors="coerce")
+    return float(value) if pd.notna(value) else np.nan
+
+
+def calculate_ema_extension(close: float, ema: float) -> float:
+    if pd.isna(close) or pd.isna(ema) or ema == 0:
+        return np.nan
+    return ((float(close) - float(ema)) / float(ema)) * 100
+
+
+def get_entry_signal(score: float | int | None, *, price_position: bool = True) -> str:
+    score_value = pd.to_numeric(score, errors="coerce")
+    if pd.isna(score_value):
+        return ENTRY_SIGNAL_LABELS["avoid"]
+    if score_value >= 80:
+        return ENTRY_SIGNAL_LABELS["strong"] if price_position else ENTRY_SIGNAL_LABELS["watch_below_ema20"]
+    if score_value >= 65:
+        return ENTRY_SIGNAL_LABELS["near"]
+    if score_value >= 45:
+        return ENTRY_SIGNAL_LABELS["wait"]
+    return ENTRY_SIGNAL_LABELS["avoid"]
+
+
+def calculate_pullback_score(
+    *,
+    close: float,
+    ema10: float,
+    ema20: float,
+    ema50: float,
+    ema100: float,
+    ema200: float,
+    atr14: float,
+    rsi14: float,
+    volume_ratio: float,
+    zscore_50: float,
+    rs_vs_nifty: float,
+) -> tuple[float, str, bool, bool, bool, bool, bool, bool, bool, bool, str]:
+    trend_bullish = all(pd.notna(value) for value in [ema10, ema20, ema50, ema100, ema200]) and (
+        ema10 > ema20 > ema50 > ema100 > ema200
+    )
+    price_position = pd.notna(close) and pd.notna(ema20) and close > ema20
+    ema10_extension_pct = calculate_ema_extension(close, ema10)
+    healthy_extension = pd.notna(ema10_extension_pct) and -3 <= ema10_extension_pct <= 7
+    ema20_pullback_zone = (
+        pd.notna(close)
+        and pd.notna(ema20)
+        and pd.notna(atr14)
+        and ema20 <= close <= ema20 + (0.5 * atr14)
+    )
+    rsi_healthy = pd.notna(rsi14) and 50 <= rsi14 <= 70
+    volume_cooling = pd.notna(volume_ratio) and volume_ratio < 1
+    healthy_zscore = pd.notna(zscore_50) and -2 <= zscore_50 <= 2.5
+    relative_strength_positive = pd.notna(rs_vs_nifty) and rs_vs_nifty > 0
+
+    checks = [
+        (trend_bullish, 20, "Bullish EMA stack"),
+        (healthy_extension, 15, "EMA10 extension healthy"),
+        (ema20_pullback_zone, 20, "Inside EMA20 upper pullback zone"),
+        (rsi_healthy, 10, "RSI 50-70"),
+        (volume_cooling, 15, "Volume below 20D average"),
+        (healthy_zscore, 5, "Z-score healthy"),
+        (relative_strength_positive, 15, "RS positive vs benchmark"),
+    ]
+    pullback_score = float(sum(points for passed, points, _ in checks if passed))
+    entry_reasons = "; ".join(reason for passed, _, reason in checks if passed)
+    if not entry_reasons:
+        entry_reasons = "No entry conditions passed"
+
+    return (
+        pullback_score,
+        get_entry_signal(pullback_score, price_position=price_position),
+        trend_bullish,
+        price_position,
+        healthy_extension,
+        ema20_pullback_zone,
+        rsi_healthy,
+        volume_cooling,
+        healthy_zscore,
+        relative_strength_positive,
+        entry_reasons,
+    )
+
+
+def _empty_entry_features() -> dict[str, float | bool | str]:
+    return {
+        "ema10": np.nan,
+        "ema20": np.nan,
+        "ema50": np.nan,
+        "ema100": np.nan,
+        "ema200": np.nan,
+        "ema10_extension_pct": np.nan,
+        "ema20_extension_pct": np.nan,
+        "atr14": np.nan,
+        "rsi14": np.nan,
+        "volume_ma20": np.nan,
+        "volume_ratio": np.nan,
+        "donchian_20_high": np.nan,
+        "donchian_20_low": np.nan,
+        "donchian_20_mid": np.nan,
+        "zscore_50": np.nan,
+        "pullback_score": np.nan,
+        "entry_signal": "Avoid",
+        "entry_reasons": "Insufficient Data",
+        "trend_bullish": False,
+        "price_position": False,
+        "healthy_extension": False,
+        "ema20_pullback_zone": False,
+        "rsi_healthy": False,
+        "volume_cooling": False,
+        "healthy_zscore": False,
+        "relative_strength_positive": False,
+    }
+
+
 def calculate_momentum_features(
     stock_df: pd.DataFrame,
     benchmark_df: pd.DataFrame,
@@ -170,6 +300,7 @@ def calculate_momentum_features(
             "ema_trend_score": 0,
             "vol_adj_mtm": np.nan,
             "data_status": "Insufficient Data",
+            **_empty_entry_features(),
         }
 
     ltp = float(stock_close.iloc[-1])
@@ -182,10 +313,56 @@ def calculate_momentum_features(
     dist_52w_high = ltp / high_52w if pd.notna(high_52w) and high_52w != 0 else np.nan
     dist_52w_score = min(dist_52w_high, 1.0) * 100 if pd.notna(dist_52w_high) else np.nan
 
+    ema_10 = calculate_ema(stock_close, 10)
+    ema_20 = calculate_ema(stock_close, 20)
     ema_50 = calculate_ema(stock_close, 50)
+    ema_100 = calculate_ema(stock_close, 100)
     ema_200 = calculate_ema(stock_close, 200)
-    above_ema200 = bool(ltp > ema_200.iloc[-1]) if pd.notna(ema_200.iloc[-1]) else False
-    ema50_gt_ema200 = bool(ema_50.iloc[-1] > ema_200.iloc[-1]) if pd.notna(ema_50.iloc[-1]) and pd.notna(ema_200.iloc[-1]) else False
+    latest_ema10 = _latest_float(ema_10)
+    latest_ema20 = _latest_float(ema_20)
+    latest_ema50 = _latest_float(ema_50)
+    latest_ema100 = _latest_float(ema_100)
+    latest_ema200 = _latest_float(ema_200)
+    above_ema200 = bool(ltp > latest_ema200) if pd.notna(latest_ema200) else False
+    ema50_gt_ema200 = bool(latest_ema50 > latest_ema200) if pd.notna(latest_ema50) and pd.notna(latest_ema200) else False
+
+    atr14 = _latest_float(calculate_atr(stock_df, 14))
+    rsi14 = _latest_float(calculate_rsi(stock_close, 14))
+    volume_ma20 = _latest_float(calculate_volume_ma(stock_df["Volume"], 20)) if "Volume" in stock_df.columns else np.nan
+    latest_volume = _latest_float(pd.to_numeric(stock_df["Volume"], errors="coerce")) if "Volume" in stock_df.columns else np.nan
+    volume_ratio = latest_volume / volume_ma20 if pd.notna(latest_volume) and pd.notna(volume_ma20) and volume_ma20 != 0 else np.nan
+    donchian_20 = calculate_donchian(stock_df, 20)
+    donchian_20_high = _latest_float(donchian_20["donchian_20_high"]) if "donchian_20_high" in donchian_20.columns else np.nan
+    donchian_20_low = _latest_float(donchian_20["donchian_20_low"]) if "donchian_20_low" in donchian_20.columns else np.nan
+    donchian_20_mid = _latest_float(donchian_20["donchian_20_mid"]) if "donchian_20_mid" in donchian_20.columns else np.nan
+    zscore_50 = _latest_float(calculate_zscore(stock_close, 50))
+    ema10_extension_pct = calculate_ema_extension(ltp, latest_ema10)
+    ema20_extension_pct = calculate_ema_extension(ltp, latest_ema20)
+    (
+        pullback_score,
+        entry_signal,
+        trend_bullish,
+        price_position,
+        healthy_extension,
+        ema20_pullback_zone,
+        rsi_healthy,
+        volume_cooling,
+        healthy_zscore,
+        relative_strength_positive,
+        entry_reasons,
+    ) = calculate_pullback_score(
+        close=ltp,
+        ema10=latest_ema10,
+        ema20=latest_ema20,
+        ema50=latest_ema50,
+        ema100=latest_ema100,
+        ema200=latest_ema200,
+        atr14=atr14,
+        rsi14=rsi14,
+        volume_ratio=volume_ratio,
+        zscore_50=zscore_50,
+        rs_vs_nifty=rs_vs_nifty,
+    )
 
     vol_126d = calculate_annualized_volatility(stock_close, 126)
     vol_adj_mtm = ret_6m / vol_126d if pd.notna(ret_6m) and pd.notna(vol_126d) and vol_126d != 0 else np.nan
@@ -211,6 +388,32 @@ def calculate_momentum_features(
         "ema50_gt_ema200": ema50_gt_ema200,
         "ema_trend_score": 100 if ema50_gt_ema200 else 0,
         "vol_adj_mtm": vol_adj_mtm,
+        "ema10": latest_ema10,
+        "ema20": latest_ema20,
+        "ema50": latest_ema50,
+        "ema100": latest_ema100,
+        "ema200": latest_ema200,
+        "ema10_extension_pct": ema10_extension_pct,
+        "ema20_extension_pct": ema20_extension_pct,
+        "atr14": atr14,
+        "rsi14": rsi14,
+        "volume_ma20": volume_ma20,
+        "volume_ratio": volume_ratio,
+        "donchian_20_high": donchian_20_high,
+        "donchian_20_low": donchian_20_low,
+        "donchian_20_mid": donchian_20_mid,
+        "zscore_50": zscore_50,
+        "pullback_score": pullback_score,
+        "entry_signal": entry_signal,
+        "entry_reasons": entry_reasons,
+        "trend_bullish": trend_bullish,
+        "price_position": price_position,
+        "healthy_extension": healthy_extension,
+        "ema20_pullback_zone": ema20_pullback_zone,
+        "rsi_healthy": rsi_healthy,
+        "volume_cooling": volume_cooling,
+        "healthy_zscore": healthy_zscore,
+        "relative_strength_positive": relative_strength_positive,
         "data_status": data_status,
     }
 

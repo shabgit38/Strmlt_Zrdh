@@ -5,6 +5,8 @@ import pandas as pd
 import streamlit as st
 from kiteconnect import KiteConnect
 
+from quant_calcs import calculate_ema
+
 
 def _normalize_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -16,7 +18,7 @@ def _normalize_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_ema(df: pd.DataFrame) -> pd.DataFrame:
     for span in [10, 20, 50, 100, 200]:
-        df[f"EMA{span}"] = df["Close"].ewm(span=span, adjust=False).mean()
+        df[f"EMA{span}"] = calculate_ema(df["Close"], span)
     return df
 
 
@@ -126,27 +128,32 @@ def get_high_low_resampled(df: pd.DataFrame) -> dict:
     df = _normalize_datetime_index(df)
 
     completed_weeks = df.resample("W-FRI").last().dropna()
-    if len(completed_weeks) < 2:
-        raise ValueError("Insufficient data for completed weekly high/low metrics.")
-
-    last_complete_date = completed_weeks.index[-2]
-    df = df[df.index <= last_complete_date]
+    if len(completed_weeks) >= 2:
+        last_complete_date = completed_weeks.index[-2]
+        df = df[df.index <= last_complete_date]
+    elif len(completed_weeks) == 1:
+        last_complete_date = completed_weeks.index[-1]
+        df = df[df.index <= last_complete_date]
 
     weekly = df.resample("W-FRI").agg({"High": "max", "Low": "min"}).dropna()
     monthly = df.resample("ME").agg({"High": "max", "Low": "min"}).dropna()
+    if df.empty:
+        return {}
 
     latest = df.index.max()
     df_3m = df[df.index >= latest - pd.DateOffset(months=3)]
     df_6m = df[df.index >= latest - pd.DateOffset(months=6)]
     df_1y = df[df.index >= latest - pd.DateOffset(years=1)]
 
-    return {
-        "1W": (float(weekly.iloc[-1]["High"]), float(weekly.iloc[-1]["Low"])),
-        "1M": (float(monthly.iloc[-1]["High"]), float(monthly.iloc[-1]["Low"])),
-        "3M": (float(df_3m["High"].max()), float(df_3m["Low"].min())),
-        "6M": (float(df_6m["High"].max()), float(df_6m["Low"].min())),
-        "1Y": (float(df_1y["High"].max()), float(df_1y["Low"].min())),
-    }
+    ranges = {}
+    if not weekly.empty:
+        ranges["1W"] = (float(weekly.iloc[-1]["High"]), float(weekly.iloc[-1]["Low"]))
+    if not monthly.empty:
+        ranges["1M"] = (float(monthly.iloc[-1]["High"]), float(monthly.iloc[-1]["Low"]))
+    for period, period_df in [("3M", df_3m), ("6M", df_6m), ("1Y", df_1y)]:
+        if not period_df.empty:
+            ranges[period] = (float(period_df["High"].max()), float(period_df["Low"].min()))
+    return ranges
 
 
 def build_metric_values(analytics_df: pd.DataFrame) -> dict[str, float]:
@@ -169,6 +176,8 @@ def build_metric_values(analytics_df: pd.DataFrame) -> dict[str, float]:
         metrics["Today High"] = float(latest["High"])
 
     for period in ["1W", "1M", "3M", "6M", "1Y"]:
+        if period not in high_low:
+            continue
         high, low = high_low[period]
         metrics[f"{period} Low"] = float(low)
         metrics[f"{period} High"] = float(high)
@@ -331,6 +340,42 @@ def compute_volume_gains(analytics_df: pd.DataFrame) -> dict[str, float | None]:
     }
 
 
+def pivot_points(df: pd.DataFrame) -> dict[str, float]:
+    """
+    Return daily classical pivot values from the last completed session.
+    """
+    required_columns = {"High", "Low", "Close"}
+    if df.empty or not required_columns.issubset(df.columns):
+        return {}
+
+    normalized_df = _normalize_datetime_index(df)
+    normalized_df = normalized_df.sort_index().dropna(subset=list(required_columns))
+    if normalized_df.empty:
+        return {}
+
+    latest_date = pd.to_datetime(normalized_df.index[-1]).date()
+    if latest_date == datetime.now().date() and len(normalized_df) >= 2:
+        reference_row = normalized_df.iloc[-2]
+    else:
+        reference_row = normalized_df.iloc[-1]
+
+    high = float(reference_row["High"])
+    low = float(reference_row["Low"])
+    close = float(reference_row["Close"])
+    price_range = high - low
+
+    pivot = (high + low + close) / 3
+    return {
+        "D Pivot": pivot,
+        "D R1": 2 * pivot - low,
+        "D R2": pivot + price_range,
+        "D R3": high + 2 * (pivot - low),
+        "D S1": 2 * pivot - high,
+        "D S2": pivot - price_range,
+        "D S3": low - 2 * (high - pivot),
+    }
+
+
 def build_metric_ladder(
     analytics_df: pd.DataFrame,
     *,
@@ -368,7 +413,7 @@ def build_metric_ladder(
     for span in [20, 50, 100, 200]:
         label = f"EMA{span}"
         ladder.append((f"__EMA_DISTANCE__{label}", calculate_distance_pct(ltp, metrics.get(label))))
-    ladder.extend(sorted(metrics.items(), key=lambda item: item[1]))
+    ladder.extend(sorted({**metrics, **pivot_points(analytics_df)}.items(), key=lambda item: item[1]))
     return ladder
 
 

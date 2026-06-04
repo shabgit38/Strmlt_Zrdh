@@ -53,3 +53,7 @@ Considerations:
 - If today's candle is not available, `previous_close` is missing, or
   `previous_close` is zero, `Today Return %` is left blank/`None`.
 - This is a previous-close daily return, not an open-to-current-day return.
+
+
+###
+in Price Ladder, LTP currently comes from the latest historical Close inside build_metric_values(), not necessarily the live Kite last_price passed into returns. Formula is correct; only the price source may differ depending on whether today’s daily candle is available.

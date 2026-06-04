@@ -1871,11 +1871,11 @@ def display_holdings_breakdown_preview(
                             st.session_state["holdings_breakdown_editor"] = {"mode": "add_batch", "id": row_id}
                             st.rerun()
                     with action_cols[1]:
-                        if st.button("", key=f"{key_prefix}_edit", icon=":material/edit:", help="Edit holding"):
+                        if st.button("", key=f"{key_prefix}_edit", icon=":material/edit:", help="Edit holding", width="content"):
                             st.session_state["holdings_breakdown_editor"] = {"mode": "edit_summary", "id": row_id}
                             st.rerun()
                     with action_cols[2]:
-                        if st.button("", key=f"{key_prefix}_exit", icon=":material/logout:", help="Exit holding"):
+                        if st.button("", key=f"{key_prefix}_exit", icon=":material/logout:", help="Exit holding", width="content"):
                             st.session_state["holdings_breakdown_editor"] = {"mode": "exit_summary", "id": row_id}
                             st.rerun()
 
@@ -2664,19 +2664,12 @@ with tab_historic_data:
                     "rank",
                     "mtm_score",
                     "ret_12_1",
-                    "ret_12_1_rank",
                     "ret_6m",
-                    "ret_6m_rank",
                     "rs_vs_nifty",
-                    "rs_rank",
                     "dist_52w_high",
-                    "dist_52w_score",
                     "above_ema200",
-                    "above_ema200_score",
                     "ema50_gt_ema200",
-                    "ema_trend_score",
                     "vol_adj_mtm",
-                    "vol_adj_rank",
                 ]
                 momentum_display_df = momentum_display_df[
                     [column for column in momentum_display_columns if column in momentum_display_df.columns]

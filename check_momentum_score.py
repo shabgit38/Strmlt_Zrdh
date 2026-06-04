@@ -15,15 +15,23 @@ DEFAULT_BENCHMARK_SYMBOL = "NIFTY 50"
 DISPLAY_COLUMNS = [
     "ticker",
     "ltp",
+    "pullback_score",
+    "entry_signal",
+    "mtm_score",
+    "mtm_label",
     "ret_6m",
     "ret_12_1",
     "rs_vs_nifty",
+    "ema10_extension_pct",
+    "ema20_extension_pct",
+    "atr14",
+    "rsi14",
+    "volume_ratio",
+    "zscore_50",
     "dist_52w_high",
     "above_ema200",
     "ema50_gt_ema200",
     "vol_adj_mtm",
-    "mtm_score",
-    "mtm_label",
     "data_status",
 ]
 
@@ -118,7 +126,7 @@ kite, _, _ = bootstrap_kite_app("Quant Momentum Score Check")
 benchmark_symbol = st.text_input("Benchmark symbol", value=DEFAULT_BENCHMARK_SYMBOL)
 tickers_input = st.text_area(
     "Stock tickers",
-    value="RELIANCE, TCS, INFY",
+    value="",
     help="Enter ticker symbols separated by commas.",
 )
 
@@ -177,9 +185,16 @@ if score_df is not None and not score_df.empty:
             score_df[visible_columns].style.format(
                 {
                     "ltp": "{:.2f}",
+                    "pullback_score": "{:.1f}",
                     "ret_6m": "{:.2%}",
                     "ret_12_1": "{:.2%}",
                     "rs_vs_nifty": "{:.2%}",
+                    "ema10_extension_pct": "{:.2f}%",
+                    "ema20_extension_pct": "{:.2f}%",
+                    "atr14": "{:.2f}",
+                    "rsi14": "{:.1f}",
+                    "volume_ratio": "{:.2f}",
+                    "zscore_50": "{:.2f}",
                     "dist_52w_high": "{:.2%}",
                     "vol_adj_mtm": "{:.2f}",
                     "mtm_score": "{:.1f}",
@@ -188,6 +203,51 @@ if score_df is not None and not score_df.empty:
             ),
             width="stretch",
             hide_index=True,
+            column_config={
+                "pullback_score": st.column_config.NumberColumn(
+                    "pullback_score",
+                    help=(
+                        "Pullback Score:\n"
+                        "+20 bullish EMA stack: EMA10 > EMA20 > EMA50 > EMA100 > EMA200\n"
+                        "Required filter: Close > EMA20 for non-Avoid signal\n"
+                        "+15 EMA10 extension between -3% and +7%\n"
+                        "+20 EMA20 <= Close <= EMA20 + 0.5 * ATR14\n"
+                        "+10 RSI between 50 and 70\n"
+                        "+15 volume ratio < 1\n"
+                        "+5 Z-score between -2 and +2.5\n"
+                        "+15 relative strength vs Nifty > 0"
+                    ),
+                    format="%.1f",
+                ),
+                "entry_signal": st.column_config.TextColumn(
+                    "entry_signal",
+                    help=(
+                        "Signal from pullback_score:\n"
+                        ">=80 and Close > EMA20: Strong Entry\n"
+                        ">=80 and Close <= EMA20: Watchlist - Below EMA20\n"
+                        "65-79 Near Entry\n"
+                        "45-64 Wait\n"
+                        "<45 Avoid"
+                    ),
+                ),
+                "mtm_score": st.column_config.NumberColumn(
+                    "mtm_score",
+                    help=(
+                        "Momentum score components:\n"
+                        "12-1 momentum rank\n"
+                        "6M return rank\n"
+                        "RS vs Nifty rank\n"
+                        "52W high proximity\n"
+                        "EMA trend\n"
+                        "Volatility-adjusted momentum"
+                    ),
+                    format="%.1f",
+                ),
+                "mtm_label": st.column_config.TextColumn(
+                    "mtm_label",
+                    help="Momentum label derived from mtm_score.",
+                ),
+            },
             key="momentum_score_check_table",
             on_select="rerun",
             selection_mode="single-row",

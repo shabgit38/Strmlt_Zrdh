@@ -1,0 +1,694 @@
+Create a Streamlit app with one Python file: momentum_pullback_scanner.py
+
+Goal:
+Build a stock momentum pullback scanner using OHLCV data.
+
+Input:
+symbol, date, open, high, low, close, volume
+
+Required app features:
+3. Calculate indicators per symbol:
+   - EMA10, EMA20, EMA50, EMA100, EMA200
+   - ATR14
+   - RSI14
+   - Volume MA20
+   - Volume ratio = Volume / Volume MA20
+   - Donchian 20 high/low/mid
+   - Z-score 50
+   - EMA10 extension %
+   - EMA20 extension %
+   - Relative Strength vs Nifty benchmark
+
+4. Build pullback scoring system:
+   - Bullish EMA stack: EMA10 > EMA20 > EMA50 > EMA100 > EMA200: +20
+   - Price position: Close > EMA20: required filter
+   - EMA10 extension between -3% and +7%: +15
+   - Close inside upper EMA20 pullback zone:
+     EMA20 <= Close <= EMA20 + 0.5 * ATR14: +20
+   - RSI between 50 and 70: +10
+   - Volume ratio < 1: +15
+   - Z-score between -2 and +2.5: +5
+   - Relative Strength vs Nifty > 0: +15
+Do not use:
+Close inside EMA20 ± 0.5 ATR
+Use:
+EMA20 <= Close <= EMA20 + 0.5 * ATR14
+This avoids buying weak breakdowns below EMA20.
+
+5. Classify signals:
+   - >=80: Strong Entry Candidate
+   - 65-79: Watchlist / Near Entry
+   - 45-64: Wait
+   - <45: Avoid
+
+
+7. Show latest row per stock in Streamlit table.
+
+9. Add selected-stock detail panel:
+   - Latest close
+   - EMA values
+   - ATR pullback zone
+   - RSI
+   - Volume ratio
+   - Z-score
+   - Signal reason list
+
+Implementation rules:
+- Keep everything in one file.
+- Use pandas, numpy, streamlit.
+- Use defensive error handling.
+- Do not use TA-Lib.
+- All indicators must be implemented manually.
+- Code should run with:
+  uv run streamlit run momentum_pullback_scanner.py
+
+### pullback scoring logic:
+entry_candidate = (
+
+    EMA10 > EMA20 >
+    EMA50 > EMA100 >
+    EMA200
+
+    and
+
+    close > EMA20
+
+    and
+
+    -3 <= ema10_extension <= 7
+
+    and
+
+    -2 <= zscore_50 <= 2.5
+
+    and
+
+    volume_ratio < 1
+
+    and
+
+    relative_strength > 0
+
+)
+
+Z-score measures: How many standard deviations away from average?
+| Z  | Interpretation         |
+| -- | ---------------------- |
+| +3 | Extremely expensive    |
+| +2 | Extended               |
+| +1 | Strong                 |
+| 0  | Average                |
+| -1 | Slightly below average |
+| -2 | Cheap                  |
+| -3 | Panic selling          |
+
+
+
+
+ # Manual Technical Indicator Calculations
+
+## (For Broker API OHLCV Data)
+
+Assume each candle received from the broker API contains:
+
+```text
+{
+    date,
+    open,
+    high,
+    low,
+    close,
+    volume
+}
+```
+
+---
+
+# 1. Exponential Moving Average (EMA)
+
+## Purpose
+
+Tracks trend while giving greater weight to recent prices.
+
+---
+
+## Step 1: Calculate Multiplier
+
+For an EMA of period **N**:
+
+```text
+Multiplier = 2 / (N + 1)
+```
+
+| EMA    | Multiplier        |
+| ------ | ----------------- |
+| EMA10  | 2 / 11 = 0.1818   |
+| EMA20  | 2 / 21 = 0.0952   |
+| EMA50  | 2 / 51 = 0.0392   |
+| EMA100 | 2 / 101 = 0.0198  |
+| EMA200 | 2 / 201 = 0.00995 |
+
+---
+
+## Step 2: Initial EMA
+
+Use Simple Moving Average.
+
+Example for EMA10:
+
+```text
+EMA10_initial =
+(Price1 + Price2 + ... + Price10)
+/
+10
+```
+
+---
+
+## Step 3: Recursive Update
+
+```text
+EMA_today =
+((Close_today - EMA_yesterday)
+× Multiplier)
++
+EMA_yesterday
+```
+
+### Example
+
+```text
+Yesterday EMA10 = 1800
+
+Today's Close = 1850
+
+Multiplier = 0.1818
+
+EMA10 =
+(1850 - 1800)
+× 0.1818
++
+1800
+
+EMA10 = 1809.09
+```
+
+---
+
+# 2. ATR14 (Average True Range)
+
+## Purpose
+
+Measures market volatility.
+
+---
+
+## Step 1: Calculate True Range
+
+For every candle:
+
+```text
+TR1 = High - Low
+
+TR2 = |High - Previous Close|
+
+TR3 = |Low - Previous Close|
+
+True Range = max(TR1, TR2, TR3)
+```
+
+### Example
+
+```text
+Today's High = 120
+
+Today's Low = 110
+
+Yesterday Close = 100
+
+TR1 = 10
+
+TR2 = 20
+
+TR3 = 10
+
+True Range = 20
+```
+
+---
+
+## Step 2: Initial ATR14
+
+```text
+ATR14 =
+Average of first 14 True Ranges
+```
+
+---
+
+## Step 3: Wilder Smoothing
+
+```text
+ATR_today =
+(
+(ATR_yesterday × 13)
++
+TrueRange_today
+)
+/
+14
+```
+
+---
+
+# 3. RSI14 (Relative Strength Index)
+
+## Purpose
+
+Measures price momentum.
+
+---
+
+## Step 1: Calculate Daily Change
+
+```text
+Change =
+Today's Close
+-
+Yesterday Close
+```
+
+---
+
+## Step 2: Separate Gains and Losses
+
+```text
+Gain = max(Change, 0)
+
+Loss = abs(min(Change, 0))
+```
+
+### Example
+
+| Change | Gain | Loss |
+| ------ | ---- | ---- |
+| +5     | 5    | 0    |
+| -3     | 0    | 3    |
+| +2     | 2    | 0    |
+
+---
+
+## Step 3: Initial Average Gain/Loss
+
+```text
+Average Gain =
+Sum of Gains over 14 periods
+/
+14
+
+Average Loss =
+Sum of Losses over 14 periods
+/
+14
+```
+
+---
+
+## Step 4: Wilder Smoothing
+
+```text
+AvgGain_today =
+(
+(AvgGain_yesterday × 13)
++
+CurrentGain
+)
+/
+14
+
+AvgLoss_today =
+(
+(AvgLoss_yesterday × 13)
++
+CurrentLoss
+)
+/
+14
+```
+
+---
+
+## Step 5: Relative Strength
+
+```text
+RS =
+Average Gain
+/
+Average Loss
+```
+
+---
+
+## Step 6: RSI Calculation
+
+```text
+RSI =
+100
+-
+(
+100
+/
+(1 + RS)
+)
+```
+
+### Example
+
+```text
+RS = 2
+
+RSI =
+100
+-
+100 / 3
+
+RSI = 66.67
+```
+
+---
+
+# 4. Volume MA20
+
+## Purpose
+
+Average trading volume over 20 periods.
+
+---
+
+## Formula
+
+```text
+Volume MA20 =
+(
+Sum of last 20 volumes
+)
+/
+20
+```
+
+### Example
+
+```text
+Total volume of last 20 candles
+
+=
+50,000,000
+
+Volume MA20
+
+=
+2,500,000
+```
+
+---
+
+# 5. Donchian Channel (20)
+
+## Purpose
+
+Measures breakout ranges.
+
+---
+
+## Upper Band
+
+```text
+Highest High
+of last 20 candles
+```
+
+---
+
+## Lower Band
+
+```text
+Lowest Low
+of last 20 candles
+```
+
+---
+
+## Middle Band
+
+```text
+Donchian Mid =
+(
+Upper Band
++
+Lower Band
+)
+/
+2
+```
+
+### Example
+
+```text
+20-Day High = 500
+
+20-Day Low = 420
+
+Mid =
+
+(500 + 420)
+
+/
+
+2
+
+=
+
+460
+```
+
+---
+
+# 6. Z-Score (50)
+
+## Purpose
+
+Measures how statistically stretched price is.
+
+---
+
+## Step 1: Rolling Mean
+
+```text
+Mean50 =
+(
+Sum of last 50 closes
+)
+/
+50
+```
+
+---
+
+## Step 2: Standard Deviation
+
+```text
+StdDev50 =
+
+sqrt(
+
+Σ(Close - Mean)^2
+
+/
+
+50
+
+)
+```
+
+---
+
+## Step 3: Calculate Z-Score
+
+```text
+Z-Score =
+
+(
+Current Close
+-
+Mean50
+)
+
+/
+
+StdDev50
+```
+
+### Example
+
+```text
+Current Close = 210
+
+Mean50 = 190
+
+StdDev50 = 10
+
+Z-Score =
+
+(210 - 190)
+
+/
+
+10
+
+=
+
+2
+```
+
+---
+
+## Interpretation
+
+| Z-Score | Meaning                  |
+| ------- | ------------------------ |
+| 0       | Average                  |
+| 1       | Strong                   |
+| 2       | Extended                 |
+| 3+      | Euphoric / Avoid chasing |
+
+---
+
+# 7. EMA10 Extension %
+
+## Purpose
+
+Measures how far price has moved away from the short-term trend.
+
+---
+
+## Formula
+
+```text
+EMA10 Extension % =
+
+(
+Current Close
+-
+EMA10
+)
+
+/
+
+EMA10
+
+×
+
+100
+```
+
+### Example
+
+```text
+Current Close = 1920
+
+EMA10 = 1800
+
+Extension =
+
+(1920 - 1800)
+
+/
+
+1800
+
+×
+
+100
+
+=
+
+6.67%
+```
+
+---
+
+## Typical Interpretation
+
+| Extension | Meaning         |
+| --------- | --------------- |
+| 0-5%      | Normal          |
+| 5-10%     | Strong momentum |
+| 10-15%    | Extended        |
+| >15%      | Avoid chasing   |
+
+---
+
+# 8. EMA20 Extension %
+
+## Purpose
+
+Measures medium-term overextension.
+
+---
+
+## Formula
+
+```text
+EMA20 Extension % =
+
+(
+Current Close
+-
+EMA20
+)
+
+/
+
+EMA20
+
+×
+
+100
+```
+
+### Example
+
+```text
+Current Close = 1920
+
+EMA20 = 1750
+
+Extension =
+
+(1920 - 1750)
+
+/
+
+1750
+
+×
+
+100
+
+=
+
+9.71%
+```
+
+---
+
+## Typical Interpretation
+
+| Extension | Meaning                      |
+| --------- | ---------------------------- |
+| 0-7%      | Healthy trend                |
+| 7-12%     | Strong momentum              |
+| 12-18%    | Extended                     |
+| >18%      | High probability of pullback |
+
+---
