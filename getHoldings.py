@@ -1007,31 +1007,38 @@ def display_correlation_matrix(close_prices_df: pd.DataFrame) -> None:
     )
 
 
+def _pullback_signal_style(score: Any, signal: Any) -> str:
+    signal_text = str(signal or "").strip()
+    score_value = pd.to_numeric(score, errors="coerce")
+    if signal_text == "Watchlist - Below EMA20":
+        return "background-color: #0ea5e9; color: #ffffff; font-weight: 700"
+    if pd.isna(score_value):
+        return ""
+    if score_value < 45:
+        return "background-color: #dc2626; color: #ffffff; font-weight: 700"
+    if score_value < 65:
+        return "background-color: #f97316; color: #ffffff; font-weight: 700"
+    if score_value < 80:
+        return "background-color: #facc15; color: #422006; font-weight: 700"
+    return "background-color: #16a34a; color: #ffffff; font-weight: 700"
+
+
 def highlight_momentum_rank_cells(data: pd.DataFrame) -> pd.DataFrame:
     styles = pd.DataFrame("", index=data.index, columns=data.columns)
     highlight_columns = [
         column
-        for column in ["ticker", "mtm_label", "rank", "mtm_score"]
+        for column in ["ticker", "pullback_score", "entry_signal"]
         if column in data.columns
     ]
-    if not highlight_columns or "mtm_score" not in data.columns:
+    if not highlight_columns or "pullback_score" not in data.columns:
         return styles
 
-    scores = pd.to_numeric(data["mtm_score"], errors="coerce")
+    scores = pd.to_numeric(data["pullback_score"], errors="coerce")
     for index, score in scores.items():
-        if pd.isna(score):
+        signal = data.at[index, "entry_signal"] if "entry_signal" in data.columns else None
+        style = _pullback_signal_style(score, signal)
+        if not style:
             continue
-
-        if score < 40:
-            style = "background-color: #dc2626; color: #ffffff; font-weight: 700"
-        elif score < 55:
-            style = "background-color: #f97316; color: #ffffff; font-weight: 700"
-        elif score < 70:
-            style = "background-color: #facc15; color: #422006; font-weight: 700"
-        elif score < 85:
-            style = "background-color: #16a34a; color: #ffffff; font-weight: 700"
-        else:
-            style = "background-color: #047857; color: #ffffff; font-weight: 700"
 
         for column in highlight_columns:
             styles.at[index, column] = style
@@ -1041,17 +1048,17 @@ def highlight_momentum_rank_cells(data: pd.DataFrame) -> pd.DataFrame:
 
 def _group_momentum_symbols_by_label(momentum_df: pd.DataFrame) -> dict[str, list[str]]:
     label_groups = {
-        "Elite": [],
-        "Strong": [],
-        "Watch": [],
-        "Weak": [],
+        "Strong Entry": [],
+        "Watchlist - Below EMA20": [],
+        "Near Entry": [],
+        "Wait": [],
         "Avoid": [],
     }
-    if momentum_df.empty or not {"ticker", "mtm_label"}.issubset(momentum_df.columns):
+    if momentum_df.empty or not {"ticker", "entry_signal"}.issubset(momentum_df.columns):
         return label_groups
 
     for _, row in momentum_df.iterrows():
-        label = str(row.get("mtm_label") or "").strip().title()
+        label = str(row.get("entry_signal") or "").strip()
         ticker = str(row.get("ticker") or "").strip().upper()
         if label in label_groups and ticker:
             label_groups[label].append(ticker)
@@ -1060,10 +1067,10 @@ def _group_momentum_symbols_by_label(momentum_df: pd.DataFrame) -> dict[str, lis
 
 def _format_momentum_label_summary(label_groups: dict[str, list[str]]) -> str:
     summary_items = [
-        ("Elite", "#047857", "#ffffff", label_groups["Elite"]),
-        ("Strong", "#16a34a", "#ffffff", label_groups["Strong"]),
-        ("Watch", "#facc15", "#422006", label_groups["Watch"]),
-        ("Weak", "#f97316", "#ffffff", label_groups["Weak"]),
+        ("Strong Entry", "#16a34a", "#ffffff", label_groups["Strong Entry"]),
+        ("Watchlist - Below EMA20", "#0ea5e9", "#ffffff", label_groups["Watchlist - Below EMA20"]),
+        ("Near Entry", "#facc15", "#422006", label_groups["Near Entry"]),
+        ("Wait", "#f97316", "#ffffff", label_groups["Wait"]),
         ("Avoid", "#dc2626", "#ffffff", label_groups["Avoid"]),
     ]
     rows = []
@@ -2656,12 +2663,23 @@ with tab_historic_data:
                 st.info("No momentum score data available.")
             else:
                 momentum_display_df = momentum_df.copy()
-                momentum_display_df.insert(0, "rank", range(1, len(momentum_display_df) + 1))
+                sort_columns = [
+                    column
+                    for column in ["pullback_score", "mtm_score"]
+                    if column in momentum_display_df.columns
+                ]
+                if sort_columns:
+                    momentum_display_df = momentum_display_df.sort_values(
+                        by=sort_columns,
+                        ascending=[False] * len(sort_columns),
+                        na_position="last",
+                    )
                 momentum_display_columns = [
                     "ticker",
                     "ltp",
+                    "pullback_score",
+                    "entry_signal",
                     "mtm_label",
-                    "rank",
                     "mtm_score",
                     "ret_12_1",
                     "ret_6m",
@@ -2679,6 +2697,7 @@ with tab_historic_data:
                     momentum_display_df.style.format(
                         {
                             "ltp": "{:.2f}",
+                            "pullback_score": "{:.1f}",
                             "mtm_score": "{:.1f}",
                             "ret_6m": "{:.2%}",
                             "ret_6m_rank": "{:.1f}",
