@@ -55,5 +55,8 @@ Considerations:
 - This is a previous-close daily return, not an open-to-current-day return.
 
 
-###
+### getholdingd.py - price ladder
 in Price Ladder, LTP currently comes from the latest historical Close inside build_metric_values(), not necessarily the live Kite last_price passed into returns. Formula is correct; only the price source may differ depending on whether today’s daily candle is available.
+
+### momentum_tracker.py 
+this file is a test on momentum card layout with horizontal price chart

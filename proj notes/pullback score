@@ -41,6 +41,27 @@ This avoids buying weak breakdowns below EMA20.
    - 45-64: Wait
    - <45: Avoid
 
+Entry price Range
+| Field       | Formula            |
+| ----------- | ------------------ |
+| Entry Lower | EMA20              |
+| Entry Upper | EMA20 + 0.5 × ATR  |
+
+ATR14 is not predicting price. ATR14 measures how much the stock naturally moves.
+Entry = Trend Anchor + Fraction × Typical Daily Noise
+where:
+
+Trend Anchor = EMA20
+Typical Daily Noise = ATR14
+explanation why use 0.5ATR
+| Zone             | Interpretation        |
+| ---------------- | --------------------- |
+| EMA20 ± 0.25 ATR | Very tight            |
+| EMA20 ± 0.5 ATR  | Healthy pullback      |
+| EMA20 ± 1 ATR    | Deep correction       |
+| Beyond 1 ATR     | Trend may be changing |
+
+
 
 7. Show latest row per stock in Streamlit table.
 

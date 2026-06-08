@@ -76,10 +76,18 @@ def bootstrap_kite_app(page_title: str) -> tuple[KiteConnect, str, str]:
         if not request_token:
             login_url = kite.login_url()
             #print(f"Login URL: {login_url}")
-            st.info("Please login to Zerodha to continue.")
+            safe_login_url = escape(login_url, quote=True)
+            st.info("Redirecting to Zerodha login...")
+            st.html(
+                f"""
+                <script>
+                    window.top.location.href = "{safe_login_url}";
+                </script>
+                """
+            )
             st.markdown(
                 f"""
-                <a href="{escape(login_url, quote=True)}" target="_self" style="
+                <a href="{safe_login_url}" target="_self" style="
                     display: inline-flex;
                     align-items: center;
                     justify-content: center;
@@ -90,7 +98,7 @@ def bootstrap_kite_app(page_title: str) -> tuple[KiteConnect, str, str]:
                     color: white;
                     font-weight: 600;
                     text-decoration: none;
-                ">Login to Kite</a>
+                ">Continue to Kite Login</a>
                 """,
                 unsafe_allow_html=True,
             )
