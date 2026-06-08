@@ -19,6 +19,38 @@ OPTION_UNDERLYING_INSTRUMENTS = {
     "FINNIFTY": "NSE:NIFTY FIN SERVICE",
     "MIDCPNIFTY": "NSE:NIFTY MID SELECT",
 }
+TRADE_CALCULATOR_COLUMNS = [
+    "SYMBOL",
+    "BUY",
+    "QTY",
+    "TOTAL INVESTED",
+    "SELL",
+    "PROFIT",
+    "PROFIT %",
+    "ENTRY",
+    "EXIT",
+    "DAYS",
+    "SL",
+    "TGT",
+]
+TRADE_CALCULATOR_INPUT_COLUMNS = ["SYMBOL", "BUY", "QTY", "SELL", "ENTRY", "EXIT", "SL", "TGT"]
+TRADE_CALCULATOR_CALCULATED_COLUMNS = ["TOTAL INVESTED", "PROFIT", "PROFIT %", "DAYS"]
+OPTION_CALCULATOR_COLUMNS = [
+    "Symbol",
+    "Open Qty",
+    "Days_Expiry",
+    "Breakeven",
+    "Dist_Spot",
+    "Avg Price",
+    "LTP",
+    "Spot",
+    "Invested",
+    "Current",
+    "P&L",
+    "P&L %",
+]
+OPTION_CALCULATOR_INPUT_COLUMNS = ["Symbol", "Open Qty", "Avg Price", "LTP", "Spot"]
+OPTION_CALCULATOR_CALCULATED_COLUMNS = ["Days_Expiry", "Breakeven", "Dist_Spot", "Invested", "Current", "P&L", "P&L %"]
 
 
 def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None = None) -> int:
@@ -55,19 +87,244 @@ def _pnl_color(value: Any) -> str:
 
 
 def _style_pnl_columns(df: pd.DataFrame):
-    pnl_columns = [column for column in ["P&L", "P&L %"] if column in df.columns]
+    pnl_columns = [column for column in ["P&L", "P&L %", "PROFIT", "PROFIT %"] if column in df.columns]
     formatters = {
         column: _format_display_value
         for column in df.columns
-        if column not in {"P&L %", "Dist Current"}
+        if column not in {"P&L %", "PROFIT %", "Dist_Spot"}
     }
     if "P&L %" in df.columns:
         formatters["P&L %"] = _format_percent_value
+    if "PROFIT %" in df.columns:
+        formatters["PROFIT %"] = _format_percent_value
 
     styler = df.style.format(formatters, na_rep="-")
     for column in pnl_columns:
         styler = styler.map(lambda value: f"color: {_pnl_color(value)}; font-weight: 600", subset=[column])
     return styler
+
+
+def _empty_trade_calculator_df() -> pd.DataFrame:
+    return pd.DataFrame([{column: None for column in TRADE_CALCULATOR_COLUMNS}])
+
+
+def _calculate_trade_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return _empty_trade_calculator_df()
+
+    calculated_df = df.copy()
+    for column in TRADE_CALCULATOR_COLUMNS:
+        if column not in calculated_df.columns:
+            calculated_df[column] = None
+
+    calculated_df = calculated_df[TRADE_CALCULATOR_COLUMNS]
+    calculated_df["SYMBOL"] = calculated_df["SYMBOL"].astype("string").str.upper().str.strip()
+    calculated_df["SYMBOL"] = calculated_df["SYMBOL"].replace({"": pd.NA, "<NA>": pd.NA})
+
+    for column in ["BUY", "QTY", "SELL", "SL", "TGT"]:
+        calculated_df[column] = pd.to_numeric(calculated_df[column], errors="coerce")
+
+    for column in ["ENTRY", "EXIT"]:
+        calculated_df[column] = pd.to_datetime(calculated_df[column], errors="coerce").dt.date
+
+    total_invested = calculated_df["BUY"] * calculated_df["QTY"]
+    calculated_df["TOTAL INVESTED"] = total_invested
+
+    has_sell = calculated_df["SELL"].notna()
+    calculated_df["PROFIT"] = (calculated_df["SELL"] - calculated_df["BUY"]) * calculated_df["QTY"]
+    calculated_df.loc[~has_sell, "PROFIT"] = None
+    calculated_df["PROFIT %"] = calculated_df["PROFIT"].where(total_invested.ne(0)) / total_invested * 100
+
+    today = date.today()
+    entry_dates = pd.to_datetime(calculated_df["ENTRY"], errors="coerce")
+    exit_dates = pd.to_datetime(calculated_df["EXIT"], errors="coerce")
+    effective_exit_dates = exit_dates.fillna(pd.Timestamp(today))
+    calculated_df["DAYS"] = (effective_exit_dates - entry_dates).dt.days
+    calculated_df.loc[entry_dates.isna(), "DAYS"] = None
+
+    blank_rows = calculated_df[TRADE_CALCULATOR_INPUT_COLUMNS].isna().all(axis=1)
+    calculated_df.loc[blank_rows, TRADE_CALCULATOR_CALCULATED_COLUMNS] = None
+    return calculated_df
+
+
+def _trade_calculator_summary_df(df: pd.DataFrame) -> pd.DataFrame:
+    trade_df = _calculate_trade_rows(df)
+    trade_df = trade_df[trade_df["SYMBOL"].notna()].copy()
+    if trade_df.empty:
+        return pd.DataFrame()
+
+    qty = pd.to_numeric(trade_df["QTY"], errors="coerce").fillna(0)
+    invested = pd.to_numeric(trade_df["TOTAL INVESTED"], errors="coerce").fillna(0)
+    profit = pd.to_numeric(trade_df["PROFIT"], errors="coerce")
+    summary_df = (
+        trade_df.assign(_QTY=qty, _INVESTED=invested, _PROFIT=profit)
+        .groupby("SYMBOL", as_index=False)
+        .agg(
+            QTY=("_QTY", "sum"),
+            **{
+                "TOTAL INVESTED": ("_INVESTED", "sum"),
+                "PROFIT": ("_PROFIT", "sum"),
+            },
+        )
+    )
+    summary_df["AVG BUY"] = summary_df["TOTAL INVESTED"].where(summary_df["QTY"].ne(0)) / summary_df["QTY"]
+    summary_df["PROFIT %"] = summary_df["PROFIT"].where(summary_df["TOTAL INVESTED"].ne(0)) / summary_df["TOTAL INVESTED"] * 100
+    return summary_df[["SYMBOL", "QTY", "AVG BUY", "TOTAL INVESTED", "PROFIT", "PROFIT %"]]
+
+
+def _trade_calculator_editor_df(df: pd.DataFrame) -> pd.DataFrame:
+    editor_df = df.copy()
+    for column in TRADE_CALCULATOR_COLUMNS:
+        if column not in editor_df.columns:
+            editor_df[column] = None
+    return _calculate_trade_rows(editor_df[TRADE_CALCULATOR_COLUMNS])
+
+
+def _trade_calculator_inputs_changed(previous_df: pd.DataFrame, current_df: pd.DataFrame) -> bool:
+    previous_inputs = _calculate_trade_rows(previous_df)[TRADE_CALCULATOR_INPUT_COLUMNS].reset_index(drop=True)
+    current_inputs = _calculate_trade_rows(current_df)[TRADE_CALCULATOR_INPUT_COLUMNS].reset_index(drop=True)
+    return not previous_inputs.astype("string").fillna("").equals(current_inputs.astype("string").fillna(""))
+
+
+def render_trade_calculator() -> None:
+    st.subheader("TRADE CALCULATOR")
+    if "trade_calculator_df" not in st.session_state:
+        st.session_state["trade_calculator_df"] = _empty_trade_calculator_df()
+
+    editor_df = _trade_calculator_editor_df(st.session_state["trade_calculator_df"])
+    edited_df = st.data_editor(
+        editor_df,
+        key="trade_calculator_editor",
+        width="stretch",
+        hide_index=True,
+        num_rows="dynamic",
+        disabled=TRADE_CALCULATOR_CALCULATED_COLUMNS,
+        column_order=TRADE_CALCULATOR_COLUMNS,
+        column_config={
+            "SYMBOL": st.column_config.TextColumn("SYMBOL", width="medium"),
+            "BUY": st.column_config.NumberColumn("BUY", width="small", format="%.2f"),
+            "QTY": st.column_config.NumberColumn("QTY", width="small", format="%d"),
+            "TOTAL INVESTED": st.column_config.NumberColumn("TOTAL INVESTED", width="small", format="%.2f"),
+            "SELL": st.column_config.NumberColumn("SELL", width="small", format="%.2f"),
+            "PROFIT": st.column_config.NumberColumn("PROFIT", width="small", format="%.2f"),
+            "PROFIT %": st.column_config.NumberColumn("PROFIT %", width="small", format="%.2f%%"),
+            "ENTRY": st.column_config.DateColumn("ENTRY", width="small"),
+            "EXIT": st.column_config.DateColumn("EXIT", width="small"),
+            "DAYS": st.column_config.NumberColumn("DAYS", width="small", format="%d"),
+            "SL": st.column_config.NumberColumn("SL", width="small", format="%.2f"),
+            "TGT": st.column_config.NumberColumn("TGT", width="small", format="%.2f"),
+        },
+    )
+    if _trade_calculator_inputs_changed(st.session_state["trade_calculator_df"], edited_df):
+        st.session_state["trade_calculator_df"] = _calculate_trade_rows(edited_df)
+        st.rerun()
+
+    summary_df = _trade_calculator_summary_df(st.session_state["trade_calculator_df"])
+    if not summary_df.empty:
+        st.dataframe(
+            _style_pnl_columns(summary_df),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "SYMBOL": st.column_config.TextColumn("SYMBOL", width="medium"),
+                "QTY": st.column_config.NumberColumn("QTY", width="small", format="%d"),
+                "AVG BUY": st.column_config.NumberColumn("AVG BUY", width="small", format="%.2f"),
+                "TOTAL INVESTED": st.column_config.NumberColumn("TOTAL INVESTED", width="small", format="%.2f"),
+                "PROFIT": st.column_config.NumberColumn("PROFIT", width="small", format="%.2f"),
+                "PROFIT %": st.column_config.NumberColumn("PROFIT %", width="small", format="%.2f%%"),
+            },
+        )
+
+
+def _empty_option_calculator_df() -> pd.DataFrame:
+    return pd.DataFrame([{column: None for column in OPTION_CALCULATOR_COLUMNS}])
+
+
+def _format_manual_spot_distance(breakeven: Any, spot: Any) -> str | None:
+    spot_value = pd.to_numeric(spot, errors="coerce")
+    breakeven_value = pd.to_numeric(breakeven, errors="coerce")
+    if pd.isna(spot_value) or pd.isna(breakeven_value) or spot_value == 0:
+        return None
+
+    distance = abs(float(breakeven_value) - float(spot_value))
+    distance_text = f"{distance:.0f}" if distance.is_integer() else f"{distance:.2f}"
+    return f"{distance_text} [{distance / float(spot_value) * 100:.1f}%]"
+
+
+def _calculate_option_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return _empty_option_calculator_df()
+
+    calculated_df = df.copy()
+    for column in OPTION_CALCULATOR_COLUMNS:
+        if column not in calculated_df.columns:
+            calculated_df[column] = None
+
+    calculated_df = calculated_df[OPTION_CALCULATOR_COLUMNS]
+    calculated_df["Symbol"] = calculated_df["Symbol"].astype("string").str.upper().str.strip()
+    calculated_df["Symbol"] = calculated_df["Symbol"].replace({"": pd.NA, "<NA>": pd.NA})
+
+    for column in ["Open Qty", "Avg Price", "LTP", "Spot"]:
+        calculated_df[column] = pd.to_numeric(calculated_df[column], errors="coerce")
+
+    option_details = calculated_df["Symbol"].apply(_parse_option_position)
+    calculated_df["Days_Expiry"] = option_details.apply(lambda details: details.get("days_to_expiry"))
+    calculated_df["Breakeven"] = calculated_df.apply(
+        lambda row: _option_breakeven(row.get("Symbol"), row.get("Avg Price")),
+        axis=1,
+    )
+    calculated_df["Dist_Spot"] = calculated_df.apply(
+        lambda row: _format_manual_spot_distance(row.get("Breakeven"), row.get("Spot")),
+        axis=1,
+    )
+    calculated_df["Invested"] = calculated_df["Open Qty"].abs() * calculated_df["Avg Price"]
+    calculated_df["Current"] = calculated_df["Open Qty"] * calculated_df["LTP"]
+    calculated_df["P&L"] = calculated_df["Open Qty"] * (calculated_df["LTP"] - calculated_df["Avg Price"])
+    calculated_df["P&L %"] = calculated_df["P&L"].where(calculated_df["Invested"].ne(0)) / calculated_df["Invested"] * 100
+
+    blank_rows = calculated_df[OPTION_CALCULATOR_INPUT_COLUMNS].isna().all(axis=1)
+    calculated_df.loc[blank_rows, OPTION_CALCULATOR_CALCULATED_COLUMNS] = None
+    return calculated_df
+
+
+def _option_calculator_inputs_changed(previous_df: pd.DataFrame, current_df: pd.DataFrame) -> bool:
+    previous_inputs = _calculate_option_rows(previous_df)[OPTION_CALCULATOR_INPUT_COLUMNS].reset_index(drop=True)
+    current_inputs = _calculate_option_rows(current_df)[OPTION_CALCULATOR_INPUT_COLUMNS].reset_index(drop=True)
+    return not previous_inputs.astype("string").fillna("").equals(current_inputs.astype("string").fillna(""))
+
+
+def render_option_calculator() -> None:
+    st.subheader("OPTION CALCULATOR")
+    if "option_calculator_df" not in st.session_state:
+        st.session_state["option_calculator_df"] = _empty_option_calculator_df()
+
+    editor_df = _calculate_option_rows(st.session_state["option_calculator_df"])
+    edited_df = st.data_editor(
+        editor_df,
+        key="option_calculator_editor",
+        width="stretch",
+        hide_index=True,
+        num_rows="dynamic",
+        disabled=OPTION_CALCULATOR_CALCULATED_COLUMNS,
+        column_order=OPTION_CALCULATOR_COLUMNS,
+        column_config={
+            "Symbol": st.column_config.TextColumn("Symbol", width="small"),
+            "Open Qty": st.column_config.NumberColumn("Open Qty", width="small", format="%d"),
+            "Days_Expiry": st.column_config.NumberColumn("Days_Expiry", width="small", format="%d"),
+            "Breakeven": st.column_config.NumberColumn("Breakeven", width="small", format="%.2f"),
+            "Dist_Spot": st.column_config.TextColumn("Dist_Spot", width="small"),
+            "Avg Price": st.column_config.NumberColumn("Avg Price", width="small", format="%.2f"),
+            "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
+            "Spot": st.column_config.NumberColumn("Spot", width="small", format="%.2f"),
+            "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
+            "Current": st.column_config.NumberColumn("Current", width="small", format="%.2f"),
+            "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
+            "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
+        },
+    )
+    if _option_calculator_inputs_changed(st.session_state["option_calculator_df"], edited_df):
+        st.session_state["option_calculator_df"] = _calculate_option_rows(edited_df)
+        st.rerun()
 
 
 def _last_tuesday(year: int, month: int) -> date:
@@ -187,7 +444,7 @@ def _open_positions_display_df(
         lambda row: _option_breakeven(row.get("tradingsymbol"), row.get("average_price")),
         axis=1,
     )
-    positions_df["dist_current"] = positions_df.apply(
+    positions_df["dist_spot"] = positions_df.apply(
         lambda row: _format_breakeven_distance(
             row.get("tradingsymbol"),
             row.get("breakeven"),
@@ -201,7 +458,7 @@ def _open_positions_display_df(
         "quantity",
         "days_to_expiry",
         "breakeven",
-        "dist_current",
+        "dist_spot",
         "average_price",
         "last_price",
         "invested",
@@ -215,9 +472,9 @@ def _open_positions_display_df(
         columns={
             "tradingsymbol": "Symbol",
             "quantity": "Open Qty",
-            "days_to_expiry": "Days to Expiry",
+            "days_to_expiry": "Days_Expiry",
             "breakeven": "Breakeven",
-            "dist_current": "Dist Current",
+            "dist_spot": "Dist_Spot",
             "average_price": "Avg Price",
             "last_price": "LTP",
             "invested": "Invested",
@@ -238,16 +495,11 @@ def display_open_positions(
         st.info("No open positions found.")
         return
 
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    metric_col1, metric_col2 = st.columns(2)
     with metric_col1:
-        st.metric("Open Positions", f"{len(display_df):,}")
-    with metric_col2:
-        open_qty = pd.to_numeric(display_df.get("Open Qty", pd.Series(dtype=float)), errors="coerce").abs().sum()
-        st.metric("Open Qty", f"{open_qty:,.0f}")
-    with metric_col3:
         total_pnl = pd.to_numeric(display_df.get("P&L", pd.Series(dtype=float)), errors="coerce").sum()
         st.metric("Total P&L", f"{total_pnl:,.2f}", delta=f"{total_pnl:,.2f}")
-    with metric_col4:
+    with metric_col2:
         total_m2m = pd.to_numeric(display_df.get("M2M", pd.Series(dtype=float)), errors="coerce").sum()
         st.metric("Total M2M", f"{total_m2m:,.2f}", delta=f"{total_m2m:,.2f}")
 
@@ -259,9 +511,9 @@ def display_open_positions(
         column_config={
             "Symbol": st.column_config.TextColumn("Symbol", width="small"),
             "Open Qty": st.column_config.NumberColumn("Open Qty", width="small", format="%d"),
-            "Days to Expiry": st.column_config.NumberColumn("Days to Expiry", width="small", format="%d"),
+            "Days_Expiry": st.column_config.NumberColumn("Days_Expiry", width="small", format="%d"),
             "Breakeven": st.column_config.NumberColumn("Breakeven", width="small", format="%.2f"),
-            "Dist Current": st.column_config.TextColumn("Dist Current", width="small"),
+            "Dist_Spot": st.column_config.TextColumn("Dist_Spot", width="small"),
             "Avg Price": st.column_config.NumberColumn("Avg Price", width="small", format="%.2f"),
             "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
             "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
@@ -294,21 +546,31 @@ def fetch_open_positions() -> None:
 
 
 def render_open_positions_tab() -> None:
-    if st.button("Fetch Open Positions", type="primary"):
-        fetch_open_positions()
+    fetched_at = st.session_state.get("kite_open_positions_fetched_at")
+    fetch_col, as_of_col = st.columns([1, 3], vertical_alignment="center")
+    with fetch_col:
+        if st.button("Fetch Open Positions", type="primary"):
+            fetch_open_positions()
+    with as_of_col:
+        if fetched_at:
+            st.caption(f"As of {fetched_at}")
 
     open_positions = st.session_state.get("kite_open_positions")
-    fetched_at = st.session_state.get("kite_open_positions_fetched_at")
     ltp_error = st.session_state.get("kite_open_positions_ltp_error")
     if open_positions is None:
-        st.info("Fetch open positions from Kite to display current open positions.")
+        st.info("Fetch open positions from Kite.")
+        render_option_calculator()
+        st.divider()
+        render_trade_calculator()
         return
 
-    if fetched_at:
-        st.caption(f"As of {fetched_at}")
     if ltp_error:
         st.warning(f"Could not load underlying LTP for distance calculation: {ltp_error}")
     display_open_positions(
         open_positions,
         st.session_state.get("kite_open_positions_underlying_ltp", {}),
     )
+    st.divider()
+    render_option_calculator()
+    st.divider()
+    render_trade_calculator()

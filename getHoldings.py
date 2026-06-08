@@ -831,7 +831,7 @@ def fetch_and_display_holdings():
         st.error(f"Error fetching holdings. Please try again. Details: {exc}")
 
 
-if "request_token" in st.query_params and "access_token" not in st.session_state:
+if "access_token" not in st.session_state:
     bootstrap_kite_app("Zerodha Holdings")
 
 
@@ -1030,63 +1030,65 @@ with tab_historic_data:
             as_of_date = datetime.now().date().isoformat()
             historic_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
             pending_benchmark = st.session_state.get("historic_pending_benchmark", DEFAULT_MOMENTUM_BENCHMARK)
-            instruments_df = load_instrument_token_from_supabase(
-                pending_historic_tickers + [pending_benchmark]
-            )
-            token_map, missing_tickers = resolve_tokens_from_tickers(pending_historic_tickers, instruments_df)
-            benchmark_token_map, missing_benchmark = resolve_tokens_from_tickers([pending_benchmark], instruments_df)
 
-            if missing_tickers:
-                st.session_state["historic_missing_tickers"] = missing_tickers
-            else:
-                st.session_state.pop("historic_missing_tickers", None)
-
-            if missing_benchmark:
-                st.session_state["historic_missing_benchmark"] = pending_benchmark
-            else:
-                st.session_state.pop("historic_missing_benchmark", None)
-
-            if not token_map:
-                st.error("No instrument tokens found for the selected tickers.")
-                st.session_state.pop("historic_pending_tickers", None)
-            else:
-                token_rows = [
-                    {"Ticker": ticker, "instrument_token": token}
-                    for ticker, token in token_map.items()
-                ]
-                returns_df, dashboard_df, skipped_symbols, close_prices_df = build_historic_dashboard_frames(
-                    historic_kite,
-                    token_rows,
-                    as_of_date,
+            with st.spinner("Fetching historic dashboard..."):
+                instruments_df = load_instrument_token_from_supabase(
+                    pending_historic_tickers + [pending_benchmark]
                 )
-                st.session_state["historic_returns_df"] = returns_df
-                st.session_state["historic_dashboard_df"] = dashboard_df
-                st.session_state["historic_close_prices_df"] = close_prices_df
-                st.session_state["historic_skipped_symbols"] = skipped_symbols
-                st.session_state["historic_momentum_benchmark_used"] = pending_benchmark
+                token_map, missing_tickers = resolve_tokens_from_tickers(pending_historic_tickers, instruments_df)
+                benchmark_token_map, missing_benchmark = resolve_tokens_from_tickers([pending_benchmark], instruments_df)
 
-                if benchmark_token_map:
-                    try:
-                        momentum_df, momentum_failed_symbols = calculate_momentum_scores_from_kite(
-                            historic_kite,
-                            token_rows,
-                            benchmark_token_map[pending_benchmark],
-                            as_of_date,
-                        )
-                        st.session_state["historic_momentum_df"] = momentum_df
-                        st.session_state["historic_momentum_failed_symbols"] = momentum_failed_symbols
-                        st.session_state.pop("historic_momentum_error", None)
-                    except Exception as momentum_exc:
+                if missing_tickers:
+                    st.session_state["historic_missing_tickers"] = missing_tickers
+                else:
+                    st.session_state.pop("historic_missing_tickers", None)
+
+                if missing_benchmark:
+                    st.session_state["historic_missing_benchmark"] = pending_benchmark
+                else:
+                    st.session_state.pop("historic_missing_benchmark", None)
+
+                if not token_map:
+                    st.error("No instrument tokens found for the selected tickers.")
+                    st.session_state.pop("historic_pending_tickers", None)
+                else:
+                    token_rows = [
+                        {"Ticker": ticker, "instrument_token": token}
+                        for ticker, token in token_map.items()
+                    ]
+                    returns_df, dashboard_df, skipped_symbols, close_prices_df = build_historic_dashboard_frames(
+                        historic_kite,
+                        token_rows,
+                        as_of_date,
+                    )
+                    st.session_state["historic_returns_df"] = returns_df
+                    st.session_state["historic_dashboard_df"] = dashboard_df
+                    st.session_state["historic_close_prices_df"] = close_prices_df
+                    st.session_state["historic_skipped_symbols"] = skipped_symbols
+                    st.session_state["historic_momentum_benchmark_used"] = pending_benchmark
+
+                    if benchmark_token_map:
+                        try:
+                            momentum_df, momentum_failed_symbols = calculate_momentum_scores_from_kite(
+                                historic_kite,
+                                token_rows,
+                                benchmark_token_map[pending_benchmark],
+                                as_of_date,
+                            )
+                            st.session_state["historic_momentum_df"] = momentum_df
+                            st.session_state["historic_momentum_failed_symbols"] = momentum_failed_symbols
+                            st.session_state.pop("historic_momentum_error", None)
+                        except Exception as momentum_exc:
+                            st.session_state.pop("historic_momentum_df", None)
+                            st.session_state.pop("historic_momentum_failed_symbols", None)
+                            st.session_state["historic_momentum_error"] = str(momentum_exc)
+                    else:
                         st.session_state.pop("historic_momentum_df", None)
                         st.session_state.pop("historic_momentum_failed_symbols", None)
-                        st.session_state["historic_momentum_error"] = str(momentum_exc)
-                else:
-                    st.session_state.pop("historic_momentum_df", None)
-                    st.session_state.pop("historic_momentum_failed_symbols", None)
-                    st.session_state.pop("historic_momentum_error", None)
+                        st.session_state.pop("historic_momentum_error", None)
 
-                st.session_state.pop("historic_pending_tickers", None)
-                st.session_state.pop("historic_pending_benchmark", None)
+                    st.session_state.pop("historic_pending_tickers", None)
+                    st.session_state.pop("historic_pending_benchmark", None)
 
         except Exception as exc:
             if is_token_error(exc):
