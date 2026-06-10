@@ -352,6 +352,59 @@ def _sector_summary_column_config() -> dict[str, Any]:
     }
 
 
+def _display_sector_weight_pie_chart(sector_summary_df: pd.DataFrame) -> None:
+    if sector_summary_df.empty or not {"Sector", "Invested"}.issubset(sector_summary_df.columns):
+        return
+
+    chart_df = sector_summary_df.copy()
+    chart_df["Invested"] = pd.to_numeric(chart_df["Invested"], errors="coerce")
+    chart_df = chart_df.dropna(subset=["Invested"])
+    chart_df = chart_df[chart_df["Invested"].gt(0)]
+    if chart_df.empty:
+        return
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        st.info("Install matplotlib to display the sector weightage chart.")
+        return
+
+    colors = [
+        "#0F766E",
+        "#2563EB",
+        "#D97706",
+        "#64748B",
+        "#BE123C",
+        "#7C3AED",
+        "#0891B2",
+        "#4D7C0F",
+    ]
+    fig, ax = plt.subplots(figsize=(5.6, 3.4), dpi=120)
+    wedges, _, _ = ax.pie(
+        chart_df["Invested"],
+        labels=None,
+        autopct=lambda pct: f"{pct:.1f}%" if pct >= 3 else "",
+        startangle=90,
+        counterclock=False,
+        colors=colors[: len(chart_df)] if len(chart_df) <= len(colors) else None,
+        wedgeprops={"linewidth": 1, "edgecolor": "white"},
+        textprops={"fontsize": 8, "color": "#111827", "fontweight": "bold"},
+    )
+    ax.legend(
+        wedges,
+        chart_df["Sector"].astype(str),
+        loc="center left",
+        bbox_to_anchor=(1, 0.5),
+        frameon=False,
+        fontsize=8,
+    )
+    ax.set_title("Sector Weightage", fontsize=11, fontweight="bold", color="#111827")
+    ax.axis("equal")
+    fig.tight_layout()
+    st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
+
+
 def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None = None) -> int:
     visible_rows = max(row_count, min_rows)
     if max_rows is not None:
@@ -584,16 +637,16 @@ def _pullback_signal_style(score: Any, signal: Any) -> str:
     signal_text = str(signal or "").strip()
     score_value = pd.to_numeric(score, errors="coerce")
     if signal_text == "Watchlist - Below EMA20":
-        return "background-color: #FFF7E6; color: #8A5A00; font-weight: 700"
+        return "background-color: #2563EB; color: #FFFFFF; font-weight: 700"
     if pd.isna(score_value):
         return ""
     if score_value < 45:
-        return "background-color: #FDECEC; color: #9F1D1D; font-weight: 700"
+        return "background-color: #BE123C; color: #FFFFFF; font-weight: 700"
     if score_value < 65:
-        return "background-color: #F4F4F5; color: #52525B; font-weight: 700"
+        return "background-color: #64748B; color: #FFFFFF; font-weight: 700"
     if score_value < 80:
-        return "background-color: #EEF4FF; color: #2457A6; font-weight: 700"
-    return "background-color: #EAF7EF; color: #176B3A; font-weight: 700"
+        return "background-color: #D97706; color: #111827; font-weight: 700"
+    return "background-color: #0F766E; color: #FFFFFF; font-weight: 700"
 
 
 def highlight_momentum_rank_cells(data: pd.DataFrame) -> pd.DataFrame:
@@ -640,18 +693,18 @@ def _group_momentum_symbols_by_label(momentum_df: pd.DataFrame) -> dict[str, lis
 
 def _format_momentum_label_summary(label_groups: dict[str, list[str]]) -> str:
     summary_items = [
-        ("Strong Entry", "#EAF7EF", "#176B3A", label_groups["Strong Entry"]),
-        ("Watchlist - Below EMA20", "#FFF7E6", "#8A5A00", label_groups["Watchlist - Below EMA20"]),
-        ("Near Entry", "#EEF4FF", "#2457A6", label_groups["Near Entry"]),
-        ("Wait", "#F4F4F5", "#52525B", label_groups["Wait"]),
-        ("Avoid", "#FDECEC", "#9F1D1D", label_groups["Avoid"]),
+        ("Strong Entry", "#0F766E", "#FFFFFF", label_groups["Strong Entry"]),
+        ("Watchlist - Below EMA20", "#2563EB", "#FFFFFF", label_groups["Watchlist - Below EMA20"]),
+        ("Near Entry", "#D97706", "#111827", label_groups["Near Entry"]),
+        ("Wait", "#64748B", "#FFFFFF", label_groups["Wait"]),
+        ("Avoid", "#BE123C", "#FFFFFF", label_groups["Avoid"]),
     ]
     rows = []
     for label, background, foreground, symbols in summary_items:
         symbol_text = escape(", ".join(symbols)) if symbols else "-"
         rows.append(
             "<div style='display:flex;align-items:center;gap:0.5rem;'>"
-            f"<span style='min-width:5rem;font-weight:700;color:{foreground};'>{label}</span>"
+            f"<span style='min-width:5rem;font-weight:700;color:{background};'>{label}</span>"
             f"<span style='background:{background};color:{foreground};font-weight:700;"
             "padding:0.2rem 0.45rem;border-radius:0.25rem;'>"
             f"{symbol_text}</span></div>"
@@ -842,22 +895,35 @@ def display_kite_holdings(
             **dataframe_kwargs,
         )
 
-    def render_sector_grouped_holdings() -> str | None:
+    def render_sector_summary() -> None:
         sector_summary_df = _sector_holdings_summary_df(display_df)
         if not sector_summary_df.empty:
-            st.dataframe(
-                _style_pnl_columns(sector_summary_df),
-                width="stretch",
-                height=_dataframe_height(len(sector_summary_df), max_rows=8),
-                hide_index=True,
-                column_config=_sector_summary_column_config(),
-            )
+            chart_column, summary_column = st.columns([1, 2])
+            with chart_column:
+                _display_sector_weight_pie_chart(sector_summary_df)
+            with summary_column:
+                st.dataframe(
+                    _style_pnl_columns(sector_summary_df),
+                    width="stretch",
+                    height=_dataframe_height(len(sector_summary_df), max_rows=8),
+                    hide_index=True,
+                    column_config=_sector_summary_column_config(),
+                )
 
+    def render_sector_grouped_holdings() -> str | None:
         selected_symbol = None
+        total_display_invested = pd.to_numeric(display_df.get("Invested"), errors="coerce").sum()
         for sector, sector_df in display_df.groupby("Sector", sort=False):
-            sector_current = pd.to_numeric(sector_df.get("Current"), errors="coerce").sum()
             sector_invested = pd.to_numeric(sector_df.get("Invested"), errors="coerce").sum()
-            with st.expander(f"{sector} ({len(sector_df)} holdings | {sector_current:,.2f})", expanded=True):
+            sector_weight = (
+                sector_invested / total_display_invested * 100
+                if total_display_invested
+                else 0
+            )
+            with st.expander(
+                f"{sector} ({len(sector_df)} holdings | Invested {sector_invested:,.2f} | Weight {sector_weight:.2f}%)",
+                expanded=True,
+            ):
                 holdings_table_df = sector_df.drop(columns=["Sector"], errors="ignore")
                 if sector_invested:
                     holdings_table_df["Weight %"] = (
@@ -883,30 +949,36 @@ def display_kite_holdings(
                         selected_symbol = str(sector_df.iloc[selected_row_index]["Symbol"]).upper().strip()
         return selected_symbol
 
+    selected_symbol = None
+    has_sector_grouping = "Sector" in display_df.columns
+
+    if has_sector_grouping:
+        render_sector_summary()
+
     if selected_batches_df is not None or selected_batches_error is not None:
         holdings_column, batches_column = st.columns([3, 1])
         with holdings_column:
             selected_symbol = (
                 render_sector_grouped_holdings()
-                if "Sector" in display_df.columns
+                if has_sector_grouping
                 else None
             )
-            if "Sector" not in display_df.columns:
+            if not has_sector_grouping:
                 selection = render_holdings_table(display_df, table_key=selection_key)
     else:
         selected_symbol = (
             render_sector_grouped_holdings()
-            if "Sector" in display_df.columns
+            if has_sector_grouping
             else None
         )
-        if "Sector" not in display_df.columns:
+        if not has_sector_grouping:
             selection = render_holdings_table(display_df, table_key=selection_key)
 
     if not selection_key:
         return None
 
     batches_df = selected_batches_df if selected_batches_df is not None else pd.DataFrame()
-    if "Sector" not in display_df.columns:
+    if not has_sector_grouping:
         selected_rows = selection.selection.rows if selection.selection else []
         if selected_rows:
             selected_row_index = selected_rows[0]
