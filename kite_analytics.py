@@ -455,6 +455,14 @@ VOLUME_GAIN_COLUMNS = [
     "1M Volume Gain %",
 ]
 
+MOMENTUM_PALETTE = {
+    "entry": ("#0F766E", "#FFFFFF"),
+    "watch": ("#2563EB", "#FFFFFF"),
+    "near": ("#D97706", "#111827"),
+    "wait": ("#64748B", "#FFFFFF"),
+    "avoid": ("#BE123C", "#FFFFFF"),
+}
+
 
 def build_historic_dashboard_frames(
     _kite: KiteConnect,
@@ -639,10 +647,10 @@ def _get_symbol_range_pct(symbol_values: pd.Series) -> float | None:
 
 def _format_symbol_color_summary(color_groups: dict[str, list[str]]) -> str:
     summary_items = [
-        (">= 75", "#16a34a", "#ffffff", color_groups["green"]),
-        (">= 50 and < 75", "#84cc16", "#1a2e05", color_groups["light_green"]),
-        (">= 25 and < 50", "#f97316", "#ffffff", color_groups["orange"]),
-        ("< 25", "#dc2626", "#ffffff", color_groups["red"]),
+        (">= 75", *MOMENTUM_PALETTE["entry"], color_groups["green"]),
+        (">= 50 and < 75", *MOMENTUM_PALETTE["near"], color_groups["light_green"]),
+        (">= 25 and < 50", *MOMENTUM_PALETTE["wait"], color_groups["orange"]),
+        ("< 25", *MOMENTUM_PALETTE["avoid"], color_groups["red"]),
     ]
     rows = []
     for label, background, foreground, symbols in summary_items:
@@ -683,13 +691,13 @@ def highlight_numeric_scale_cells(data: pd.DataFrame, columns: list[str]) -> pd.
 
             position = (value - min_value) / (max_value - min_value) * 100
             if position < 25:
-                styles.at[index, column] = "color: #dc2626; font-weight: 700"
+                styles.at[index, column] = "color: #BE123C; font-weight: 700"
             elif position < 50:
-                styles.at[index, column] = "color: #f97316; font-weight: 700"
+                styles.at[index, column] = "color: #64748B; font-weight: 700"
             elif position < 75:
-                styles.at[index, column] = "color: #84cc16; font-weight: 700"
+                styles.at[index, column] = "color: #D97706; font-weight: 700"
             else:
-                styles.at[index, column] = "color: #16a34a; font-weight: 700"
+                styles.at[index, column] = "color: #0F766E; font-weight: 700"
     return styles
 
 
@@ -701,10 +709,10 @@ def highlight_ltp_cells(value: str) -> str:
             return "font-weight: 700"
 
         if distance_pct > 0:
-            return "color: #047857; font-weight: 700"
+            return "color: #0F766E; font-weight: 700"
         if distance_pct < 0:
-            return "color: #b91c1c; font-weight: 700"
-        return "color: #475569; font-weight: 700"
+            return "color: #BE123C; font-weight: 700"
+        return "color: #64748B; font-weight: 700"
 
     if isinstance(value, str) and (
         value.startswith("Rng:") # or value.startswith("Buy:")
@@ -716,14 +724,14 @@ def highlight_ltp_cells(value: str) -> str:
             return "font-weight: 700"
 
         if range_pct < 25:
-            return "background-color: #dc2626; color: #ffffff; font-weight: 700"
+            return "background-color: #BE123C; color: #FFFFFF; font-weight: 700"
         if range_pct < 50:
-            return "background-color: #f97316; color: #ffffff; font-weight: 700"
+            return "background-color: #64748B; color: #FFFFFF; font-weight: 700"
         if range_pct < 75:
-            return "background-color: #84cc16; color: #1a2e05; font-weight: 700"
-        return "background-color: #16a34a; color: #ffffff; font-weight: 700"
+            return "background-color: #D97706; color: #111827; font-weight: 700"
+        return "background-color: #0F766E; color: #FFFFFF; font-weight: 700"
     if isinstance(value, str) and value.startswith("[") and value.endswith("]"):
-        return "background-color: #bae6fd; color: #082f49; font-weight: 600"
+        return "background-color: #2563EB; color: #FFFFFF; font-weight: 600"
     if isinstance(value, str) and value.startswith("LTP:"):
-        return "background-color: #facc15; color: #422006; font-weight: 700"
+        return "background-color: #D97706; color: #111827; font-weight: 700"
     return ""

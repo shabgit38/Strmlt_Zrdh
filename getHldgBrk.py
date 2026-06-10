@@ -1761,7 +1761,6 @@ def display_selected_holding_batches(symbol: str | None, holdings_breakdown_df: 
         st.info("Select a holding row to view batch details.")
         return
 
-    st.subheader(str(symbol).upper())
     if holdings_breakdown_df.empty:
         st.info("No holdings breakdown data loaded.")
         return

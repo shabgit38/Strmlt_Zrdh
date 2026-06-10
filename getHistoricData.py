@@ -9,6 +9,38 @@ import streamlit as st
 
 st.set_page_config(layout="wide") 
 
+WAIT_BUTTON_COLOR = "#64748B"
+
+
+def _apply_button_palette() -> None:
+    st.markdown(
+        f"""
+        <style>
+        div.stButton > button,
+        div.stButton > button[kind="primary"] {{
+            background-color: {WAIT_BUTTON_COLOR};
+            border-color: {WAIT_BUTTON_COLOR};
+            color: #FFFFFF;
+        }}
+        div.stButton > button:hover,
+        div.stButton > button[kind="primary"]:hover {{
+            background-color: #475569;
+            border-color: #475569;
+            color: #FFFFFF;
+        }}
+        div.stButton > button:focus,
+        div.stButton > button[kind="primary"]:focus {{
+            box-shadow: 0 0 0 0.15rem rgba(100, 116, 139, 0.25);
+            color: #FFFFFF;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+_apply_button_palette()
+
 #st.set_page_config(
 #    page_title="Ex-stream-ly Cool App",
 #    page_icon="🧊",

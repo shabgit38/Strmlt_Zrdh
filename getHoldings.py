@@ -42,6 +42,37 @@ st.set_page_config(layout="wide")
 
 SUPABASE_INDICES_TABLE_NAME = "Indices_constituents"
 DEFAULT_MOMENTUM_BENCHMARK = "NIFTY 50"
+WAIT_BUTTON_COLOR = "#64748B"
+
+
+def _apply_button_palette() -> None:
+    st.markdown(
+        f"""
+        <style>
+        div.stButton > button,
+        div.stButton > button[kind="primary"] {{
+            background-color: {WAIT_BUTTON_COLOR};
+            border-color: {WAIT_BUTTON_COLOR};
+            color: #FFFFFF;
+        }}
+        div.stButton > button:hover,
+        div.stButton > button[kind="primary"]:hover {{
+            background-color: #475569;
+            border-color: #475569;
+            color: #FFFFFF;
+        }}
+        div.stButton > button:focus,
+        div.stButton > button[kind="primary"]:focus {{
+            box-shadow: 0 0 0 0.15rem rgba(100, 116, 139, 0.25);
+            color: #FFFFFF;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+_apply_button_palette()
 
 
 def _supabase_headers(supabase_key: str, *, write: bool = False) -> dict[str, str]:
@@ -910,6 +941,15 @@ def display_kite_holdings(
                     column_config=_sector_summary_column_config(),
                 )
 
+    batches_df = selected_batches_df if selected_batches_df is not None else pd.DataFrame()
+
+    def render_selected_batches_panel(selected_symbol: str | None) -> None:
+        if selected_batches_df is None and selected_batches_error is None:
+            return
+        if selected_batches_error:
+            st.warning(f"Could not load holdings breakdown from Supabase: {selected_batches_error}")
+        display_selected_holding_batches(selected_symbol, batches_df)
+
     def render_sector_grouped_holdings() -> str | None:
         selected_symbol = None
         total_display_invested = pd.to_numeric(display_df.get("Invested"), errors="coerce").sum()
@@ -921,9 +961,13 @@ def display_kite_holdings(
                 else 0
             )
             with st.expander(
-                f"{sector} ({len(sector_df)} holdings | Invested {sector_invested:,.2f} | Weight {sector_weight:.2f}%)",
+                f"{sector} ({len(sector_df)} | Invested {sector_invested:,.2f} | Weight {sector_weight:.2f}%)",
                 expanded=True,
             ):
+                sector_table_column = st.container()
+                sector_batches_column = None
+                if selected_batches_df is not None or selected_batches_error is not None:
+                    sector_table_column, sector_batches_column = st.columns([3, 1])
                 holdings_table_df = sector_df.drop(columns=["Sector"], errors="ignore")
                 if sector_invested:
                     holdings_table_df["Weight %"] = (
@@ -939,7 +983,8 @@ def display_kite_holdings(
                 if selection_key:
                     sector_key = _normalized_symbol_value(sector).replace(" ", "_") or "UNMAPPED"
                     table_key = f"{selection_key}_{sector_key}"
-                selection = render_holdings_table(holdings_table_df, table_key=table_key)
+                with sector_table_column:
+                    selection = render_holdings_table(holdings_table_df, table_key=table_key)
                 if not selection_key or selected_symbol is not None:
                     continue
                 selected_rows = selection.selection.rows if selection.selection else []
@@ -947,6 +992,9 @@ def display_kite_holdings(
                     selected_row_index = selected_rows[0]
                     if selected_row_index < len(sector_df):
                         selected_symbol = str(sector_df.iloc[selected_row_index]["Symbol"]).upper().strip()
+                        if sector_batches_column is not None:
+                            with sector_batches_column:
+                                render_selected_batches_panel(selected_symbol)
         return selected_symbol
 
     selected_symbol = None
@@ -955,29 +1003,17 @@ def display_kite_holdings(
     if has_sector_grouping:
         render_sector_summary()
 
-    if selected_batches_df is not None or selected_batches_error is not None:
-        holdings_column, batches_column = st.columns([3, 1])
-        with holdings_column:
-            selected_symbol = (
-                render_sector_grouped_holdings()
-                if has_sector_grouping
-                else None
-            )
-            if not has_sector_grouping:
-                selection = render_holdings_table(display_df, table_key=selection_key)
-    else:
-        selected_symbol = (
-            render_sector_grouped_holdings()
-            if has_sector_grouping
-            else None
-        )
-        if not has_sector_grouping:
-            selection = render_holdings_table(display_df, table_key=selection_key)
+    selected_symbol = (
+        render_sector_grouped_holdings()
+        if has_sector_grouping
+        else None
+    )
+    if not has_sector_grouping:
+        selection = render_holdings_table(display_df, table_key=selection_key)
 
     if not selection_key:
         return None
 
-    batches_df = selected_batches_df if selected_batches_df is not None else pd.DataFrame()
     if not has_sector_grouping:
         selected_rows = selection.selection.rows if selection.selection else []
         if selected_rows:
@@ -986,17 +1022,11 @@ def display_kite_holdings(
                 selected_symbol = str(display_df.iloc[selected_row_index]["Symbol"]).upper().strip()
 
     if not selected_symbol:
-        if selected_batches_df is not None or selected_batches_error is not None:
-            with batches_column:
-                if selected_batches_error:
-                    st.warning(f"Could not load holdings breakdown from Supabase: {selected_batches_error}")
-                display_selected_holding_batches(None, batches_df)
+        if not has_sector_grouping:
+            render_selected_batches_panel(None)
         return None
-    if selected_batches_df is not None or selected_batches_error is not None:
-        with batches_column:
-            if selected_batches_error:
-                st.warning(f"Could not load holdings breakdown from Supabase: {selected_batches_error}")
-            display_selected_holding_batches(selected_symbol, batches_df)
+    if not has_sector_grouping:
+        render_selected_batches_panel(selected_symbol)
     return selected_symbol
 
 
