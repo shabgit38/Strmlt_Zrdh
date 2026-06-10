@@ -84,13 +84,13 @@ def find_instruments_file_from_upload():
 
     # Filter to EQ instruments on NSE/BSE only
     before = len(df)
-    print(f"Row count before filtering EQ instruments on NSE/BSE/INDICES: {before}")
+    print(f"Row count before filtering EQ instruments on NSE/BSE: {before}")
     df = df[
         (df["instrument_type"].str.upper() == EQUITY_INSTRUMENT_TYPE) &
-        (df["exchange"].str.upper().isin({"NSE", "BSE","INDICES"}))
+        (df["exchange"].str.upper().isin({"NSE", "BSE"}))
     ]
     filtered_out = before - len(df)
-    print(f"Filtered out {filtered_out} non-EQ or non-NSE/BSE/INDICES row(s). Keeping {len(df)} EQ rows.")
+    print(f"Filtered out {filtered_out} non-EQ or non-NSE/BSE row(s). Keeping {len(df)} EQ rows.")
     if filtered_out:
         st.info(f"Filtered out {filtered_out:,} non-EQ or non-NSE/BSE row(s). Keeping {len(df):,} EQ rows.")
     

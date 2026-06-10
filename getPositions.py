@@ -298,33 +298,48 @@ def render_option_calculator() -> None:
     if "option_calculator_df" not in st.session_state:
         st.session_state["option_calculator_df"] = _empty_option_calculator_df()
 
-    editor_df = _calculate_option_rows(st.session_state["option_calculator_df"])
+    editor_df = _calculate_option_rows(st.session_state["option_calculator_df"])[OPTION_CALCULATOR_INPUT_COLUMNS]
     edited_df = st.data_editor(
         editor_df,
         key="option_calculator_editor",
         width="stretch",
         hide_index=True,
         num_rows="dynamic",
-        disabled=OPTION_CALCULATOR_CALCULATED_COLUMNS,
-        column_order=OPTION_CALCULATOR_COLUMNS,
+        column_order=OPTION_CALCULATOR_INPUT_COLUMNS,
         column_config={
             "Symbol": st.column_config.TextColumn("Symbol", width="small"),
             "Open Qty": st.column_config.NumberColumn("Open Qty", width="small", format="%d"),
-            "Days_Expiry": st.column_config.NumberColumn("Days_Expiry", width="small", format="%d"),
-            "Breakeven": st.column_config.NumberColumn("Breakeven", width="small", format="%.2f"),
-            "Dist_Spot": st.column_config.TextColumn("Dist_Spot", width="small"),
             "Avg Price": st.column_config.NumberColumn("Avg Price", width="small", format="%.2f"),
             "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
             "Spot": st.column_config.NumberColumn("Spot", width="small", format="%.2f"),
-            "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
-            "Current": st.column_config.NumberColumn("Current", width="small", format="%.2f"),
-            "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
-            "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
         },
     )
     if _option_calculator_inputs_changed(st.session_state["option_calculator_df"], edited_df):
         st.session_state["option_calculator_df"] = _calculate_option_rows(edited_df)
         st.rerun()
+
+    result_df = _calculate_option_rows(st.session_state["option_calculator_df"])
+    result_df = result_df[result_df[OPTION_CALCULATOR_INPUT_COLUMNS].notna().any(axis=1)]
+    if not result_df.empty:
+        st.dataframe(
+            _style_pnl_columns(result_df),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Symbol": st.column_config.TextColumn("Symbol", width="small"),
+                "Open Qty": st.column_config.NumberColumn("Open Qty", width="small", format="%d"),
+                "Days_Expiry": st.column_config.NumberColumn("Days_Expiry", width="small", format="%d"),
+                "Breakeven": st.column_config.NumberColumn("Breakeven", width="small", format="%.2f"),
+                "Dist_Spot": st.column_config.TextColumn("Dist_Spot", width="small"),
+                "Avg Price": st.column_config.NumberColumn("Avg Price", width="small", format="%.2f"),
+                "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
+                "Spot": st.column_config.NumberColumn("Spot", width="small", format="%.2f"),
+                "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
+                "Current": st.column_config.NumberColumn("Current", width="small", format="%.2f"),
+                "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
+                "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
+            },
+        )
 
 
 def _last_tuesday(year: int, month: int) -> date:
@@ -335,7 +350,9 @@ def _last_tuesday(year: int, month: int) -> date:
 
 
 def _parse_option_position(symbol: Any) -> dict[str, Any]:
-    match = OPTION_SYMBOL_PATTERN.match(str(symbol or "").upper().strip())
+    if symbol is None or pd.isna(symbol):
+        return {}
+    match = OPTION_SYMBOL_PATTERN.match(str(symbol).upper().strip())
     if not match:
         return {}
 
@@ -376,9 +393,11 @@ def _option_underlying_instrument(symbol: Any) -> str | None:
 
 def _format_breakeven_distance(symbol: Any, breakeven: Any, underlying_ltp: dict[str, float]) -> str | None:
     instrument = _option_underlying_instrument(symbol)
-    current = pd.to_numeric(underlying_ltp.get(instrument or ""), errors="coerce")
+    if not instrument:
+        return None
+    current = pd.to_numeric(underlying_ltp.get(instrument), errors="coerce")
     breakeven_value = pd.to_numeric(breakeven, errors="coerce")
-    if not instrument or pd.isna(current) or pd.isna(breakeven_value) or current == 0:
+    if pd.isna(current) or pd.isna(breakeven_value) or current == 0:
         return None
 
     distance = abs(float(breakeven_value) - float(current))

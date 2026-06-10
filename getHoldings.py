@@ -250,6 +250,108 @@ def _style_kite_holdings(display_df: pd.DataFrame, rng_colors: dict[str, str]):
     return styler.map(symbol_style, subset=["Symbol"])
 
 
+def _sector_by_symbol_from_breakdown(holdings_breakdown_df: pd.DataFrame) -> dict[str, str]:
+    if holdings_breakdown_df.empty or not {"symbol", "sector"}.issubset(holdings_breakdown_df.columns):
+        return {}
+
+    breakdown_df = holdings_breakdown_df.copy()
+    if "row_type" in breakdown_df.columns:
+        summary_rows = breakdown_df["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY")
+        if summary_rows.any():
+            breakdown_df = breakdown_df[summary_rows]
+
+    sector_df = (
+        breakdown_df.assign(symbol_key=breakdown_df["symbol"].astype(str).str.upper().str.strip())
+        .dropna(subset=["symbol_key", "sector"])
+        .drop_duplicates("symbol_key")
+    )
+    sector_by_symbol = sector_df.set_index("symbol_key")["sector"].astype(str).str.strip().to_dict()
+    sector_by_fallback_symbol = {
+        _ltp_match_symbol(symbol): sector
+        for symbol, sector in sector_by_symbol.items()
+        if _ltp_match_symbol(symbol) not in sector_by_symbol
+    }
+    return {**sector_by_fallback_symbol, **sector_by_symbol}
+
+
+def _add_sector_to_holdings_display(display_df: pd.DataFrame, holdings_breakdown_df: pd.DataFrame) -> pd.DataFrame:
+    if display_df.empty or "Symbol" not in display_df.columns:
+        return display_df
+
+    sector_by_symbol = _sector_by_symbol_from_breakdown(holdings_breakdown_df)
+    if not sector_by_symbol:
+        return display_df
+
+    display_df = display_df.copy()
+    symbol_key = display_df["Symbol"].astype(str).str.upper().str.strip()
+    fallback_symbol_key = symbol_key.map(_ltp_match_symbol)
+    display_df["Sector"] = (
+        symbol_key.map(sector_by_symbol)
+        .fillna(fallback_symbol_key.map(sector_by_symbol))
+        .replace("", pd.NA)
+        .fillna("Unmapped")
+    )
+    ordered_columns = ["Sector"] + [column for column in display_df.columns if column != "Sector"]
+    return display_df[ordered_columns].sort_values(["Sector", "Symbol"], kind="stable")
+
+
+def _sector_holdings_summary_df(display_df: pd.DataFrame) -> pd.DataFrame:
+    if display_df.empty or "Sector" not in display_df.columns:
+        return pd.DataFrame()
+
+    summary_df = (
+        display_df.assign(
+            Invested=pd.to_numeric(display_df.get("Invested"), errors="coerce"),
+            Current=pd.to_numeric(display_df.get("Current"), errors="coerce"),
+            **{"P&L": pd.to_numeric(display_df.get("P&L"), errors="coerce")},
+        )
+        .groupby("Sector", dropna=False)
+        .agg(
+            Holdings=("Symbol", "count"),
+            Invested=("Invested", "sum"),
+            Current=("Current", "sum"),
+            **{"P&L": ("P&L", "sum")},
+        )
+        .reset_index()
+    )
+    summary_df["P&L %"] = summary_df["P&L"].where(summary_df["Invested"].ne(0)) / summary_df["Invested"] * 100
+    total_invested = pd.to_numeric(summary_df["Invested"], errors="coerce").sum()
+    if total_invested:
+        summary_df["Weight %"] = summary_df["Invested"] / total_invested * 100
+    else:
+        summary_df["Weight %"] = pd.NA
+    summary_df = summary_df[["Sector", "Holdings", "Invested", "Weight %", "Current", "P&L", "P&L %"]]
+    return summary_df.sort_values("Current", ascending=False, kind="stable")
+
+
+def _kite_holdings_column_config() -> dict[str, Any]:
+    return {
+        "Sector": st.column_config.TextColumn("Sector", width="medium"),
+        "Symbol": st.column_config.TextColumn("Symbol", width="small"),
+        "Quantity": st.column_config.NumberColumn("Quantity", width="small", format="%d"),
+        "Avg Price": st.column_config.NumberColumn("Avg Price", width="small", format="%.2f"),
+        "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
+        "Current": st.column_config.NumberColumn("Current", width="small", format="%.2f"),
+        "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
+        "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
+        "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
+        "Weight %": st.column_config.NumberColumn("Weight %", width="small", format="%.2f%%"),
+        "DayChg %": st.column_config.NumberColumn("DayChg %", width="small", format="%.2f%%"),
+    }
+
+
+def _sector_summary_column_config() -> dict[str, Any]:
+    return {
+        "Sector": st.column_config.TextColumn("Sector", width="medium"),
+        "Holdings": st.column_config.NumberColumn("Holdings", width="small", format="%d"),
+        "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
+        "Current": st.column_config.NumberColumn("Current", width="small", format="%.2f"),
+        "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
+        "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
+        "Weight %": st.column_config.NumberColumn("Weight %", width="small", format="%.2f%%"),
+    }
+
+
 def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None = None) -> int:
     visible_rows = max(row_count, min_rows)
     if max_rows is not None:
@@ -482,16 +584,16 @@ def _pullback_signal_style(score: Any, signal: Any) -> str:
     signal_text = str(signal or "").strip()
     score_value = pd.to_numeric(score, errors="coerce")
     if signal_text == "Watchlist - Below EMA20":
-        return "background-color: #0ea5e9; color: #ffffff; font-weight: 700"
+        return "background-color: #FFF7E6; color: #8A5A00; font-weight: 700"
     if pd.isna(score_value):
         return ""
     if score_value < 45:
-        return "background-color: #dc2626; color: #ffffff; font-weight: 700"
+        return "background-color: #FDECEC; color: #9F1D1D; font-weight: 700"
     if score_value < 65:
-        return "background-color: #f97316; color: #ffffff; font-weight: 700"
+        return "background-color: #F4F4F5; color: #52525B; font-weight: 700"
     if score_value < 80:
-        return "background-color: #facc15; color: #422006; font-weight: 700"
-    return "background-color: #16a34a; color: #ffffff; font-weight: 700"
+        return "background-color: #EEF4FF; color: #2457A6; font-weight: 700"
+    return "background-color: #EAF7EF; color: #176B3A; font-weight: 700"
 
 
 def highlight_momentum_rank_cells(data: pd.DataFrame) -> pd.DataFrame:
@@ -538,18 +640,18 @@ def _group_momentum_symbols_by_label(momentum_df: pd.DataFrame) -> dict[str, lis
 
 def _format_momentum_label_summary(label_groups: dict[str, list[str]]) -> str:
     summary_items = [
-        ("Strong Entry", "#16a34a", "#ffffff", label_groups["Strong Entry"]),
-        ("Watchlist - Below EMA20", "#0ea5e9", "#ffffff", label_groups["Watchlist - Below EMA20"]),
-        ("Near Entry", "#facc15", "#422006", label_groups["Near Entry"]),
-        ("Wait", "#f97316", "#ffffff", label_groups["Wait"]),
-        ("Avoid", "#dc2626", "#ffffff", label_groups["Avoid"]),
+        ("Strong Entry", "#EAF7EF", "#176B3A", label_groups["Strong Entry"]),
+        ("Watchlist - Below EMA20", "#FFF7E6", "#8A5A00", label_groups["Watchlist - Below EMA20"]),
+        ("Near Entry", "#EEF4FF", "#2457A6", label_groups["Near Entry"]),
+        ("Wait", "#F4F4F5", "#52525B", label_groups["Wait"]),
+        ("Avoid", "#FDECEC", "#9F1D1D", label_groups["Avoid"]),
     ]
     rows = []
     for label, background, foreground, symbols in summary_items:
         symbol_text = escape(", ".join(symbols)) if symbols else "-"
         rows.append(
             "<div style='display:flex;align-items:center;gap:0.5rem;'>"
-            f"<span style='min-width:5rem;font-weight:700;color:{background};'>{label}</span>"
+            f"<span style='min-width:5rem;font-weight:700;color:{foreground};'>{label}</span>"
             f"<span style='background:{background};color:{foreground};font-weight:700;"
             "padding:0.2rem 0.45rem;border-radius:0.25rem;'>"
             f"{symbol_text}</span></div>"
@@ -690,6 +792,12 @@ def display_kite_holdings(
             "day_change_percentage": "DayChg %",
         }
     )
+    breakdown_df_for_sector = (
+        selected_batches_df
+        if selected_batches_df is not None
+        else _holdings_breakdown_state_df()
+    )
+    display_df = _add_sector_to_holdings_display(display_df, breakdown_df_for_sector)
     #st.table(display_df, width="stretch", height=_dataframe_height(len(display_df)))
     col1, col2 ,col3= st.columns(3)
     with col1:
@@ -717,57 +825,101 @@ def display_kite_holdings(
             st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame())
         )
     )
-    dataframe_kwargs = {}
-    if selection_key:
-        dataframe_kwargs = {
-            "key": selection_key,
-            "on_select": "rerun",
-            "selection_mode": "single-row",
-        }
-
-    def render_holdings_table():
+    def render_holdings_table(table_df: pd.DataFrame, *, table_key: str | None = None):
+        dataframe_kwargs = {}
+        if table_key:
+            dataframe_kwargs = {
+                "key": table_key,
+                "on_select": "rerun",
+                "selection_mode": "single-row",
+            }
         return st.dataframe(
-            _style_kite_holdings(display_df, rng_colors),
+            _style_kite_holdings(table_df, rng_colors),
             width="stretch",
-            height=_dataframe_height(len(display_df), max_rows=15),
+            height=_dataframe_height(len(table_df), max_rows=15),
             hide_index=False,
-            column_config={
-                "Symbol": st.column_config.TextColumn("Symbol", width="small"),
-                "Quantity": st.column_config.NumberColumn("Quantity", width="small",format="%d"),
-                "Avg Price": st.column_config.NumberColumn("Avg Price", width="small", format="%.2f"),
-                "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
-                "Current": st.column_config.NumberColumn("Current", width="small", format="%.2f"),
-                "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
-                "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
-                "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
-                "DayChg%": st.column_config.NumberColumn("DayChg %", width="small", format="%.2f%%"),
-            },
+            column_config=_kite_holdings_column_config(),
             **dataframe_kwargs,
         )
+
+    def render_sector_grouped_holdings() -> str | None:
+        sector_summary_df = _sector_holdings_summary_df(display_df)
+        if not sector_summary_df.empty:
+            st.dataframe(
+                _style_pnl_columns(sector_summary_df),
+                width="stretch",
+                height=_dataframe_height(len(sector_summary_df), max_rows=8),
+                hide_index=True,
+                column_config=_sector_summary_column_config(),
+            )
+
+        selected_symbol = None
+        for sector, sector_df in display_df.groupby("Sector", sort=False):
+            sector_current = pd.to_numeric(sector_df.get("Current"), errors="coerce").sum()
+            sector_invested = pd.to_numeric(sector_df.get("Invested"), errors="coerce").sum()
+            with st.expander(f"{sector} ({len(sector_df)} holdings | {sector_current:,.2f})", expanded=True):
+                holdings_table_df = sector_df.drop(columns=["Sector"], errors="ignore")
+                if sector_invested:
+                    holdings_table_df["Weight %"] = (
+                        pd.to_numeric(holdings_table_df.get("Invested"), errors="coerce") / sector_invested * 100
+                    )
+                else:
+                    holdings_table_df["Weight %"] = pd.NA
+                if "Invested" in holdings_table_df.columns:
+                    invested_column_index = holdings_table_df.columns.get_loc("Invested")
+                    weight_column = holdings_table_df.pop("Weight %")
+                    holdings_table_df.insert(invested_column_index + 1, "Weight %", weight_column)
+                table_key = None
+                if selection_key:
+                    sector_key = _normalized_symbol_value(sector).replace(" ", "_") or "UNMAPPED"
+                    table_key = f"{selection_key}_{sector_key}"
+                selection = render_holdings_table(holdings_table_df, table_key=table_key)
+                if not selection_key or selected_symbol is not None:
+                    continue
+                selected_rows = selection.selection.rows if selection.selection else []
+                if selected_rows:
+                    selected_row_index = selected_rows[0]
+                    if selected_row_index < len(sector_df):
+                        selected_symbol = str(sector_df.iloc[selected_row_index]["Symbol"]).upper().strip()
+        return selected_symbol
 
     if selected_batches_df is not None or selected_batches_error is not None:
         holdings_column, batches_column = st.columns([3, 1])
         with holdings_column:
-            selection = render_holdings_table()
+            selected_symbol = (
+                render_sector_grouped_holdings()
+                if "Sector" in display_df.columns
+                else None
+            )
+            if "Sector" not in display_df.columns:
+                selection = render_holdings_table(display_df, table_key=selection_key)
     else:
-        selection = render_holdings_table()
+        selected_symbol = (
+            render_sector_grouped_holdings()
+            if "Sector" in display_df.columns
+            else None
+        )
+        if "Sector" not in display_df.columns:
+            selection = render_holdings_table(display_df, table_key=selection_key)
 
     if not selection_key:
         return None
 
     batches_df = selected_batches_df if selected_batches_df is not None else pd.DataFrame()
-    selected_rows = selection.selection.rows if selection.selection else []
-    if not selected_rows:
+    if "Sector" not in display_df.columns:
+        selected_rows = selection.selection.rows if selection.selection else []
+        if selected_rows:
+            selected_row_index = selected_rows[0]
+            if selected_row_index < len(display_df) and "Symbol" in display_df.columns:
+                selected_symbol = str(display_df.iloc[selected_row_index]["Symbol"]).upper().strip()
+
+    if not selected_symbol:
         if selected_batches_df is not None or selected_batches_error is not None:
             with batches_column:
                 if selected_batches_error:
                     st.warning(f"Could not load holdings breakdown from Supabase: {selected_batches_error}")
                 display_selected_holding_batches(None, batches_df)
         return None
-    selected_row_index = selected_rows[0]
-    if selected_row_index >= len(display_df) or "Symbol" not in display_df.columns:
-        return None
-    selected_symbol = str(display_df.iloc[selected_row_index]["Symbol"]).upper().strip()
     if selected_batches_df is not None or selected_batches_error is not None:
         with batches_column:
             if selected_batches_error:
