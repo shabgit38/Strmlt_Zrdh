@@ -51,6 +51,15 @@ NUMERIC_HOLDINGS_COLUMNS = [
     "batch_pnl_pct",
 ]
 INTEGER_HOLDINGS_COLUMNS = ["total_qty","age_days","batch_qty", "exit_qty"]
+SUPABASE_EXCLUDED_WRITE_COLUMNS = {
+    "id",
+    "created_at",
+    "updated_at",
+    "pnl_pct",
+    "batch_pnl",
+    "batch_pnl_pct",
+    "present_age",
+}
 
 def _json_safe_value(value: Any) -> Any:
     """Convert pandas/numpy values into JSON-safe primitives for Supabase."""
@@ -815,6 +824,7 @@ def _render_batch_form(
             {
                 "row_type": "BATCH",
                 "symbol": source.get("symbol"),
+                "sector": summary.get("sector"),
                 "isin": source.get("isin"),
                 "trade_date": trade_date,
                 "batch_qty": batch_qty,
@@ -1290,7 +1300,6 @@ def _render_batch_actions(batches: list[pd.Series], *, key_prefix: str) -> None:
                 width="content",
             ):
                 st.session_state["holdings_breakdown_editor"] = {"mode": "edit_batch", "id": row_id}
-                st.rerun()
             if st.button(
                 "",
                 key=f"{row_key}_exit",
@@ -1299,7 +1308,6 @@ def _render_batch_actions(batches: list[pd.Series], *, key_prefix: str) -> None:
                 width="content",
             ):
                 st.session_state["holdings_breakdown_editor"] = {"mode": "exit_batch", "id": row_id}
-                st.rerun()
 
 
 def _render_selected_batch_editor(
@@ -1400,15 +1408,12 @@ def display_holdings_breakdown_preview(
                     with action_cols[0]:
                         if st.button("", key=f"{key_prefix}_add_batch", icon=":material/add:", help="Add batch"):
                             st.session_state["holdings_breakdown_editor"] = {"mode": "add_batch", "id": row_id}
-                            st.rerun()
                     with action_cols[1]:
                         if st.button("", key=f"{key_prefix}_edit", icon=":material/edit:", help="Edit holding", width="content"):
                             st.session_state["holdings_breakdown_editor"] = {"mode": "edit_summary", "id": row_id}
-                            st.rerun()
                     with action_cols[2]:
                         if st.button("", key=f"{key_prefix}_exit", icon=":material/logout:", help="Exit holding", width="content"):
                             st.session_state["holdings_breakdown_editor"] = {"mode": "exit_summary", "id": row_id}
-                            st.rerun()
 
                 editor = st.session_state.get("holdings_breakdown_editor") or {}
                 if editor.get("id") == row_id and editor.get("mode") == "edit_summary":

@@ -944,7 +944,6 @@ def display_kite_holdings(
     batches_df = selected_batches_df if selected_batches_df is not None else pd.DataFrame()
     selected_symbol_state_key = f"{selection_key or 'kite_holdings'}_selected_holding_symbol"
     selected_sector_state_key = f"{selection_key or 'kite_holdings'}_selected_holding_sector"
-    selection_version_state_key = f"{selection_key or 'kite_holdings'}_selection_version"
 
     def render_selected_batches_panel(selected_symbol: str | None) -> None:
         if selected_batches_df is None and selected_batches_error is None:
@@ -956,7 +955,6 @@ def display_kite_holdings(
     def render_sector_grouped_holdings() -> str | None:
         active_symbol = st.session_state.get(selected_symbol_state_key)
         active_sector = st.session_state.get(selected_sector_state_key)
-        selection_version = st.session_state.get(selection_version_state_key, 0)
         total_display_invested = pd.to_numeric(display_df.get("Invested"), errors="coerce").sum()
         for sector, sector_df in display_df.groupby("Sector", sort=False):
             sector_key = _normalized_symbol_value(sector).replace(" ", "_") or "UNMAPPED"
@@ -987,7 +985,7 @@ def display_kite_holdings(
                     holdings_table_df.insert(invested_column_index + 1, "Weight %", weight_column)
                 table_key = None
                 if selection_key:
-                    table_key = f"{selection_key}_{sector_key}_{selection_version}"
+                    table_key = f"{selection_key}_{sector_key}"
                 with sector_table_column:
                     selection = render_holdings_table(holdings_table_df, table_key=table_key)
                 if not selection_key:
@@ -999,8 +997,8 @@ def display_kite_holdings(
                         selected_symbol = str(sector_df.iloc[selected_row_index]["Symbol"]).upper().strip()
                         st.session_state[selected_symbol_state_key] = selected_symbol
                         st.session_state[selected_sector_state_key] = sector_key
-                        st.session_state[selection_version_state_key] = selection_version + 1
-                        st.rerun()
+                        active_symbol = selected_symbol
+                        active_sector = sector_key
 
                 sector_symbols = set(sector_df["Symbol"].astype(str).str.upper().str.strip())
                 if (
@@ -1433,8 +1431,6 @@ with tab_historic_data:
                     "pullback_score",
                     "entry_signal",
                     "Entry",
-                    "mtm_label",
-                    "mtm_score",
                     "ret_12_1",
                     "ret_6m",
                     "rs_vs_nifty",

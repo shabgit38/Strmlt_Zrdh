@@ -12,6 +12,7 @@ from momentum_score import calculate_momentum_scores_from_kite
 from stock_memory_cards import render_stock_memory_card
 
 DEFAULT_BENCHMARK_SYMBOL = "NIFTY 50"
+SUPABASE_INDICES_TABLE_NAME = "Indices_constituents"
 DISPLAY_COLUMNS = [
     "ticker",
     "ltp",
@@ -34,6 +35,58 @@ DISPLAY_COLUMNS = [
     "vol_adj_mtm",
     "data_status",
 ]
+
+
+@st.cache_data(ttl=24 * 60 * 60)
+def load_index_constituents() -> pd.DataFrame:
+    supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
+    supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
+    table_name = get_secret_value("SUPABASE_INDICES_TABLE_NAME").strip() or SUPABASE_INDICES_TABLE_NAME
+
+    if not supabase_url or not supabase_key:
+        raise ValueError(
+            "Missing Supabase config. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
+            "in .streamlit/secrets.toml or environment variables."
+        )
+
+    endpoint = (
+        f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
+        "?select=Index,Constituents&order=Index.asc"
+    )
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+    }
+
+    request = Request(endpoint, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase indices lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase indices lookup failed: {exc.reason}") from exc
+
+    return pd.DataFrame(records)
+
+
+def find_symbol_indices(symbol: str, indices_df: pd.DataFrame) -> pd.DataFrame:
+    symbol = symbol.strip().upper()
+    if not symbol or indices_df.empty:
+        return pd.DataFrame(columns=["Index", "Matched Symbol"])
+
+    matches: list[dict[str, str]] = []
+    for _, row in indices_df.iterrows():
+        index_name = str(row.get("Index") or "").strip()
+        constituents = str(row.get("Constituents") or "")
+        symbols = [item.strip().upper() for item in constituents.split(",") if item.strip()]
+        if symbol in symbols:
+            matches.append({"Index": index_name, "Matched Symbol": symbol})
+
+    return pd.DataFrame(matches)
 
 
 @st.cache_data(ttl=24 * 60 * 60)
@@ -116,13 +169,41 @@ def build_token_rows(symbols: list[str], instruments_df: pd.DataFrame) -> tuple[
 
 
 st.set_page_config(layout="wide")
-st.title("Quant Momentum Score Check")
+#st.title("Quant Momentum Score Check")
 
 if "request_token" in st.query_params and "access_token" not in st.session_state:
     bootstrap_kite_app("Quant Momentum Score Check")
 
 kite, _, _ = bootstrap_kite_app("Quant Momentum Score Check")
 
+st.subheader("Index Membership Check")
+
+index_check_symbol = st.text_input(
+    "Stock symbol to check in Supabase index constituents",
+    value="",
+    key="index_membership_symbol",
+)
+if st.button("Check Index Membership", key="check_index_membership"):
+    symbol = index_check_symbol.strip().upper()
+    if not symbol:
+        st.warning("Enter a stock symbol.")
+    else:
+        try:
+            index_constituents_df = load_index_constituents()
+            matched_indices_df = find_symbol_indices(symbol, index_constituents_df)
+            if matched_indices_df.empty:
+                st.info(f"{symbol} was not found in any index constituents.")
+            else:
+                st.success(
+                    f"{symbol} found in {len(matched_indices_df)} index"
+                    f"{'' if len(matched_indices_df) == 1 else 'es'}."
+                )
+                st.dataframe(matched_indices_df, width="stretch", hide_index=True)
+        except Exception as exc:
+            st.error(f"Could not check index membership: {exc}")
+
+st.divider()
+st.subheader("Quant Momentum Score Check")
 benchmark_symbol = st.text_input("Benchmark symbol", value=DEFAULT_BENCHMARK_SYMBOL)
 tickers_input = st.text_area(
     "Stock tickers",
