@@ -430,6 +430,7 @@ def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float | tuple[fl
             else f"Buy:{value[0]:.1f}% [{value[3]:.2f}]" if label == "Buy" and value is not None and len(value) > 3
             else f"[{value[1]:.2f} - {value[2]:.2f}]" if label == "Range Used" and value is not None
             else f"{label.removeprefix('__EMA_DISTANCE__')}\n{value:+.2f}%" if label.startswith("__EMA_DISTANCE__") and value is not None
+            else f"{label.removeprefix('__EMA_DISTANCE__')}: NA" if label.startswith("__EMA_DISTANCE__")
             else f"{label}: {value:.2f}" if value is not None
             else f"{label}: -"
             for label, value in ladder
@@ -449,6 +450,16 @@ RETURN_PERCENT_COLUMNS = [
     "2Y Return %",
     "YTD Return %",
 ]
+RETURN_DISPLAY_COLUMN_LABELS = {
+    "Today Return %": "Today Ret%",
+    "1W Return %": "1W Ret%",
+    "1M Return %": "1M Ret%",
+    "3M Return %": "3M Ret%",
+    "6M Return %": "6M Ret%",
+    "1Y Return %": "1Y Ret%",
+    "2Y Return %": "2Y Ret%",
+    "YTD Return %": "YTD Ret%",
+}
 
 VOLUME_GAIN_COLUMNS = [
     "1W Volume Gain %",
@@ -600,13 +611,18 @@ def display_historic_returns_frame(
         for column in RETURN_PERCENT_COLUMNS + VOLUME_GAIN_COLUMNS
         if column in returns_df.columns
     ]
+    display_df = returns_df.rename(columns=RETURN_DISPLAY_COLUMN_LABELS)
+    display_percent_columns = [
+        RETURN_DISPLAY_COLUMN_LABELS.get(column, column)
+        for column in formatted_percent_columns
+    ]
     st.dataframe(
-        returns_df.style.format(
-            {column: "{:.1f}" for column in formatted_percent_columns},
+        display_df.style.format(
+            {column: "{:.1f}" for column in display_percent_columns},
             na_rep="-",
         ).apply(highlight_return_cells, axis=None),
         width="stretch",
-        height=_historic_dashboard_height(len(returns_df), max_rows=max_rows),
+        height=_historic_dashboard_height(len(display_df), max_rows=max_rows),
         hide_index=True,
     )
 
@@ -670,7 +686,10 @@ def _format_symbol_color_summary(color_groups: dict[str, list[str]]) -> str:
 
 
 def highlight_return_cells(data: pd.DataFrame) -> pd.DataFrame:
-    return highlight_numeric_scale_cells(data, RETURN_PERCENT_COLUMNS + VOLUME_GAIN_COLUMNS)
+    return highlight_numeric_scale_cells(
+        data,
+        list(RETURN_DISPLAY_COLUMN_LABELS.values()) + RETURN_PERCENT_COLUMNS + VOLUME_GAIN_COLUMNS,
+    )
 
 
 def highlight_numeric_scale_cells(data: pd.DataFrame, columns: list[str]) -> pd.DataFrame:

@@ -285,7 +285,7 @@ def calculate_momentum_features(
     benchmark_close = _get_close_series(benchmark_df)
     resolved_ticker = _get_ticker(stock_df, ticker)
 
-    if len(stock_close) < 252 or len(benchmark_close) < 126:
+    if stock_close.empty:
         return {
             "ticker": resolved_ticker,
             "ltp": np.nan,

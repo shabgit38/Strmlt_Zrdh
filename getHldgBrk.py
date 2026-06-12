@@ -1611,6 +1611,61 @@ def load_holdings_breakdown_for_symbols(symbols: list[str]) -> pd.DataFrame:
     return _prepare_holdings_breakdown_df(records)
 
 
+def load_holdings_breakdown_for_holdings(holdings_df: pd.DataFrame) -> pd.DataFrame:
+    if holdings_df.empty:
+        return pd.DataFrame()
+
+    symbols = (
+        holdings_df.get("tradingsymbol", pd.Series(dtype=object))
+        .dropna()
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
+    isins = (
+        holdings_df.get("isin", pd.Series(dtype=object))
+        .dropna()
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
+    normalized_symbols = sorted({symbol for symbol in symbols if symbol})
+    normalized_isins = sorted({isin for isin in isins if isin})
+    if not normalized_symbols and not normalized_isins:
+        return pd.DataFrame()
+
+    filters: list[str] = []
+    if normalized_symbols:
+        symbol_filter = ",".join(quote(symbol, safe="") for symbol in normalized_symbols)
+        filters.append(f"symbol.in.({symbol_filter})")
+    if normalized_isins:
+        isin_filter = ",".join(quote(isin, safe="") for isin in normalized_isins)
+        filters.append(f"isin.in.({isin_filter})")
+
+    supabase_url, supabase_key, table_name = _get_supabase_holdings_config()
+    encoded_table_name = quote(table_name, safe="")
+    filter_query = f"or=({','.join(filters)})"
+    endpoint = (
+        f"{supabase_url}/rest/v1/{encoded_table_name}"
+        f"?select=*&{filter_query}&order=id.asc"
+    )
+    headers = _supabase_headers(supabase_key)
+
+    request = Request(endpoint, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase holdings breakdown lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase holdings breakdown lookup failed: {exc.reason}") from exc
+
+    return _prepare_holdings_breakdown_df(records)
+
+
 def _normalized_symbol_values(symbols: list[str]) -> list[str]:
     return sorted({str(symbol).upper().strip() for symbol in symbols if str(symbol).strip()})
 
@@ -1715,7 +1770,11 @@ def display_supabase_holdings_breakdown(symbols: list[str] | None = None) -> Non
     display_holdings_breakdown_df(holdings_breakdown_df)
 
 
-def _selected_holding_batches_display_df(symbol: str, holdings_breakdown_df: pd.DataFrame) -> pd.DataFrame:
+def _selected_holding_batches_display_df(
+    symbol: str,
+    holdings_breakdown_df: pd.DataFrame,
+    isin: str | None = None,
+) -> pd.DataFrame:
     symbol_key = _normalized_symbol_value(symbol)
     if not symbol_key or holdings_breakdown_df.empty or "symbol" not in holdings_breakdown_df.columns:
         return pd.DataFrame()
@@ -1730,7 +1789,14 @@ def _selected_holding_batches_display_df(symbol: str, holdings_breakdown_df: pd.
 
     row_type = active_df["row_type"].astype(str).str.upper().str.strip()
     symbol_series = active_df["symbol"].astype(str).str.upper().str.strip()
-    batch_df = active_df[row_type.eq("BATCH") & symbol_series.eq(symbol_key)].copy()
+    selected_rows = row_type.eq("BATCH") & symbol_series.eq(symbol_key)
+    isin_key = str(isin or "").upper().strip()
+    if isin_key and "isin" in active_df.columns:
+        selected_rows = selected_rows | (
+            row_type.eq("BATCH")
+            & active_df["isin"].astype(str).str.upper().str.strip().eq(isin_key)
+        )
+    batch_df = active_df[selected_rows].copy()
     if batch_df.empty:
         return pd.DataFrame()
 
@@ -1761,7 +1827,11 @@ def _selected_holding_batches_display_df(symbol: str, holdings_breakdown_df: pd.
     )
 
 
-def display_selected_holding_batches(symbol: str | None, holdings_breakdown_df: pd.DataFrame) -> None:
+def display_selected_holding_batches(
+    symbol: str | None,
+    holdings_breakdown_df: pd.DataFrame,
+    isin: str | None = None,
+) -> None:
     if not symbol:
         st.info("Select a holding row to view batch details.")
         return
@@ -1770,9 +1840,9 @@ def display_selected_holding_batches(symbol: str | None, holdings_breakdown_df: 
         st.info("No holdings breakdown data loaded.")
         return
 
-    display_df = _selected_holding_batches_display_df(symbol, holdings_breakdown_df)
+    display_df = _selected_holding_batches_display_df(symbol, holdings_breakdown_df, isin)
     if display_df.empty:
-        st.info("No active batch rows found for this symbol.")
+        st.info("No active batch rows found for this symbol or ISIN.")
         return
 
     st.dataframe(

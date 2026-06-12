@@ -34,7 +34,7 @@ from getHldgBrk import (
     clean_holdings_breakdown_for_supabase,
     display_holdings_breakdown_df,
     display_selected_holding_batches,
-    load_holdings_breakdown_from_supabase,
+    load_holdings_breakdown_for_holdings,
     upsert_holdings_breakdown_in_supabase,
 )
 
@@ -217,15 +217,26 @@ def _pnl_color(value: Any) -> str:
 def _style_pnl_columns(df: pd.DataFrame):
     pnl_columns = [
         column
-        for column in ["batch_pnl", "batch_pnl_pct", "pnl", "pnl_pct", "Batch P&L", "Batch P&L %", "P&L", "P&L %","DayChg %"]
+        for column in [
+            "batch_pnl",
+            "batch_pnl_pct",
+            "pnl",
+            "pnl_pct",
+            "Batch P&L",
+            "Batch P&L %",
+            "P&L",
+            "P&L %",
+            "DayChg %",
+            "Daychg%",
+        ]
         if column in df.columns
     ]
     formatters = {
         column: _format_display_value
         for column in df.columns
-        if column not in {"batch_pnl_pct", "pnl_pct", "Batch P&L %", "P&L %"}
+        if column not in {"batch_pnl_pct", "pnl_pct", "Batch P&L %", "P&L %", "DayChg %", "Daychg%"}
     }
-    for column in ["batch_pnl_pct", "pnl_pct", "Batch P&L %", "P&L %"]:
+    for column in ["batch_pnl_pct", "pnl_pct", "Batch P&L %", "P&L %", "DayChg %", "Daychg%"]:
         if column in df.columns:
             formatters[column] = _format_percent_value
 
@@ -281,9 +292,9 @@ def _style_kite_holdings(display_df: pd.DataFrame, rng_colors: dict[str, str]):
     return styler.map(symbol_style, subset=["Symbol"])
 
 
-def _sector_by_symbol_from_breakdown(holdings_breakdown_df: pd.DataFrame) -> dict[str, str]:
+def _sector_maps_from_breakdown(holdings_breakdown_df: pd.DataFrame) -> tuple[dict[str, str], dict[str, str]]:
     if holdings_breakdown_df.empty or not {"symbol", "sector"}.issubset(holdings_breakdown_df.columns):
-        return {}
+        return {}, {}
 
     breakdown_df = holdings_breakdown_df.copy()
     if "row_type" in breakdown_df.columns:
@@ -297,31 +308,36 @@ def _sector_by_symbol_from_breakdown(holdings_breakdown_df: pd.DataFrame) -> dic
         .drop_duplicates("symbol_key")
     )
     sector_by_symbol = sector_df.set_index("symbol_key")["sector"].astype(str).str.strip().to_dict()
-    sector_by_fallback_symbol = {
-        _ltp_match_symbol(symbol): sector
-        for symbol, sector in sector_by_symbol.items()
-        if _ltp_match_symbol(symbol) not in sector_by_symbol
-    }
-    return {**sector_by_fallback_symbol, **sector_by_symbol}
+    sector_by_isin: dict[str, str] = {}
+    if "isin" in breakdown_df.columns:
+        sector_by_isin = (
+            breakdown_df.assign(isin_key=breakdown_df["isin"].astype(str).str.upper().str.strip())
+            .dropna(subset=["isin_key", "sector"])
+            .drop_duplicates("isin_key")
+            .set_index("isin_key")["sector"]
+            .astype(str)
+            .str.strip()
+            .to_dict()
+        )
+        sector_by_isin.pop("", None)
+    return sector_by_symbol, sector_by_isin
 
 
 def _add_sector_to_holdings_display(display_df: pd.DataFrame, holdings_breakdown_df: pd.DataFrame) -> pd.DataFrame:
     if display_df.empty or "Symbol" not in display_df.columns:
         return display_df
 
-    sector_by_symbol = _sector_by_symbol_from_breakdown(holdings_breakdown_df)
-    if not sector_by_symbol:
+    sector_by_symbol, sector_by_isin = _sector_maps_from_breakdown(holdings_breakdown_df)
+    if not sector_by_symbol and not sector_by_isin:
         return display_df
 
     display_df = display_df.copy()
     symbol_key = display_df["Symbol"].astype(str).str.upper().str.strip()
-    fallback_symbol_key = symbol_key.map(_ltp_match_symbol)
-    display_df["Sector"] = (
-        symbol_key.map(sector_by_symbol)
-        .fillna(fallback_symbol_key.map(sector_by_symbol))
-        .replace("", pd.NA)
-        .fillna("Unmapped")
-    )
+    sector = symbol_key.map(sector_by_symbol)
+    if "ISIN" in display_df.columns and sector_by_isin:
+        isin_key = display_df["ISIN"].astype(str).str.upper().str.strip()
+        sector = sector.fillna(isin_key.map(sector_by_isin))
+    display_df["Sector"] = sector.replace("", pd.NA).fillna("Unmapped")
     ordered_columns = ["Sector"] + [column for column in display_df.columns if column != "Sector"]
     return display_df[ordered_columns].sort_values(["Sector", "Symbol"], kind="stable")
 
@@ -359,6 +375,7 @@ def _kite_holdings_column_config() -> dict[str, Any]:
     return {
         "Sector": st.column_config.TextColumn("Sector", width="medium"),
         "Symbol": st.column_config.TextColumn("Symbol", width="small"),
+        "ISIN": None,
         "Quantity": st.column_config.NumberColumn("Quantity", width="small", format="%d"),
         "Avg Price": st.column_config.NumberColumn("Avg Price", width="small", format="%.2f"),
         "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
@@ -381,6 +398,72 @@ def _sector_summary_column_config() -> dict[str, Any]:
         "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
         "Weight %": st.column_config.NumberColumn("Weight %", width="small", format="%.2f%%"),
     }
+
+
+def _mtf_holdings_display_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "mtf" not in df.columns:
+        return pd.DataFrame()
+
+    mtf_df = pd.json_normalize(_mtf_rows(df)).add_prefix("mtf_")
+    display_df = pd.DataFrame(
+        {
+            "Symbol": df.get("tradingsymbol", pd.Series(index=df.index, dtype=object)).reset_index(drop=True),
+            "MTF Qty": mtf_df.get("mtf_quantity", pd.Series(index=mtf_df.index, dtype=float)),
+            "MTF Avg Price": mtf_df.get("mtf_average_price", pd.Series(index=mtf_df.index, dtype=float)),
+            "MTF Value": mtf_df.get("mtf_value", pd.Series(index=mtf_df.index, dtype=float)),
+            "LTP": df.get("last_price", pd.Series(index=df.index, dtype=float)).reset_index(drop=True),
+            "P&L": df.get("pnl", pd.Series(index=df.index, dtype=float)).reset_index(drop=True),
+            "Daychg%": df.get("day_change_percentage", pd.Series(index=df.index, dtype=float)).reset_index(drop=True),
+        }
+    )
+    display_df["MTF Qty"] = pd.to_numeric(display_df["MTF Qty"], errors="coerce").fillna(0)
+    return display_df[display_df["MTF Qty"].gt(0)].copy()
+
+
+def _mtf_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
+    if "mtf" not in df.columns:
+        return []
+    return [
+        value if isinstance(value, dict) else {}
+        for value in df["mtf"].tolist()
+    ]
+
+
+def _mtf_quantity_series(df: pd.DataFrame) -> pd.Series:
+    if df.empty or "mtf" not in df.columns:
+        return pd.Series(0, index=df.index, dtype=float)
+    mtf_df = pd.json_normalize(_mtf_rows(df))
+    return pd.to_numeric(
+        mtf_df.get("quantity", pd.Series(0, index=range(len(df)), dtype=float)),
+        errors="coerce",
+    ).fillna(0).set_axis(df.index)
+
+
+def _non_mtf_holdings_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df[_mtf_quantity_series(df).le(0)].copy()
+
+
+def _display_mtf_holdings_df(df: pd.DataFrame) -> None:
+    mtf_display_df = _mtf_holdings_display_df(df)
+    if mtf_display_df.empty:
+        return
+
+    st.subheader("MTF Holdings")
+    st.dataframe(
+        _style_pnl_columns(mtf_display_df),
+        width="stretch",
+        height=_dataframe_height(len(mtf_display_df), max_rows=8),
+        hide_index=True,
+        column_config={
+            "Symbol": st.column_config.TextColumn("Symbol", width="small"),
+            "MTF Qty": st.column_config.NumberColumn("MTF Qty", width="small", format="%d"),
+            "MTF Avg Price": st.column_config.NumberColumn("MTF Avg Price", width="small", format="%.2f"),
+            "MTF Value": st.column_config.NumberColumn("MTF Value", width="small", format="%.2f"),
+            "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
+            "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
+            "Daychg%": st.column_config.NumberColumn("Daychg%", width="small", format="%.2f%%"),
+        },
+    )
 
 
 def _display_sector_weight_pie_chart(sector_summary_df: pd.DataFrame) -> None:
@@ -834,8 +917,13 @@ def display_kite_holdings(
         st.warning("No holdings found.")
         return None
 
-    df = df.copy()
-    _cache_ltp_by_symbol(df)
+    all_holdings_df = df.copy()
+    _cache_ltp_by_symbol(all_holdings_df)
+    df = _non_mtf_holdings_df(all_holdings_df)
+    if df.empty:
+        _display_mtf_holdings_df(all_holdings_df)
+        st.info("No non-MTF holdings found.")
+        return None
     
     #print("portfolio holdings columns:\n")
     #print(df.columns)
@@ -852,6 +940,7 @@ def display_kite_holdings(
 
     display_cols = [
         "tradingsymbol",
+        "isin",
         "quantity",
         "average_price",
         "invested",
@@ -866,6 +955,7 @@ def display_kite_holdings(
     display_df = display_df.rename(
         columns={
             "tradingsymbol": "Symbol",
+            "isin": "ISIN",
             "quantity": "Quantity",
             "average_price": "Avg Price",
             "invested": "Invested",
@@ -921,7 +1011,7 @@ def display_kite_holdings(
             _style_kite_holdings(table_df, rng_colors),
             width="stretch",
             height=_dataframe_height(len(table_df), max_rows=15),
-            hide_index=False,
+            hide_index=True,
             column_config=_kite_holdings_column_config(),
             **dataframe_kwargs,
         )
@@ -943,17 +1033,19 @@ def display_kite_holdings(
 
     batches_df = selected_batches_df if selected_batches_df is not None else pd.DataFrame()
     selected_symbol_state_key = f"{selection_key or 'kite_holdings'}_selected_holding_symbol"
+    selected_isin_state_key = f"{selection_key or 'kite_holdings'}_selected_holding_isin"
     selected_sector_state_key = f"{selection_key or 'kite_holdings'}_selected_holding_sector"
 
-    def render_selected_batches_panel(selected_symbol: str | None) -> None:
+    def render_selected_batches_panel(selected_symbol: str | None, selected_isin: str | None = None) -> None:
         if selected_batches_df is None and selected_batches_error is None:
             return
         if selected_batches_error:
             st.warning(f"Could not load holdings breakdown from Supabase: {selected_batches_error}")
-        display_selected_holding_batches(selected_symbol, batches_df)
+        display_selected_holding_batches(selected_symbol, batches_df, selected_isin)
 
     def render_sector_grouped_holdings() -> str | None:
         active_symbol = st.session_state.get(selected_symbol_state_key)
+        active_isin = st.session_state.get(selected_isin_state_key)
         active_sector = st.session_state.get(selected_sector_state_key)
         total_display_invested = pd.to_numeric(display_df.get("Invested"), errors="coerce").sum()
         for sector, sector_df in display_df.groupby("Sector", sort=False):
@@ -994,21 +1086,33 @@ def display_kite_holdings(
                 if selected_rows:
                     selected_row_index = selected_rows[0]
                     if selected_row_index < len(sector_df):
-                        selected_symbol = str(sector_df.iloc[selected_row_index]["Symbol"]).upper().strip()
+                        selected_row = sector_df.iloc[selected_row_index]
+                        selected_symbol = str(selected_row["Symbol"]).upper().strip()
+                        selected_isin = str(selected_row.get("ISIN") or "").upper().strip()
                         st.session_state[selected_symbol_state_key] = selected_symbol
+                        st.session_state[selected_isin_state_key] = selected_isin
                         st.session_state[selected_sector_state_key] = sector_key
                         active_symbol = selected_symbol
+                        active_isin = selected_isin
                         active_sector = sector_key
 
                 sector_symbols = set(sector_df["Symbol"].astype(str).str.upper().str.strip())
+                sector_isins = (
+                    set(sector_df["ISIN"].astype(str).str.upper().str.strip())
+                    if "ISIN" in sector_df.columns
+                    else set()
+                )
                 if (
                     sector_batches_column is not None
                     and active_symbol
                     and active_sector == sector_key
-                    and str(active_symbol).upper().strip() in sector_symbols
+                    and (
+                        str(active_symbol).upper().strip() in sector_symbols
+                        or (active_isin and str(active_isin).upper().strip() in sector_isins)
+                    )
                 ):
                     with sector_batches_column:
-                        render_selected_batches_panel(str(active_symbol).upper().strip())
+                        render_selected_batches_panel(str(active_symbol).upper().strip(), active_isin)
         return str(active_symbol).upper().strip() if active_symbol else None
 
     selected_symbol = None
@@ -1016,6 +1120,8 @@ def display_kite_holdings(
 
     if has_sector_grouping:
         render_sector_summary()
+
+    _display_mtf_holdings_df(all_holdings_df)
 
     selected_symbol = (
         render_sector_grouped_holdings()
@@ -1033,14 +1139,16 @@ def display_kite_holdings(
         if selected_rows:
             selected_row_index = selected_rows[0]
             if selected_row_index < len(display_df) and "Symbol" in display_df.columns:
-                selected_symbol = str(display_df.iloc[selected_row_index]["Symbol"]).upper().strip()
+                selected_row = display_df.iloc[selected_row_index]
+                selected_symbol = str(selected_row["Symbol"]).upper().strip()
+                st.session_state[selected_isin_state_key] = str(selected_row.get("ISIN") or "").upper().strip()
 
     if not selected_symbol:
         if not has_sector_grouping:
             render_selected_batches_panel(None)
         return None
     if not has_sector_grouping:
-        render_selected_batches_panel(selected_symbol)
+        render_selected_batches_panel(selected_symbol, st.session_state.get(selected_isin_state_key))
     return selected_symbol
 
 
@@ -1074,7 +1182,7 @@ def fetch_and_display_holdings():
             )
             _trigger_csv_download(df, st.session_state["kite_holdings_download_filename"])
             try:
-                _set_holdings_breakdown_state(load_holdings_breakdown_from_supabase())
+                _set_holdings_breakdown_state(load_holdings_breakdown_for_holdings(df))
                 st.session_state.pop("kite_holdings_breakdown_error", None)
             except Exception as breakdown_exc:
                 st.session_state.pop(HOLDINGS_BREAKDOWN_DF_STATE_KEY, None)
@@ -1481,6 +1589,10 @@ with tab_historic_data:
                     height=_dataframe_height(len(momentum_display_df), max_rows=18),
                     hide_index=True,
                     column_config={
+                        "ticker": st.column_config.TextColumn(
+                            "ticker",
+                            width="medium",
+                        ),
                         "ema10_extension_pct": st.column_config.NumberColumn(
                             "ema10_ext",
                             format="%.2f%%",

@@ -7,6 +7,12 @@ from urllib.request import Request, urlopen
 import pandas as pd
 import streamlit as st
 
+from getHldgBrk import (
+    _ltp_match_symbol,
+    _normalized_symbol_value,
+    load_holdings_breakdown_from_supabase,
+    update_holdings_breakdown_row,
+)
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 from momentum_score import calculate_momentum_scores_from_kite
 from stock_memory_cards import render_stock_memory_card
@@ -168,6 +174,58 @@ def build_token_rows(symbols: list[str], instruments_df: pd.DataFrame) -> tuple[
     return rows, missing
 
 
+def build_kite_isin_lookup(holdings: list[dict]) -> tuple[dict[str, str], dict[str, str]]:
+    exact_isin_by_symbol: dict[str, str] = {}
+    fallback_isin_by_symbol: dict[str, str] = {}
+    for holding in holdings:
+        symbol = _normalized_symbol_value(holding.get("tradingsymbol"))
+        isin = str(holding.get("isin") or "").strip().upper()
+        if not symbol or not isin:
+            continue
+        exact_isin_by_symbol[symbol] = isin
+        fallback_symbol = _ltp_match_symbol(symbol)
+        if fallback_symbol and fallback_symbol not in fallback_isin_by_symbol:
+            fallback_isin_by_symbol[fallback_symbol] = isin
+    return exact_isin_by_symbol, fallback_isin_by_symbol
+
+
+def lookup_isin(
+    symbol: str,
+    exact_isin_by_symbol: dict[str, str],
+    fallback_isin_by_symbol: dict[str, str],
+) -> str | None:
+    symbol_key = _normalized_symbol_value(symbol)
+    return exact_isin_by_symbol.get(symbol_key) or fallback_isin_by_symbol.get(_ltp_match_symbol(symbol_key))
+
+
+def update_holdings_breakdown_isin_from_kite(kite) -> pd.DataFrame:
+    holdings = kite.holdings()
+    exact_isin_by_symbol, fallback_isin_by_symbol = build_kite_isin_lookup(holdings)
+    if not exact_isin_by_symbol and not fallback_isin_by_symbol:
+        return pd.DataFrame(columns=["Symbol", "ISIN", "Status"])
+
+    breakdown_df = load_holdings_breakdown_from_supabase()
+    if breakdown_df.empty or "symbol" not in breakdown_df.columns or "id" not in breakdown_df.columns:
+        return pd.DataFrame(columns=["Symbol", "ISIN", "Status"])
+
+    updated_rows: list[dict[str, str]] = []
+    for _, row in breakdown_df.iterrows():
+        row_id = row.get("id")
+        symbol = _normalized_symbol_value(row.get("symbol"))
+        if not symbol or row_id is None or pd.isna(row_id):
+            continue
+
+        isin = lookup_isin(symbol, exact_isin_by_symbol, fallback_isin_by_symbol)
+        if not isin:
+            updated_rows.append({"Symbol": symbol, "ISIN": "", "Status": "No Kite match"})
+            continue
+
+        update_holdings_breakdown_row(row_id, {"isin": isin})
+        updated_rows.append({"Symbol": symbol, "ISIN": isin, "Status": "Updated"})
+
+    return pd.DataFrame(updated_rows)
+
+
 st.set_page_config(layout="wide")
 #st.title("Quant Momentum Score Check")
 
@@ -176,6 +234,29 @@ if "request_token" in st.query_params and "access_token" not in st.session_state
 
 kite, _, _ = bootstrap_kite_app("Quant Momentum Score Check")
 
+st.subheader("One-time Holdings Breakdown ISIN Update")
+st.caption("Fetches Kite holdings and writes only the ISIN field on matching holdings_breakdown rows.")
+if st.button("Write ISIN to Holdings Breakdown", key="write_holdings_breakdown_isin"):
+    try:
+        isin_update_df = update_holdings_breakdown_isin_from_kite(kite)
+        st.session_state["holdings_breakdown_isin_update_df"] = isin_update_df
+        if isin_update_df.empty:
+            st.info("No holdings breakdown rows were updated.")
+        else:
+            updated_count = int(isin_update_df["Status"].eq("Updated").sum())
+            st.success(f"Updated ISIN for {updated_count} holdings breakdown row(s).")
+    except Exception as exc:
+        if is_token_error(exc):
+            clear_auth_state()
+            st.error("Your session expired. Please login again.")
+            st.rerun()
+        st.error(f"ISIN update failed: {exc}")
+
+isin_update_df = st.session_state.get("holdings_breakdown_isin_update_df")
+if isinstance(isin_update_df, pd.DataFrame) and not isin_update_df.empty:
+    st.dataframe(isin_update_df, width="stretch", hide_index=True)
+
+st.divider()
 st.subheader("Index Membership Check")
 
 index_check_symbol = st.text_input(

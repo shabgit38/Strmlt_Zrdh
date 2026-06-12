@@ -64,4 +64,4 @@ this file is a test on momentum card layout with horizontal price chart
 ### momentum_score.py is referenced in two places:
 getHoldings.py (line 21)
 check_momentum_score.py (line 11)
-check_momentum_score.py is not imported or referenced by other Python files
+feature_testing.py is not impoted or referenced by other Python files
