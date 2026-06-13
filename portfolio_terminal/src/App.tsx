@@ -1,0 +1,138 @@
+import { useEffect, useState } from "react";
+import { Activity, Clock3, Database, PieChart } from "lucide-react";
+import { loadPortfolioSnapshot } from "./api/portfolioApi";
+import { GroupedHoldings } from "./components/GroupedHoldings";
+import { SectorPieChart } from "./components/SectorPieChart";
+import { SectorSummaryTable } from "./components/SectorSummaryTable";
+import { formatMoney, formatPct, signedClass } from "./format";
+import type { Holding, PortfolioSnapshot } from "./types";
+
+type AppProps = {
+  streamlitSnapshot?: PortfolioSnapshot | null;
+  streamlitMode?: boolean;
+};
+
+export function App({ streamlitSnapshot, streamlitMode = false }: AppProps) {
+  const [snapshot, setSnapshot] = useState<PortfolioSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedSector, setSelectedSector] = useState<string | null>(null);
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (streamlitMode) {
+      setError(null);
+      setSnapshot(streamlitSnapshot ?? null);
+      const firstSector = streamlitSnapshot?.sectors[0];
+      setSelectedSector(firstSector?.sector ?? null);
+      setSelectedSymbol(firstSector?.holdings[0]?.symbol ?? null);
+      return;
+    }
+
+    loadPortfolioSnapshot()
+      .then((data) => {
+        setSnapshot(data);
+        const firstSector = data.sectors[0];
+        setSelectedSector(firstSector?.sector ?? null);
+        setSelectedSymbol(firstSector?.holdings[0]?.symbol ?? null);
+      })
+      .catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : "Failed to load portfolio snapshot");
+      });
+  }, [streamlitMode, streamlitSnapshot]);
+
+  function handleSelectHolding(sector: string, holding: Holding) {
+    setSelectedSector(sector);
+    setSelectedSymbol(holding.symbol);
+  }
+
+  if (error) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-terminal-bg p-8">
+        <div className="max-w-md rounded-lg border border-terminal-line bg-terminal-panel p-6 shadow-sm">
+          <p className="text-sm text-terminal-avoid">{error}</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!snapshot) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-terminal-bg p-8">
+        <div className="rounded-lg border border-terminal-line bg-terminal-panel p-6 text-terminal-muted shadow-sm">
+          Loading portfolio snapshot...
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-terminal-bg">
+      <header className="border-b border-terminal-line bg-terminal-panel">
+        <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-terminal-muted">
+              <Activity className="h-4 w-4" />
+              Portfolio Terminal Demo
+            </div>
+            <h1 className="mt-1 text-2xl font-bold text-terminal-ink">Portfolio Holdings</h1>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-sm text-terminal-muted">
+            <span className="inline-flex items-center gap-2 rounded-md border border-terminal-line bg-terminal-panel-alt px-3 py-2">
+              <Clock3 className="h-4 w-4" />
+              {new Date(snapshot.asOf).toLocaleString()}
+            </span>
+            <span className="inline-flex items-center gap-2 rounded-md border border-terminal-line bg-terminal-panel-alt px-3 py-2">
+              <Database className="h-4 w-4" />
+              {streamlitMode ? "Streamlit data" : "Static snapshot"}
+            </span>
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto max-w-[1680px] space-y-5 px-5 py-5">
+        <section className="grid gap-3 md:grid-cols-4">
+          <Metric label="Invested" value={formatMoney(snapshot.totals.invested)} />
+          <Metric label="Current" value={formatMoney(snapshot.totals.current)} />
+          <Metric label="P&L" value={formatMoney(snapshot.totals.pnl)} tone={signedClass(snapshot.totals.pnl)} />
+          <Metric label="P&L %" value={formatPct(snapshot.totals.pnlPct)} tone={signedClass(snapshot.totals.pnlPct)} />
+        </section>
+
+        <section className="grid gap-4 xl:grid-cols-[minmax(24rem,0.9fr)_minmax(0,1.6fr)]">
+          <SectorPieChart sectors={snapshot.sectors} />
+          <SectorSummaryTable
+            sectors={snapshot.sectors}
+            selectedSector={selectedSector}
+            onSelectSector={setSelectedSector}
+          />
+        </section>
+
+        <section>
+          <div className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-terminal-muted">
+            <PieChart className="h-4 w-4" />
+            Grouped Holdings
+          </div>
+          <GroupedHoldings
+            sectors={snapshot.sectors}
+            selectedSymbol={selectedSymbol}
+            onSelectHolding={handleSelectHolding}
+          />
+        </section>
+      </div>
+    </main>
+  );
+}
+
+type MetricProps = {
+  label: string;
+  value: string;
+  tone?: string;
+};
+
+function Metric({ label, value, tone = "text-terminal-ink" }: MetricProps) {
+  return (
+    <div className="rounded-lg border border-terminal-line bg-terminal-panel p-4 shadow-sm">
+      <div className="text-xs font-semibold uppercase tracking-wide text-terminal-muted">{label}</div>
+      <div className={`mt-1 text-2xl font-bold tabular-nums ${tone}`}>{value}</div>
+    </div>
+  );
+}

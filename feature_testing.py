@@ -421,7 +421,4 @@ if score_df is not None and not score_df.empty:
         else:
             st.info("Select a stock row to view notes.")
 
-if "access_token" in st.session_state:
-    if st.sidebar.button("Logout"):
-        clear_auth_state()
-        st.rerun()
+

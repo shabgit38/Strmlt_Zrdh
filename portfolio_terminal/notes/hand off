@@ -1,0 +1,27 @@
+Implemented the programmatic Kite login flow.
+
+Changed:
+- [backend/app.py](c:/Users/shaba/Downloads/git-clone/portfolio_terminal/backend/app.py): added `/api/auth/kite/login` and `/api/auth/kite/callback`.
+- [backend/portfolio_snapshot.py](c:/Users/shaba/Downloads/git-clone/portfolio_terminal/backend/portfolio_snapshot.py): exchanges `request_token` using `ZERODHA_API_SECRET`, stores daily session in `backend/.kite_session.json`, and uses that token for live holdings.
+- [src/App.tsx](c:/Users/shaba/Downloads/git-clone/portfolio_terminal/src/App.tsx): shows a “Sign in with Kite” button when auth is missing.
+- [.gitignore](c:/Users/shaba/Downloads/git-clone/portfolio_terminal/.gitignore): ignores `backend/.env` and `backend/.kite_session.json`.
+- [backend/README.md](c:/Users/shaba/Downloads/git-clone/portfolio_terminal/backend/README.md): updated setup instructions.
+
+You now need `backend/.env` to include:
+
+```text
+ZERODHA_API_KEY=...
+ZERODHA_API_SECRET=...
+```
+
+Also set your Kite developer console redirect URL to:
+
+```text
+http://127.0.0.1:8000/api/auth/kite/callback
+```
+
+Then start backend and frontend. If the token is missing/expired, click “Sign in with Kite”; the backend will save the daily token automatically.
+
+Verified:
+- `uv run python -m py_compile backend\app.py backend\portfolio_snapshot.py`
+- `npm.cmd run build` passed, with only the existing Vite chunk-size warning.

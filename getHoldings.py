@@ -19,10 +19,12 @@ from kite_analytics import (
 )
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 from momentum_score import calculate_momentum_scores_from_kite
+from portfolio_terminal_component import render_portfolio_terminal
 from getPositions import render_open_positions_tab
 from getHldgBrk import (
     HOLDINGS_BREAKDOWN_DF_STATE_KEY,
     HOLDINGS_BREAKDOWN_VIEW_STATE_KEY,
+    _active_breakdown_df,
     _holdings_breakdown_state_df,
     _load_holdings_breakdown_state,
     _ltp_match_symbol,
@@ -34,6 +36,7 @@ from getHldgBrk import (
     clean_holdings_breakdown_for_supabase,
     display_holdings_breakdown_df,
     display_selected_holding_batches,
+    enrich_holdings_breakdown_with_ltp,
     load_holdings_breakdown_for_holdings,
     upsert_holdings_breakdown_in_supabase,
 )
@@ -464,6 +467,179 @@ def _display_mtf_holdings_df(df: pd.DataFrame) -> None:
             "Daychg%": st.column_config.NumberColumn("Daychg%", width="small", format="%.2f%%"),
         },
     )
+
+
+def _component_number(value: Any) -> float:
+    converted = pd.to_numeric(value, errors="coerce")
+    if pd.isna(converted):
+        return 0.0
+    return float(converted)
+
+
+def _component_int(value: Any) -> int:
+    converted = pd.to_numeric(value, errors="coerce")
+    if pd.isna(converted):
+        return 0
+    return int(converted)
+
+
+def _component_text(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value)
+
+
+def _portfolio_component_batches(
+    symbol: Any,
+    isin: Any,
+    holdings_breakdown_df: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    if holdings_breakdown_df.empty or "row_type" not in holdings_breakdown_df.columns:
+        return []
+
+    enriched_df, _ = enrich_holdings_breakdown_with_ltp(
+        holdings_breakdown_df,
+        st.session_state.get("ltp_by_symbol", {}),
+    )
+    active_df = _active_breakdown_df(enriched_df)
+    if active_df.empty or "row_type" not in active_df.columns:
+        return []
+
+    row_type = active_df["row_type"].astype(str).str.upper().str.strip()
+    symbol_key = _normalized_symbol_value(symbol)
+    isin_key = str(isin or "").upper().strip()
+    selected_rows = row_type.eq("BATCH") & active_df["symbol"].astype(str).str.upper().str.strip().eq(symbol_key)
+    if isin_key and "isin" in active_df.columns:
+        selected_rows = selected_rows | (
+            row_type.eq("BATCH")
+            & active_df["isin"].astype(str).str.upper().str.strip().eq(isin_key)
+        )
+
+    batch_df = active_df[selected_rows].copy()
+    if batch_df.empty:
+        return []
+    if "id" in batch_df.columns:
+        batch_df = batch_df.sort_values("id", kind="stable")
+
+    batches: list[dict[str, Any]] = []
+    for _, batch in batch_df.iterrows():
+        batches.append(
+            {
+                "price": _component_number(batch.get("batch_price")),
+                "qty": _component_int(batch.get("batch_qty")),
+                "age": _component_text(batch.get("present_age") or batch.get("age_days")),
+                "profitPct": _component_number(batch.get("batch_pnl_pct")),
+            }
+        )
+    return batches
+
+
+def build_portfolio_terminal_snapshot(
+    holdings_df: pd.DataFrame,
+    holdings_breakdown_df: pd.DataFrame,
+    *,
+    as_of: str,
+) -> dict[str, Any]:
+    if holdings_df.empty:
+        return {
+            "asOf": as_of,
+            "totals": {"invested": 0, "current": 0, "pnl": 0, "pnlPct": 0},
+            "sectors": [],
+        }
+
+    df = _non_mtf_holdings_df(holdings_df.copy())
+    if df.empty:
+        return {
+            "asOf": as_of,
+            "totals": {"invested": 0, "current": 0, "pnl": 0, "pnlPct": 0},
+            "sectors": [],
+        }
+
+    df["invested"] = pd.to_numeric(df.get("average_price"), errors="coerce") * pd.to_numeric(
+        df.get("quantity"), errors="coerce"
+    )
+    df["current_value"] = pd.to_numeric(df.get("last_price"), errors="coerce") * pd.to_numeric(
+        df.get("quantity"), errors="coerce"
+    )
+    invested = pd.to_numeric(df["invested"], errors="coerce")
+    df["pnl_pct"] = pd.to_numeric(df.get("pnl"), errors="coerce").where(invested.ne(0)) / invested * 100
+
+    display_df = pd.DataFrame(
+        {
+            "Sector": "Unmapped",
+            "Symbol": df.get("tradingsymbol", pd.Series(index=df.index, dtype=object)),
+            "ISIN": df.get("isin", pd.Series(index=df.index, dtype=object)),
+            "Quantity": df.get("quantity", pd.Series(index=df.index, dtype=float)),
+            "Avg Price": df.get("average_price", pd.Series(index=df.index, dtype=float)),
+            "Invested": df["invested"],
+            "Current": df["current_value"],
+            "LTP": df.get("last_price", pd.Series(index=df.index, dtype=float)),
+            "P&L": df.get("pnl", pd.Series(index=df.index, dtype=float)),
+            "P&L %": df["pnl_pct"],
+            "DayChg %": df.get("day_change_percentage", pd.Series(index=df.index, dtype=float)),
+        }
+    )
+    display_df = _add_sector_to_holdings_display(display_df, holdings_breakdown_df)
+
+    total_invested = _component_number(display_df["Invested"].sum())
+    total_current = _component_number(display_df["Current"].sum())
+    total_pnl = _component_number(display_df["P&L"].sum())
+    total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0
+
+    sectors: list[dict[str, Any]] = []
+    for sector, sector_df in display_df.groupby("Sector", sort=False):
+        sector_invested = _component_number(sector_df["Invested"].sum())
+        sector_current = _component_number(sector_df["Current"].sum())
+        sector_pnl = _component_number(sector_df["P&L"].sum())
+        sector_pnl_pct = (sector_pnl / sector_invested * 100) if sector_invested else 0
+        sector_weight_pct = (sector_invested / total_invested * 100) if total_invested else 0
+
+        holdings: list[dict[str, Any]] = []
+        for _, holding in sector_df.iterrows():
+            holding_invested = _component_number(holding.get("Invested"))
+            holdings.append(
+                {
+                    "symbol": _component_text(holding.get("Symbol")),
+                    "quantity": _component_int(holding.get("Quantity")),
+                    "averagePrice": _component_number(holding.get("Avg Price")),
+                    "invested": holding_invested,
+                    "weightPct": (holding_invested / sector_invested * 100) if sector_invested else 0,
+                    "current": _component_number(holding.get("Current")),
+                    "ltp": _component_number(holding.get("LTP")),
+                    "pnl": _component_number(holding.get("P&L")),
+                    "pnlPct": _component_number(holding.get("P&L %")),
+                    "dayChangePct": _component_number(holding.get("DayChg %")),
+                    "batches": _portfolio_component_batches(
+                        holding.get("Symbol"),
+                        holding.get("ISIN"),
+                        holdings_breakdown_df,
+                    ),
+                }
+            )
+
+        sectors.append(
+            {
+                "sector": _component_text(sector),
+                "holdingsCount": len(holdings),
+                "invested": sector_invested,
+                "weightPct": sector_weight_pct,
+                "current": sector_current,
+                "pnl": sector_pnl,
+                "pnlPct": sector_pnl_pct,
+                "holdings": holdings,
+            }
+        )
+
+    return {
+        "asOf": as_of,
+        "totals": {
+            "invested": total_invested,
+            "current": total_current,
+            "pnl": total_pnl,
+            "pnlPct": total_pnl_pct,
+        },
+        "sectors": sectors,
+    }
 
 
 def _display_sector_weight_pie_chart(sector_summary_df: pd.DataFrame) -> None:
@@ -1241,8 +1417,8 @@ with tab_fetch_kite:
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
 
     kite_holdings_df = st.session_state.get("kite_holdings_df")
-    tab_price_ladder, tab_portfolio_holdings, tab_returns, tab_holdings_breakdown = st.tabs(
-        ["Price Ladder", "Portfolio Holdings", "Returns", "Holdings Breakdown"]
+    tab_price_ladder, tab_portfolio_holdings, tab_portfolio_react, tab_returns, tab_holdings_breakdown = st.tabs(
+        ["Price Ladder", "Portfolio Holdings", "Portfolio", "Returns", "Holdings Breakdown"]
     )
 
     with tab_portfolio_holdings:
@@ -1267,6 +1443,23 @@ with tab_fetch_kite:
                     + ", ".join(failed_symbols[:10])
                     + ("..." if len(failed_symbols) > 10 else "")
                 )
+
+    with tab_portfolio_react:
+        if kite_holdings_df is None:
+            st.info("Fetch holdings from Kite to display the React portfolio UI.")
+        else:
+            kite_holdings_download_filename = st.session_state.get("kite_holdings_download_filename", "")
+            as_of = (
+                kite_holdings_download_filename.removeprefix("holdings_").removesuffix(".csv").replace("_", " ")
+                if kite_holdings_download_filename
+                else pd.Timestamp.now().isoformat()
+            )
+            snapshot = build_portfolio_terminal_snapshot(
+                kite_holdings_df,
+                _holdings_breakdown_state_df(),
+                as_of=as_of,
+            )
+            render_portfolio_terminal(snapshot, key="portfolio_terminal_component")
 
     with tab_price_ladder:
         display_historic_price_ladder_frame(

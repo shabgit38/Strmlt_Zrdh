@@ -65,3 +65,6 @@ this file is a test on momentum card layout with horizontal price chart
 getHoldings.py (line 21)
 check_momentum_score.py (line 11)
 feature_testing.py is not impoted or referenced by other Python files
+
+### Built a Python snapshot converter 
+at [getHoldings.py (line 537)] using current Kite holdings plus loaded breakdown rows.

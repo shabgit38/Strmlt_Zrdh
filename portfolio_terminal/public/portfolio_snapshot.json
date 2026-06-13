@@ -1,0 +1,156 @@
+{
+  "asOf": "2026-06-10T10:00:00+05:30",
+  "totals": {
+    "invested": 750000,
+    "current": 823450,
+    "pnl": 73450,
+    "pnlPct": 9.79
+  },
+  "sectors": [
+    {
+      "sector": "Banking",
+      "holdingsCount": 3,
+      "invested": 250000,
+      "weightPct": 33.33,
+      "current": 278400,
+      "pnl": 28400,
+      "pnlPct": 11.36,
+      "holdings": [
+        {
+          "symbol": "HDFCBANK",
+          "quantity": 80,
+          "averagePrice": 1450,
+          "invested": 116000,
+          "weightPct": 46.4,
+          "current": 127200,
+          "ltp": 1590,
+          "pnl": 11200,
+          "pnlPct": 9.66,
+          "dayChangePct": 0.85,
+          "batches": [
+            { "price": 1420, "qty": 40, "age": "1 Years, 2 Months, 8 Days", "profitPct": 11.97 },
+            { "price": 1480, "qty": 40, "age": "8 Months, 12 Days", "profitPct": 7.43 }
+          ]
+        },
+        {
+          "symbol": "ICICIBANK",
+          "quantity": 65,
+          "averagePrice": 980,
+          "invested": 63700,
+          "weightPct": 25.48,
+          "current": 70200,
+          "ltp": 1080,
+          "pnl": 6500,
+          "pnlPct": 10.2,
+          "dayChangePct": -0.22,
+          "batches": [
+            { "price": 960, "qty": 35, "age": "10 Months, 3 Days", "profitPct": 12.5 },
+            { "price": 1004, "qty": 30, "age": "5 Months, 4 Days", "profitPct": 7.57 }
+          ]
+        },
+        {
+          "symbol": "SBIN",
+          "quantity": 100,
+          "averagePrice": 703,
+          "invested": 70300,
+          "weightPct": 28.12,
+          "current": 81000,
+          "ltp": 810,
+          "pnl": 10700,
+          "pnlPct": 15.22,
+          "dayChangePct": 1.1,
+          "batches": [
+            { "price": 690, "qty": 50, "age": "9 Months, 1 Days", "profitPct": 17.39 },
+            { "price": 716, "qty": 50, "age": "4 Months, 18 Days", "profitPct": 13.13 }
+          ]
+        }
+      ]
+    },
+    {
+      "sector": "Defence",
+      "holdingsCount": 2,
+      "invested": 230000,
+      "weightPct": 30.67,
+      "current": 267850,
+      "pnl": 37850,
+      "pnlPct": 16.46,
+      "holdings": [
+        {
+          "symbol": "BEL",
+          "quantity": 450,
+          "averagePrice": 180,
+          "invested": 81000,
+          "weightPct": 35.22,
+          "current": 96300,
+          "ltp": 214,
+          "pnl": 15300,
+          "pnlPct": 18.89,
+          "dayChangePct": 1.62,
+          "batches": [
+            { "price": 175, "qty": 250, "age": "1 Years, 0 Months, 2 Days", "profitPct": 22.29 },
+            { "price": 186.25, "qty": 200, "age": "7 Months, 6 Days", "profitPct": 14.9 }
+          ]
+        },
+        {
+          "symbol": "HAL",
+          "quantity": 35,
+          "averagePrice": 4257.14,
+          "invested": 149000,
+          "weightPct": 64.78,
+          "current": 171550,
+          "ltp": 4901.43,
+          "pnl": 22550,
+          "pnlPct": 15.13,
+          "dayChangePct": 0.44,
+          "batches": [
+            { "price": 4180, "qty": 20, "age": "11 Months, 11 Days", "profitPct": 17.26 },
+            { "price": 4360, "qty": 15, "age": "6 Months, 8 Days", "profitPct": 12.42 }
+          ]
+        }
+      ]
+    },
+    {
+      "sector": "IT",
+      "holdingsCount": 2,
+      "invested": 270000,
+      "weightPct": 36,
+      "current": 277200,
+      "pnl": 7200,
+      "pnlPct": 2.67,
+      "holdings": [
+        {
+          "symbol": "TCS",
+          "quantity": 42,
+          "averagePrice": 3821.43,
+          "invested": 160500,
+          "weightPct": 59.44,
+          "current": 166320,
+          "ltp": 3960,
+          "pnl": 5820,
+          "pnlPct": 3.63,
+          "dayChangePct": -0.18,
+          "batches": [
+            { "price": 3740, "qty": 22, "age": "1 Years, 5 Months, 0 Days", "profitPct": 5.88 },
+            { "price": 3911, "qty": 20, "age": "3 Months, 16 Days", "profitPct": 1.25 }
+          ]
+        },
+        {
+          "symbol": "INFY",
+          "quantity": 70,
+          "averagePrice": 1564.29,
+          "invested": 109500,
+          "weightPct": 40.56,
+          "current": 110880,
+          "ltp": 1584,
+          "pnl": 1380,
+          "pnlPct": 1.26,
+          "dayChangePct": 0.05,
+          "batches": [
+            { "price": 1510, "qty": 35, "age": "1 Years, 1 Months, 19 Days", "profitPct": 4.9 },
+            { "price": 1618.57, "qty": 35, "age": "2 Months, 10 Days", "profitPct": -2.14 }
+          ]
+        }
+      ]
+    }
+  ]
+}
