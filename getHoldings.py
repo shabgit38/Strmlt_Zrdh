@@ -21,6 +21,10 @@ from kite_analytics import (
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 from momentum_score import calculate_momentum_scores_from_kite
 from portfolio_terminal_component import render_portfolio_terminal
+from top_gainers_losers import (
+    display_portfolio_day_movers_summary,
+    display_returns_day_movers_summary,
+)
 from getPositions import render_open_positions_tab
 from getHldgBrk import (
     HOLDINGS_BREAKDOWN_DF_STATE_KEY,
@@ -1501,18 +1505,6 @@ with tab_fetch_kite:
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
 
     kite_holdings_df = st.session_state.get("kite_holdings_df")
-    if kite_holdings_df is not None:
-        ltp_refresh_count = st_autorefresh(
-            interval=LTP_REFRESH_INTERVAL_MS,
-            key="ltp_refresh",
-        )
-        previous_ltp_refresh_count = st.session_state.get("kite_holdings_ltp_refresh_count")
-        if previous_ltp_refresh_count is None:
-            st.session_state["kite_holdings_ltp_refresh_count"] = ltp_refresh_count
-        elif ltp_refresh_count != previous_ltp_refresh_count:
-            kite_holdings_df = refresh_live_ltp_for_holdings(kite_holdings_df)
-            st.session_state["kite_holdings_ltp_refresh_count"] = ltp_refresh_count
-
     tab_price_ladder, tab_portfolio_holdings, tab_portfolio_react, tab_returns, tab_holdings_breakdown = st.tabs(
         ["Price Ladder", "Portfolio Holdings", "Portfolio", "Returns", "Holdings Breakdown"]
     )
@@ -1566,6 +1558,8 @@ with tab_fetch_kite:
             render_portfolio_terminal(snapshot, key="portfolio_terminal_component")
 
     with tab_price_ladder:
+        if kite_holdings_df is not None:
+            display_portfolio_day_movers_summary(kite_holdings_df)
         display_historic_price_ladder_frame(
             _sort_historic_dashboard_by_rng(
                 st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame())
@@ -1590,6 +1584,18 @@ with tab_fetch_kite:
         else:
             st.info("No holdings breakdown found in Supabase.")
     #display_supabase_holdings_breakdown()  
+
+    if kite_holdings_df is not None:
+        ltp_refresh_count = st_autorefresh(
+            interval=LTP_REFRESH_INTERVAL_MS,
+            key="ltp_refresh",
+        )
+        previous_ltp_refresh_count = st.session_state.get("kite_holdings_ltp_refresh_count")
+        if previous_ltp_refresh_count is None:
+            st.session_state["kite_holdings_ltp_refresh_count"] = ltp_refresh_count
+        elif ltp_refresh_count != previous_ltp_refresh_count:
+            kite_holdings_df = refresh_live_ltp_for_holdings(kite_holdings_df)
+            st.session_state["kite_holdings_ltp_refresh_count"] = ltp_refresh_count
 
 
 with tab_open_positions:
@@ -1903,6 +1909,7 @@ with tab_historic_data:
         with tab_returns:
             display_historic_returns_frame(returns_df, max_rows=18)
         with tab_ladder:
+            display_returns_day_movers_summary(returns_df)
             display_historic_price_ladder_frame(
                 sorted_dashboard_df,
                 max_rows=12,
