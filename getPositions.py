@@ -82,19 +82,26 @@ def _format_percent_value(value: Any, decimals: int = 2) -> str:
     return f"{formatted_value}%"
 
 
-def _pnl_color(value: Any) -> str:
+def _pnl_cell_style(value: Any) -> str:
     converted = pd.to_numeric(value, errors="coerce")
     if pd.isna(converted):
-        return "#475569"
+        return "color: #475569"
     if converted > 0:
-        return "#047857"
+        return "color: #047857; font-weight: 600"
     if converted < 0:
-        return "#b91c1c"
-    return "#475569"
+        return "color: #b91c1c; font-weight: 600"
+    return "color: #475569; font-weight: 600"
+
+
+def _spot_distance_cell_style(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return "background-color: #64748B; color: #FFFFFF; font-weight: 700"
 
 
 def _style_pnl_columns(df: pd.DataFrame):
     pnl_columns = [column for column in ["P&L", "P&L %", "PROFIT", "PROFIT %"] if column in df.columns]
+    spot_distance_columns = [column for column in ["Spot", "Dist_Spot"] if column in df.columns]
     formatters = {
         column: _format_display_value
         for column in df.columns
@@ -107,7 +114,9 @@ def _style_pnl_columns(df: pd.DataFrame):
 
     styler = df.style.format(formatters, na_rep="-")
     for column in pnl_columns:
-        styler = styler.map(lambda value: f"color: {_pnl_color(value)}; font-weight: 600", subset=[column])
+        styler = styler.map(_pnl_cell_style, subset=[column])
+    for column in spot_distance_columns:
+        styler = styler.map(_spot_distance_cell_style, subset=[column])
     return styler
 
 
@@ -383,7 +392,7 @@ def render_option_calculator() -> None:
 
     editor_df = _calculate_option_rows(st.session_state["option_calculator_df"])
     edited_df = st.data_editor(
-        editor_df,
+        _style_pnl_columns(editor_df),
         key="option_calculator_editor",
         width="stretch",
         hide_index=True,

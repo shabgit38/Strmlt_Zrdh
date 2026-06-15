@@ -52,7 +52,8 @@ st.set_page_config(layout="wide")
 
 SUPABASE_INDICES_TABLE_NAME = "Indices_constituents"
 DEFAULT_MOMENTUM_BENCHMARK = "NIFTY 50"
-WAIT_BUTTON_COLOR = "#64748B"
+BUTTON_COLOR = "#7C3AED"
+BUTTON_HOVER_COLOR = "#6D28D9"
 LTP_REFRESH_INTERVAL_MS = 60 * 60 * 1000
 
 
@@ -67,21 +68,27 @@ def _apply_button_palette() -> None:
         f"""
         <style>
         div.stButton > button,
-        div.stButton > button[kind="primary"] {{
-            background-color: {WAIT_BUTTON_COLOR};
-            border-color: {WAIT_BUTTON_COLOR};
-            color: #FFFFFF;
+        div.stButton > button[kind="primary"],
+        button[data-testid="stBaseButton-primary"],
+        button[data-testid="stBaseButton-secondary"] {{
+            background-color: {BUTTON_COLOR} !important;
+            border-color: {BUTTON_COLOR} !important;
+            color: #FFFFFF !important;
         }}
         div.stButton > button:hover,
-        div.stButton > button[kind="primary"]:hover {{
-            background-color: #475569;
-            border-color: #475569;
-            color: #FFFFFF;
+        div.stButton > button[kind="primary"]:hover,
+        button[data-testid="stBaseButton-primary"]:hover,
+        button[data-testid="stBaseButton-secondary"]:hover {{
+            background-color: {BUTTON_HOVER_COLOR} !important;
+            border-color: {BUTTON_HOVER_COLOR} !important;
+            color: #FFFFFF !important;
         }}
         div.stButton > button:focus,
-        div.stButton > button[kind="primary"]:focus {{
-            box-shadow: 0 0 0 0.15rem rgba(100, 116, 139, 0.25);
-            color: #FFFFFF;
+        div.stButton > button[kind="primary"]:focus,
+        button[data-testid="stBaseButton-primary"]:focus,
+        button[data-testid="stBaseButton-secondary"]:focus {{
+            box-shadow: 0 0 0 0.15rem rgba(124, 58, 237, 0.28) !important;
+            color: #FFFFFF !important;
         }}
         div[data-testid="stDataFrame"] div[role="gridcell"],
         div[data-testid="stDataFrame"] div[role="cell"],
@@ -1099,7 +1106,7 @@ with tab_upload_kite:
 with tab_fetch_kite:
     fetch_holdings_col, holdings_ltp_col = st.columns([1, 3], vertical_alignment="center")
     with fetch_holdings_col:
-        if st.button("Fetch Holdings from Kite", type="primary"):
+        if st.button("Fetch Holdings", type="primary"):
             fetch_and_display_holdings()#get holdings from kite,
     with holdings_ltp_col:
         _live_ltp_refreshed_caption("kite_holdings_ltp_refreshed_at")
@@ -1112,7 +1119,7 @@ with tab_fetch_kite:
 
     with tab_portfolio_react:
         if kite_holdings_df is None:
-            st.info("Fetch holdings from Kite to display the React portfolio UI.")
+            st.info("Fetch holdings to display the React portfolio UI.")
         else:
             as_of = st.session_state.get("kite_holdings_fetched_at") or pd.Timestamp.now().isoformat()
             snapshot = portfolio_streamlit.build_portfolio_terminal_snapshot(
@@ -1191,7 +1198,7 @@ with tab_fetch_kite:
         if breakdown_error:
             st.warning(f"Could not load holdings breakdown from Supabase: {breakdown_error}")
         if kite_holdings_df is None:
-            st.info("Fetch holdings from Kite to display holdings breakdown.")
+            st.info("Fetch holdings to display holdings breakdown.")
         elif not _holdings_breakdown_state_df().empty:
             display_holdings_breakdown_df(_holdings_breakdown_state_df())
         else:
@@ -1262,8 +1269,6 @@ with tab_upload_holdings_breakdown:
 
 
 with tab_historic_data:
-    st.caption("Fetch cached 2Y daily Kite data and show a sorted price ladder per ticker.")
-
     if "historic_tickers_input" not in st.session_state:
         st.session_state["historic_tickers_input"] = ""
 
@@ -1306,7 +1311,12 @@ with tab_historic_data:
 
     fetch_dashboard_col, historic_ltp_col = st.columns([1, 3], vertical_alignment="center")
     with fetch_dashboard_col:
-        fetch_dashboard_clicked = st.button("Fetch dashboard", type="primary", key="historic_fetch_dashboard")
+        fetch_dashboard_clicked = st.button(
+            "Fetch dashboard",
+            type="primary",
+            key="historic_fetch_dashboard",
+            help="Fetch cached 2Y daily Kite data and show a sorted price ladder per ticker.",
+        )
     with historic_ltp_col:
         _live_ltp_refreshed_caption("historic_ltp_refreshed_at")
 
