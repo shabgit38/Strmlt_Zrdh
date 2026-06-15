@@ -165,6 +165,17 @@ def _pct(numerator: float, denominator: float) -> float:
     return numerator / denominator * 100 if denominator else 0.0
 
 
+def _day_pnl_from_ltp_change(ltp: Any, day_change_pct: Any, quantity: Any) -> float:
+    ltp_value = _float(ltp)
+    day_change_value = _float(day_change_pct)
+    quantity_value = _float(quantity)
+    denominator = 1 + (day_change_value / 100)
+    if denominator == 0:
+        return 0.0
+    previous_close = ltp_value / denominator
+    return (ltp_value - previous_close) * quantity_value
+
+
 def _symbol(value: Any) -> str:
     return str(value or "").upper().strip()
 
@@ -321,6 +332,7 @@ def build_live_portfolio_snapshot() -> dict[str, Any]:
 
     total_invested = 0.0
     total_current = 0.0
+    total_day_pnl = 0.0
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     mtf_holdings: list[dict[str, Any]] = []
 
@@ -329,14 +341,25 @@ def build_live_portfolio_snapshot() -> dict[str, Any]:
         mtf = holding.get("mtf") if isinstance(holding.get("mtf"), dict) else {}
         mtf_quantity = _int(mtf.get("quantity"))
         if mtf_quantity > 0:
+            mtf_invested = _float(mtf.get("value"))
+            mtf_pnl = _float(holding.get("pnl"))
+            mtf_current = mtf_invested + mtf_pnl
+            mtf_day_pnl = _day_pnl_from_ltp_change(
+                holding.get("last_price"),
+                holding.get("day_change_percentage"),
+                mtf_quantity,
+            )
+            total_invested += mtf_invested
+            total_current += mtf_current
+            total_day_pnl += mtf_day_pnl
             mtf_holdings.append(
                 {
                     "symbol": symbol,
                     "mtfQty": mtf_quantity,
                     "mtfAvgPrice": _float(mtf.get("average_price")),
-                    "mtfValue": _float(mtf.get("value")),
+                    "mtfValue": mtf_invested,
                     "ltp": _float(holding.get("last_price")),
-                    "pnl": _float(holding.get("pnl")),
+                    "pnl": mtf_pnl,
                     "dayChangePct": _float(holding.get("day_change_percentage")),
                 }
             )
@@ -349,6 +372,11 @@ def build_live_portfolio_snapshot() -> dict[str, Any]:
         current = ltp * quantity
         pnl = _float(holding.get("pnl"), current - invested)
         pnl_pct = _pct(pnl, invested)
+        day_pnl = _day_pnl_from_ltp_change(
+            holding.get("last_price"),
+            holding.get("day_change_percentage"),
+            quantity,
+        )
         sector = (
             sector_by_symbol.get(symbol)
             or sector_by_symbol.get(_ltp_match_symbol(symbol))
@@ -357,6 +385,7 @@ def build_live_portfolio_snapshot() -> dict[str, Any]:
 
         total_invested += invested
         total_current += current
+        total_day_pnl += day_pnl
         grouped[sector].append(
             {
                 "symbol": symbol,
@@ -404,6 +433,8 @@ def build_live_portfolio_snapshot() -> dict[str, Any]:
                 "current": total_current,
                 "pnl": total_pnl,
                 "pnlPct": _pct(total_pnl, total_invested),
+                "dayPnl": total_day_pnl,
+                "dayPnlPct": _pct(total_day_pnl, total_invested),
             },
             "sectors": sorted(sectors, key=lambda sector: sector["current"], reverse=True),
             "mtfHoldings": sorted(mtf_holdings, key=lambda holding: holding["symbol"]),

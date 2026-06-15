@@ -1,3 +1,4 @@
+import { Clock3 } from "lucide-react";
 import type { SectorGroup } from "../types";
 import { formatMoney, formatPct, signedClass } from "../format";
 
@@ -5,17 +6,25 @@ type SectorSummaryTableProps = {
   sectors: SectorGroup[];
   selectedSector: string | null;
   onSelectSector: (sector: string) => void;
+  asOf: string;
 };
 
 export function SectorSummaryTable({
   sectors,
   selectedSector,
   onSelectSector,
+  asOf,
 }: SectorSummaryTableProps) {
   return (
     <section className="h-full rounded-lg border border-terminal-line bg-terminal-panel p-4 shadow-sm">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-terminal-ink">Sector Summary</h2>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h2 className="text-sm font-semibold text-terminal-ink">Sector Summary</h2>
+          <span className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-terminal-muted">
+            <Clock3 className="h-3.5 w-3.5" />
+            As of {new Date(asOf).toLocaleString()}
+          </span>
+        </div>
         <span className="text-xs text-terminal-muted">{sectors.length} sectors</span>
       </div>
       <div className="overflow-hidden rounded-md border border-terminal-line">

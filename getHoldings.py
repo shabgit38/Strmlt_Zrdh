@@ -1090,25 +1090,21 @@ with tab_fetch_kite:
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
 
     kite_holdings_df = st.session_state.get("kite_holdings_df")
-    tab_price_ladder, tab_portfolio_holdings, tab_portfolio_react, tab_returns, tab_holdings_breakdown = st.tabs(
-        ["Price Ladder", "Portfolio Holdings", "Portfolio", "Returns", "Holdings Breakdown"]
+    tab_price_ladder, tab_portfolio_react, tab_returns, tab_holdings_breakdown = st.tabs(
+        ["Price Ladder", "Portfolio", "Returns", "Holdings Breakdown"]
     )
 
-    with tab_portfolio_holdings:
+    with tab_portfolio_react:
         if kite_holdings_df is None:
-            st.info("Fetch holdings from Kite to display portfolio holdings.")
+            st.info("Fetch holdings from Kite to display the React portfolio UI.")
         else:
-            kite_holdings_download_filename = st.session_state.get("kite_holdings_download_filename", "Unknown")
-            Holdings_fetchDate = kite_holdings_download_filename.split("_")[1] 
-
-            #print("Holdings fetch date:", Holdings_fetchDate , "kite_holdings_download_filename:", kite_holdings_download_filename )
-            
-            portfolio_streamlit.display_kite_holdings(
+            as_of = st.session_state.get("kite_holdings_fetched_at") or pd.Timestamp.now().isoformat()
+            snapshot = portfolio_streamlit.build_portfolio_terminal_snapshot(
                 kite_holdings_df,
-                selection_key="fetch_kite_holdings_table",
-                selected_batches_df=_holdings_breakdown_state_df(),
-                selected_batches_error=st.session_state.get("kite_holdings_breakdown_error"),
+                _holdings_breakdown_state_df(),
+                as_of=as_of,
             )
+            render_portfolio_terminal(snapshot, key="portfolio_terminal_component")
             ltp_refreshed_at = st.session_state.get("kite_holdings_ltp_refreshed_at")
             if ltp_refreshed_at:
                 st.caption(f"Live LTP refreshed at {pd.Timestamp(ltp_refreshed_at).strftime('%Y-%m-%d %H:%M:%S')}")
@@ -1129,18 +1125,6 @@ with tab_fetch_kite:
                     + ", ".join(failed_symbols[:10])
                     + ("..." if len(failed_symbols) > 10 else "")
                 )
-
-    with tab_portfolio_react:
-        if kite_holdings_df is None:
-            st.info("Fetch holdings from Kite to display the React portfolio UI.")
-        else:
-            as_of = st.session_state.get("kite_holdings_fetched_at") or pd.Timestamp.now().isoformat()
-            snapshot = portfolio_streamlit.build_portfolio_terminal_snapshot(
-                kite_holdings_df,
-                _holdings_breakdown_state_df(),
-                as_of=as_of,
-            )
-            render_portfolio_terminal(snapshot, key="portfolio_terminal_component")
 
     with tab_price_ladder:
         if kite_holdings_df is not None:

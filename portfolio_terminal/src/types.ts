@@ -47,6 +47,8 @@ export type PortfolioSnapshot = {
     current: number;
     pnl: number;
     pnlPct: number;
+    dayPnl: number;
+    dayPnlPct: number;
   };
   sectors: SectorGroup[];
   mtfHoldings: MtfHolding[];

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { Clock3, PieChart } from "lucide-react";
+import { PieChart } from "lucide-react";
 import { loadPortfolioSnapshot } from "./api/portfolioApi";
-import { GroupedHoldings } from "./components/GroupedHoldings";
+import { GroupedHoldings, sectorAnchorId } from "./components/GroupedHoldings";
 import { MtfHoldingsTable } from "./components/MtfHoldingsTable";
 import { SectorPieChart } from "./components/SectorPieChart";
 import { SectorSummaryTable } from "./components/SectorSummaryTable";
@@ -46,6 +46,20 @@ export function App({ streamlitSnapshot, streamlitMode = false }: AppProps) {
     setSelectedSymbol(holding.symbol);
   }
 
+  function handleSelectSector(sector: string) {
+    setSelectedSector(sector);
+    const selectedHolding = snapshot?.sectors
+      .find((sectorGroup) => sectorGroup.sector === sector)
+      ?.holdings[0];
+    setSelectedSymbol(selectedHolding?.symbol ?? null);
+    window.requestAnimationFrame(() => {
+      document.getElementById(sectorAnchorId(sector))?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
+
   if (error) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-terminal-bg p-8">
@@ -69,15 +83,16 @@ export function App({ streamlitSnapshot, streamlitMode = false }: AppProps) {
   return (
     <main className="min-h-screen bg-terminal-bg">
       <div className="mx-auto max-w-[1680px] space-y-5 px-5 py-5">
-        <div className="flex items-center justify-end gap-2 text-xs font-semibold uppercase tracking-wide text-terminal-muted">
-          <Clock3 className="h-3.5 w-3.5" />
-          <span>As of {new Date(snapshot.asOf).toLocaleString()}</span>
-        </div>
-        <section className="grid gap-3 md:grid-cols-4">
+        <section className="grid gap-3 md:grid-cols-5">
           <Metric label="Invested" value={formatMoney(snapshot.totals.invested)} />
           <Metric label="Current" value={formatMoney(snapshot.totals.current)} />
           <Metric label="P&L" value={formatMoney(snapshot.totals.pnl)} tone={signedClass(snapshot.totals.pnl)} />
           <Metric label="P&L %" value={formatPct(snapshot.totals.pnlPct)} tone={signedClass(snapshot.totals.pnlPct)} />
+          <Metric
+            label="Day P&L"
+            value={formatDayPnl(snapshot.totals.dayPnl, snapshot.totals.dayPnlPct)}
+            tone={signedClass(snapshot.totals.dayPnl)}
+          />
         </section>
 
         <section className="grid gap-4 xl:grid-cols-[minmax(24rem,0.9fr)_minmax(0,1.6fr)]">
@@ -85,7 +100,8 @@ export function App({ streamlitSnapshot, streamlitMode = false }: AppProps) {
           <SectorSummaryTable
             sectors={snapshot.sectors}
             selectedSector={selectedSector}
-            onSelectSector={setSelectedSector}
+            onSelectSector={handleSelectSector}
+            asOf={snapshot.asOf}
           />
         </section>
 
@@ -98,6 +114,7 @@ export function App({ streamlitSnapshot, streamlitMode = false }: AppProps) {
           </div>
           <GroupedHoldings
             sectors={snapshot.sectors}
+            selectedSector={selectedSector}
             selectedSymbol={selectedSymbol}
             onSelectHolding={handleSelectHolding}
           />
@@ -120,4 +137,9 @@ function Metric({ label, value, tone = "text-terminal-ink" }: MetricProps) {
       <div className={`mt-1 text-2xl font-bold tabular-nums ${tone}`}>{value}</div>
     </div>
   );
+}
+
+function formatDayPnl(value: number, pct: number): string {
+  const sign = value >= 0 ? "+" : "-";
+  return `${sign}${formatMoney(Math.abs(value))}[${formatPct(pct)}]`;
 }

@@ -348,6 +348,19 @@ def _component_text(value: Any) -> str:
     return str(value)
 
 
+def _day_pnl_from_ltp_change(ltp: Any, day_change_pct: Any, quantity: Any) -> float:
+    ltp_value = pd.to_numeric(ltp, errors="coerce")
+    day_change_value = pd.to_numeric(day_change_pct, errors="coerce")
+    quantity_value = pd.to_numeric(quantity, errors="coerce")
+    if pd.isna(ltp_value) or pd.isna(day_change_value) or pd.isna(quantity_value):
+        return 0.0
+    denominator = 1 + (float(day_change_value) / 100)
+    if denominator == 0:
+        return 0.0
+    previous_close = float(ltp_value) / denominator
+    return (float(ltp_value) - previous_close) * float(quantity_value)
+
+
 def _portfolio_component_batches(
     symbol: Any,
     isin: Any,
@@ -403,6 +416,26 @@ def _mtf_snapshot_rows(holdings_df: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
+def _mtf_totals(holdings_df: pd.DataFrame) -> dict[str, float]:
+    mtf_display_df = _mtf_holdings_display_df(holdings_df)
+    if mtf_display_df.empty:
+        return {"invested": 0.0, "current": 0.0, "pnl": 0.0, "dayPnl": 0.0}
+
+    invested = pd.to_numeric(mtf_display_df.get("MTF Value"), errors="coerce").fillna(0).sum()
+    pnl = pd.to_numeric(mtf_display_df.get("P&L"), errors="coerce").fillna(0).sum()
+    current = invested + pnl
+    day_pnl = sum(
+        _day_pnl_from_ltp_change(row.get("LTP"), row.get("Daychg%"), row.get("MTF Qty"))
+        for _, row in mtf_display_df.iterrows()
+    )
+    return {
+        "invested": float(invested),
+        "current": float(current),
+        "pnl": float(pnl),
+        "dayPnl": float(day_pnl),
+    }
+
+
 def build_portfolio_terminal_snapshot(
     holdings_df: pd.DataFrame,
     holdings_breakdown_df: pd.DataFrame,
@@ -411,7 +444,7 @@ def build_portfolio_terminal_snapshot(
 ) -> dict[str, Any]:
     empty_snapshot = {
         "asOf": as_of,
-        "totals": {"invested": 0, "current": 0, "pnl": 0, "pnlPct": 0},
+        "totals": {"invested": 0, "current": 0, "pnl": 0, "pnlPct": 0, "dayPnl": 0, "dayPnlPct": 0},
         "sectors": [],
         "mtfHoldings": _mtf_snapshot_rows(holdings_df),
     }
@@ -444,10 +477,17 @@ def build_portfolio_terminal_snapshot(
     )
     display_df = _add_sector_to_holdings_display(display_df, holdings_breakdown_df)
 
-    total_invested = _component_number(display_df["Invested"].sum())
-    total_current = _component_number(display_df["Current"].sum())
-    total_pnl = _component_number(display_df["P&L"].sum())
+    non_mtf_day_pnl = sum(
+        _day_pnl_from_ltp_change(holding.get("LTP"), holding.get("DayChg %"), holding.get("Quantity"))
+        for _, holding in display_df.iterrows()
+    )
+    mtf_totals = _mtf_totals(holdings_df)
+    total_invested = _component_number(display_df["Invested"].sum()) + mtf_totals["invested"]
+    total_current = _component_number(display_df["Current"].sum()) + mtf_totals["current"]
+    total_pnl = _component_number(display_df["P&L"].sum()) + mtf_totals["pnl"]
+    total_day_pnl = non_mtf_day_pnl + mtf_totals["dayPnl"]
     total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0
+    total_day_pnl_pct = (total_day_pnl / total_invested * 100) if total_invested else 0
 
     sectors: list[dict[str, Any]] = []
     for sector, sector_df in display_df.groupby("Sector", sort=False):
@@ -491,7 +531,14 @@ def build_portfolio_terminal_snapshot(
 
     return {
         "asOf": as_of,
-        "totals": {"invested": total_invested, "current": total_current, "pnl": total_pnl, "pnlPct": total_pnl_pct},
+        "totals": {
+            "invested": total_invested,
+            "current": total_current,
+            "pnl": total_pnl,
+            "pnlPct": total_pnl_pct,
+            "dayPnl": total_day_pnl,
+            "dayPnlPct": total_day_pnl_pct,
+        },
         "sectors": sectors,
         "mtfHoldings": _mtf_snapshot_rows(holdings_df),
     }
