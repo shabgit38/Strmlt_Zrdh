@@ -48,10 +48,6 @@ export function App({ streamlitSnapshot, streamlitMode = false }: AppProps) {
 
   function handleSelectSector(sector: string) {
     setSelectedSector(sector);
-    const selectedHolding = snapshot?.sectors
-      .find((sectorGroup) => sectorGroup.sector === sector)
-      ?.holdings[0];
-    setSelectedSymbol(selectedHolding?.symbol ?? null);
     window.requestAnimationFrame(() => {
       document.getElementById(sectorAnchorId(sector))?.scrollIntoView({
         behavior: "smooth",

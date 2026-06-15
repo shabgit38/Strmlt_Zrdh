@@ -153,12 +153,12 @@ def _format_pct(value: Any) -> str:
 
 
 SUMMARY_ACCENTS = {
-    "Top Gainer": "#16A34A",
-    "Top Gainers": "#16A34A",
+    "Top Gainer": "#7DCE9B",
+    "Top Gainers": "#7DCE9B",
     "Top Loser": "#DC2626",
     "Top Losers": "#DC2626",
-    "Top Contributor": "#2563EB",
-    "Top Drag": "#EA580C",
+    "Top Contributor": "#7DCE9B",
+    "Top Drag": "#DC2626",
 }
 
 
@@ -217,7 +217,7 @@ def _inject_summary_card_styles() -> None:
             display: flex;
             align-items: center;
             gap: 0.42rem;
-            font-size: 0.78rem;
+            font-size: 0.8rem;
             font-weight: 700;
             line-height: 1.2;
             margin-bottom: 0.48rem;
@@ -235,7 +235,7 @@ def _inject_summary_card_styles() -> None:
             justify-content: space-between;
             gap: 0.65rem;
             min-height: 1.45rem;
-            font-size: 0.79rem;
+            font-size: 0.8rem;
             line-height: 1.25;
         }
         .tgl-card__symbol {

@@ -48,7 +48,7 @@ export function SectorPieChart({ sectors }: SectorPieChartProps) {
             <Tooltip
               formatter={(value, _name, item) => [
                 `${formatMoney(Number(value))} (${formatPct(item.payload.weightPct)})`,
-                "Invested",
+                item.payload.name,
               ]}
             />
             <Legend iconType="circle" layout="horizontal" verticalAlign="bottom" height={48} />

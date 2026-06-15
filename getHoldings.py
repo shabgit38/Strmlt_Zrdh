@@ -77,6 +77,12 @@ def _apply_button_palette() -> None:
             box-shadow: 0 0 0 0.15rem rgba(100, 116, 139, 0.25);
             color: #FFFFFF;
         }}
+        div[data-testid="stDataFrame"] div[role="gridcell"],
+        div[data-testid="stDataFrame"] div[role="cell"],
+        div[data-testid="stDataEditor"] div[role="gridcell"],
+        div[data-testid="stDataEditor"] div[role="cell"] {{
+            font-size: 0.8rem;
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -762,15 +768,15 @@ def _pullback_signal_style(score: Any, signal: Any) -> str:
     signal_text = str(signal or "").strip()
     score_value = pd.to_numeric(score, errors="coerce")
     if signal_text == "Watchlist - Below EMA20":
-        return "background-color: #2563EB; color: #FFFFFF; font-weight: 700"
+        return "background-color: #7DCE9B; color: #111827; font-weight: 700"
     if pd.isna(score_value):
         return ""
     if score_value < 45:
-        return "background-color: #BE123C; color: #FFFFFF; font-weight: 700"
-    if score_value < 65:
         return "background-color: #64748B; color: #FFFFFF; font-weight: 700"
+    if score_value < 65:
+        return "background-color: #5EA6D1; color: #111827; font-weight: 700"
     if score_value < 80:
-        return "background-color: #D97706; color: #111827; font-weight: 700"
+        return "background-color: #FFB15C; color: #111827; font-weight: 700"
     return "background-color: #0F766E; color: #FFFFFF; font-weight: 700"
 
 
@@ -778,7 +784,7 @@ def highlight_momentum_rank_cells(data: pd.DataFrame) -> pd.DataFrame:
     styles = pd.DataFrame("", index=data.index, columns=data.columns)
     highlight_columns = [
         column
-        for column in ["ticker", "pullback_score", "entry_signal"]
+        for column in ["ticker", "Entry"]
         if column in data.columns
     ]
     if not highlight_columns or "pullback_score" not in data.columns:
@@ -819,16 +825,16 @@ def _group_momentum_symbols_by_label(momentum_df: pd.DataFrame) -> dict[str, lis
 def _format_momentum_label_summary(label_groups: dict[str, list[str]]) -> str:
     summary_items = [
         ("Strong Entry", "#0F766E", "#FFFFFF", label_groups["Strong Entry"]),
-        ("Watchlist - Below EMA20", "#2563EB", "#FFFFFF", label_groups["Watchlist - Below EMA20"]),
-        ("Near Entry", "#D97706", "#111827", label_groups["Near Entry"]),
-        ("Wait", "#64748B", "#FFFFFF", label_groups["Wait"]),
-        ("Avoid", "#BE123C", "#FFFFFF", label_groups["Avoid"]),
+        ("Watchlist - Below EMA20", "#7DCE9B", "#111827", label_groups["Watchlist - Below EMA20"]),
+        ("Near Entry", "#FFB15C", "#111827", label_groups["Near Entry"]),
+        ("Wait", "#5EA6D1", "#111827", label_groups["Wait"]),
+        ("Avoid", "#64748B", "#FFFFFF", label_groups["Avoid"]),
     ]
     rows = []
     for label, background, foreground, symbols in summary_items:
         symbol_text = escape(", ".join(symbols)) if symbols else "-"
         rows.append(
-            "<div style='display:flex;align-items:center;gap:0.5rem;'>"
+            "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:5rem;font-weight:700;color:{background};'>{label}</span>"
             f"<span style='background:{background};color:{foreground};font-weight:700;"
             "padding:0.2rem 0.45rem;border-radius:0.25rem;'>"

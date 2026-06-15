@@ -468,11 +468,11 @@ VOLUME_GAIN_COLUMNS = [
 ]
 
 MOMENTUM_PALETTE = {
-    "entry": ("#0F766E", "#FFFFFF"),
-    "watch": ("#2563EB", "#FFFFFF"),
-    "near": ("#D97706", "#111827"),
-    "wait": ("#64748B", "#FFFFFF"),
-    "avoid": ("#BE123C", "#FFFFFF"),
+    "entry": ("#7DCE9B", "#111827"),
+    "watch": ("#46D9E6", "#111827"),
+    "near": ("#FFB15C", "#111827"),
+    "wait": ("#5EA6D1", "#111827"),
+    "avoid": ("#64748B", "#FFFFFF"),
 }
 
 
@@ -764,7 +764,7 @@ def _format_symbol_color_summary(color_groups: dict[str, list[str]]) -> str:
     for label, background, foreground, symbols in summary_items:
         symbol_text = escape(", ".join(symbols)) if symbols else "-"
         rows.append(
-            "<div style='display:flex;align-items:center;gap:0.5rem;'>"
+            "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:6.5rem;font-weight:700;color:{background};'>{label}</span>"
             f"<span style='background:{background};color:{foreground};font-weight:700;"
             "padding:0.2rem 0.45rem;border-radius:0.25rem;'>"
@@ -835,14 +835,14 @@ def highlight_ltp_cells(value: str) -> str:
             return "font-weight: 700"
 
         if range_pct < 25:
-            return "background-color: #BE123C; color: #FFFFFF; font-weight: 700"
-        if range_pct < 50:
             return "background-color: #64748B; color: #FFFFFF; font-weight: 700"
+        if range_pct < 50:
+            return "background-color: #5EA6D1; color: #111827; font-weight: 700"
         if range_pct < 75:
-            return "background-color: #D97706; color: #111827; font-weight: 700"
-        return "background-color: #0F766E; color: #FFFFFF; font-weight: 700"
+            return "background-color: #FFB15C; color: #111827; font-weight: 700"
+        return "background-color: #7DCE9B; color: #111827; font-weight: 700"
     if isinstance(value, str) and value.startswith("[") and value.endswith("]"):
-        return "background-color: #2563EB; color: #FFFFFF; font-weight: 600"
+        return "background-color: #334155; color: #FFFFFF; font-weight: 600"
     if isinstance(value, str) and value.startswith("LTP:"):
-        return "background-color: #D97706; color: #111827; font-weight: 700"
+        return "background-color: #334155; color: #FFFFFF; font-weight: 700"
     return ""
