@@ -322,9 +322,26 @@ def build_live_portfolio_snapshot() -> dict[str, Any]:
     total_invested = 0.0
     total_current = 0.0
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    mtf_holdings: list[dict[str, Any]] = []
 
     for holding in holdings:
         symbol = _symbol(holding.get("tradingsymbol"))
+        mtf = holding.get("mtf") if isinstance(holding.get("mtf"), dict) else {}
+        mtf_quantity = _int(mtf.get("quantity"))
+        if mtf_quantity > 0:
+            mtf_holdings.append(
+                {
+                    "symbol": symbol,
+                    "mtfQty": mtf_quantity,
+                    "mtfAvgPrice": _float(mtf.get("average_price")),
+                    "mtfValue": _float(mtf.get("value")),
+                    "ltp": _float(holding.get("last_price")),
+                    "pnl": _float(holding.get("pnl")),
+                    "dayChangePct": _float(holding.get("day_change_percentage")),
+                }
+            )
+            continue
+
         quantity = _int(holding.get("quantity"))
         average_price = _float(holding.get("average_price"))
         ltp = _float(holding.get("last_price"))
@@ -389,5 +406,6 @@ def build_live_portfolio_snapshot() -> dict[str, Any]:
                 "pnlPct": _pct(total_pnl, total_invested),
             },
             "sectors": sorted(sectors, key=lambda sector: sector["current"], reverse=True),
+            "mtfHoldings": sorted(mtf_holdings, key=lambda holding: holding["symbol"]),
         }
     )

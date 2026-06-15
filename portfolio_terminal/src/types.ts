@@ -30,6 +30,16 @@ export type SectorGroup = {
   holdings: Holding[];
 };
 
+export type MtfHolding = {
+  symbol: string;
+  mtfQty: number;
+  mtfAvgPrice: number;
+  mtfValue: number;
+  ltp: number;
+  pnl: number;
+  dayChangePct: number;
+};
+
 export type PortfolioSnapshot = {
   asOf: string;
   totals: {
@@ -39,4 +49,5 @@ export type PortfolioSnapshot = {
     pnlPct: number;
   };
   sectors: SectorGroup[];
+  mtfHoldings: MtfHolding[];
 };

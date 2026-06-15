@@ -1,5 +1,6 @@
 from datetime import datetime, time
 from html import escape
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -486,6 +487,9 @@ def build_historic_dashboard_frames(
     buy_avg_key: str | None = None,
     quantity_key: str | None = None,
     invested_key: str | None = None,
+    include_returns: bool = True,
+    include_close_prices: bool = True,
+    include_ladders: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame]:
     """
     Build the returns and sorted price ladder frames shared by historic screens.
@@ -505,7 +509,7 @@ def build_historic_dashboard_frames(
         if analytics_df.empty:
             skipped_symbols.append(symbol)
             continue
-        if "Close" in analytics_df.columns:
+        if include_close_prices and "Close" in analytics_df.columns:
             close_prices[symbol] = pd.to_numeric(analytics_df["Close"], errors="coerce")
 
         ltp = row.get(ltp_key) if ltp_key is not None else None
@@ -516,22 +520,111 @@ def build_historic_dashboard_frames(
             if pd.notna(buy_avg) and pd.notna(quantity):
                 invested = float(buy_avg) * float(quantity)
 
-        returns = compute_period_returns(analytics_df, ltp)
-        #volume_gains = compute_volume_gains(analytics_df)
-        return_rows.append(
-            {
-                "Ticker": symbol,
-                **{
-                    period: (
-                        returns[period]["return_pct"]
-                        if isinstance(returns.get(period), dict)
-                        else returns.get(period)
-                    )
-                    for period in RETURN_PERCENT_COLUMNS
-                },
-                #**{column: volume_gains.get(column) for column in VOLUME_GAIN_COLUMNS},
-            }
-        )
+        if include_returns:
+            returns = compute_period_returns(analytics_df, ltp)
+            #volume_gains = compute_volume_gains(analytics_df)
+            return_rows.append(
+                {
+                    "Ticker": symbol,
+                    **{
+                        period: (
+                            returns[period]["return_pct"]
+                            if isinstance(returns.get(period), dict)
+                            else returns.get(period)
+                        )
+                        for period in RETURN_PERCENT_COLUMNS
+                    },
+                    #**{column: volume_gains.get(column) for column in VOLUME_GAIN_COLUMNS},
+                }
+            )
+        if include_ladders:
+            ladders[symbol] = build_metric_ladder(
+                analytics_df,
+                buy_avg=float(buy_avg) if pd.notna(buy_avg) else None,
+                quantity=float(quantity) if pd.notna(quantity) else None,
+                invested=float(invested) if pd.notna(invested) else None,
+            )
+
+    close_prices_df = pd.DataFrame(close_prices).sort_index()
+    return pd.DataFrame(return_rows), build_vertical_dashboard(ladders), skipped_symbols, close_prices_df
+
+
+def _historic_day_mover_row(symbol: str, analytics_df: pd.DataFrame, ltp: Any = None) -> dict[str, float | str] | None:
+    if analytics_df.empty or "Close" not in analytics_df.columns or len(analytics_df) < 2:
+        return None
+
+    df = _normalize_datetime_index(analytics_df)
+    df.sort_index(inplace=True)
+    latest_price = pd.to_numeric(ltp, errors="coerce")
+    if pd.isna(latest_price):
+        latest_price = pd.to_numeric(df.iloc[-1]["Close"], errors="coerce")
+    previous_close = pd.to_numeric(df.iloc[-2]["Close"], errors="coerce")
+    if pd.isna(latest_price) or pd.isna(previous_close) or float(previous_close) == 0:
+        return None
+
+    latest_price_f = float(latest_price)
+    previous_close_f = float(previous_close)
+    return {
+        "Ticker": symbol,
+        "LTP": latest_price_f,
+        "Previous Close": previous_close_f,
+        "DayChg %": round(((latest_price_f - previous_close_f) / previous_close_f) * 100, 2),
+        "DayChg": round(latest_price_f - previous_close_f, 2),
+    }
+
+
+def build_price_ladder_and_day_movers_frames(
+    _kite: KiteConnect,
+    token_rows: list[dict],
+    as_of_date: str,
+    *,
+    symbol_key: str = "Ticker",
+    token_key: str = "instrument_token",
+    ltp_key: str | None = None,
+    buy_avg_key: str | None = None,
+    quantity_key: str | None = None,
+    invested_key: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    ladders: dict[str, list[tuple[str, float]]] = {}
+    day_mover_rows: list[dict[str, float | str]] = []
+    skipped_symbols: list[str] = []
+    live_ltp_by_symbol: dict[str, float] = {}
+
+    if ltp_key is None:
+        symbols = sorted({str(row.get(symbol_key) or "").strip().upper() for row in token_rows if row.get(symbol_key)})
+        if symbols:
+            try:
+                quotes = _kite.ltp(*[f"NSE:{symbol}" for symbol in symbols])
+                live_ltp_by_symbol = {
+                    str(instrument).split(":", 1)[-1].strip().upper(): float(quote["last_price"])
+                    for instrument, quote in quotes.items()
+                    if isinstance(quote, dict) and quote.get("last_price") is not None
+                }
+            except Exception:
+                live_ltp_by_symbol = {}
+
+    for row in token_rows:
+        symbol = str(row.get(symbol_key) or "").strip().upper()
+        token = row.get(token_key)
+        if not symbol or pd.isna(token):
+            continue
+
+        analytics_df = load_analytics_history(_kite, token, as_of_date)
+        if analytics_df.empty:
+            skipped_symbols.append(symbol)
+            continue
+
+        ltp = row.get(ltp_key) if ltp_key is not None else live_ltp_by_symbol.get(symbol)
+        buy_avg = pd.to_numeric(row.get(buy_avg_key), errors="coerce") if buy_avg_key is not None else None
+        quantity = pd.to_numeric(row.get(quantity_key), errors="coerce") if quantity_key is not None else None
+        invested = pd.to_numeric(row.get(invested_key), errors="coerce") if invested_key is not None else None
+        if pd.isna(invested) and buy_avg_key is not None and quantity_key is not None:
+            if pd.notna(buy_avg) and pd.notna(quantity):
+                invested = float(buy_avg) * float(quantity)
+
+        day_mover = _historic_day_mover_row(symbol, analytics_df, ltp)
+        if day_mover is not None:
+            day_mover_rows.append(day_mover)
         ladders[symbol] = build_metric_ladder(
             analytics_df,
             buy_avg=float(buy_avg) if pd.notna(buy_avg) else None,
@@ -539,8 +632,7 @@ def build_historic_dashboard_frames(
             invested=float(invested) if pd.notna(invested) else None,
         )
 
-    close_prices_df = pd.DataFrame(close_prices).sort_index()
-    return pd.DataFrame(return_rows), build_vertical_dashboard(ladders), skipped_symbols, close_prices_df
+    return build_vertical_dashboard(ladders), pd.DataFrame(day_mover_rows), skipped_symbols
 
 
 def _historic_dashboard_height(row_count: int, *, min_rows: int = 1, max_rows: int = 12) -> int:

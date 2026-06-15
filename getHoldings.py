@@ -12,8 +12,10 @@ import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
+import portfolio_streamlit
 from kite_analytics import (
     build_historic_dashboard_frames,
+    build_price_ladder_and_day_movers_frames,
     display_historic_price_ladder_frame,
     display_historic_returns_frame,
     highlight_numeric_scale_cells,
@@ -22,8 +24,8 @@ from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is
 from momentum_score import calculate_momentum_scores_from_kite
 from portfolio_terminal_component import render_portfolio_terminal
 from top_gainers_losers import (
+    display_day_movers_summary,
     display_portfolio_day_movers_summary,
-    display_returns_day_movers_summary,
 )
 from getPositions import render_open_positions_tab
 from getHldgBrk import (
@@ -473,179 +475,6 @@ def _display_mtf_holdings_df(df: pd.DataFrame) -> None:
             "Daychg%": st.column_config.NumberColumn("Daychg%", width="small", format="%.2f%%"),
         },
     )
-
-
-def _component_number(value: Any) -> float:
-    converted = pd.to_numeric(value, errors="coerce")
-    if pd.isna(converted):
-        return 0.0
-    return float(converted)
-
-
-def _component_int(value: Any) -> int:
-    converted = pd.to_numeric(value, errors="coerce")
-    if pd.isna(converted):
-        return 0
-    return int(converted)
-
-
-def _component_text(value: Any) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    return str(value)
-
-
-def _portfolio_component_batches(
-    symbol: Any,
-    isin: Any,
-    holdings_breakdown_df: pd.DataFrame,
-) -> list[dict[str, Any]]:
-    if holdings_breakdown_df.empty or "row_type" not in holdings_breakdown_df.columns:
-        return []
-
-    enriched_df, _ = enrich_holdings_breakdown_with_ltp(
-        holdings_breakdown_df,
-        st.session_state.get("ltp_by_symbol", {}),
-    )
-    active_df = _active_breakdown_df(enriched_df)
-    if active_df.empty or "row_type" not in active_df.columns:
-        return []
-
-    row_type = active_df["row_type"].astype(str).str.upper().str.strip()
-    symbol_key = _normalized_symbol_value(symbol)
-    isin_key = str(isin or "").upper().strip()
-    selected_rows = row_type.eq("BATCH") & active_df["symbol"].astype(str).str.upper().str.strip().eq(symbol_key)
-    if isin_key and "isin" in active_df.columns:
-        selected_rows = selected_rows | (
-            row_type.eq("BATCH")
-            & active_df["isin"].astype(str).str.upper().str.strip().eq(isin_key)
-        )
-
-    batch_df = active_df[selected_rows].copy()
-    if batch_df.empty:
-        return []
-    if "id" in batch_df.columns:
-        batch_df = batch_df.sort_values("id", kind="stable")
-
-    batches: list[dict[str, Any]] = []
-    for _, batch in batch_df.iterrows():
-        batches.append(
-            {
-                "price": _component_number(batch.get("batch_price")),
-                "qty": _component_int(batch.get("batch_qty")),
-                "age": _component_text(batch.get("present_age") or batch.get("age_days")),
-                "profitPct": _component_number(batch.get("batch_pnl_pct")),
-            }
-        )
-    return batches
-
-
-def build_portfolio_terminal_snapshot(
-    holdings_df: pd.DataFrame,
-    holdings_breakdown_df: pd.DataFrame,
-    *,
-    as_of: str,
-) -> dict[str, Any]:
-    if holdings_df.empty:
-        return {
-            "asOf": as_of,
-            "totals": {"invested": 0, "current": 0, "pnl": 0, "pnlPct": 0},
-            "sectors": [],
-        }
-
-    df = _non_mtf_holdings_df(holdings_df.copy())
-    if df.empty:
-        return {
-            "asOf": as_of,
-            "totals": {"invested": 0, "current": 0, "pnl": 0, "pnlPct": 0},
-            "sectors": [],
-        }
-
-    df["invested"] = pd.to_numeric(df.get("average_price"), errors="coerce") * pd.to_numeric(
-        df.get("quantity"), errors="coerce"
-    )
-    df["current_value"] = pd.to_numeric(df.get("last_price"), errors="coerce") * pd.to_numeric(
-        df.get("quantity"), errors="coerce"
-    )
-    invested = pd.to_numeric(df["invested"], errors="coerce")
-    df["pnl_pct"] = pd.to_numeric(df.get("pnl"), errors="coerce").where(invested.ne(0)) / invested * 100
-
-    display_df = pd.DataFrame(
-        {
-            "Sector": "Unmapped",
-            "Symbol": df.get("tradingsymbol", pd.Series(index=df.index, dtype=object)),
-            "ISIN": df.get("isin", pd.Series(index=df.index, dtype=object)),
-            "Quantity": df.get("quantity", pd.Series(index=df.index, dtype=float)),
-            "Avg Price": df.get("average_price", pd.Series(index=df.index, dtype=float)),
-            "Invested": df["invested"],
-            "Current": df["current_value"],
-            "LTP": df.get("last_price", pd.Series(index=df.index, dtype=float)),
-            "P&L": df.get("pnl", pd.Series(index=df.index, dtype=float)),
-            "P&L %": df["pnl_pct"],
-            "DayChg %": df.get("day_change_percentage", pd.Series(index=df.index, dtype=float)),
-        }
-    )
-    display_df = _add_sector_to_holdings_display(display_df, holdings_breakdown_df)
-
-    total_invested = _component_number(display_df["Invested"].sum())
-    total_current = _component_number(display_df["Current"].sum())
-    total_pnl = _component_number(display_df["P&L"].sum())
-    total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0
-
-    sectors: list[dict[str, Any]] = []
-    for sector, sector_df in display_df.groupby("Sector", sort=False):
-        sector_invested = _component_number(sector_df["Invested"].sum())
-        sector_current = _component_number(sector_df["Current"].sum())
-        sector_pnl = _component_number(sector_df["P&L"].sum())
-        sector_pnl_pct = (sector_pnl / sector_invested * 100) if sector_invested else 0
-        sector_weight_pct = (sector_invested / total_invested * 100) if total_invested else 0
-
-        holdings: list[dict[str, Any]] = []
-        for _, holding in sector_df.iterrows():
-            holding_invested = _component_number(holding.get("Invested"))
-            holdings.append(
-                {
-                    "symbol": _component_text(holding.get("Symbol")),
-                    "quantity": _component_int(holding.get("Quantity")),
-                    "averagePrice": _component_number(holding.get("Avg Price")),
-                    "invested": holding_invested,
-                    "weightPct": (holding_invested / sector_invested * 100) if sector_invested else 0,
-                    "current": _component_number(holding.get("Current")),
-                    "ltp": _component_number(holding.get("LTP")),
-                    "pnl": _component_number(holding.get("P&L")),
-                    "pnlPct": _component_number(holding.get("P&L %")),
-                    "dayChangePct": _component_number(holding.get("DayChg %")),
-                    "batches": _portfolio_component_batches(
-                        holding.get("Symbol"),
-                        holding.get("ISIN"),
-                        holdings_breakdown_df,
-                    ),
-                }
-            )
-
-        sectors.append(
-            {
-                "sector": _component_text(sector),
-                "holdingsCount": len(holdings),
-                "invested": sector_invested,
-                "weightPct": sector_weight_pct,
-                "current": sector_current,
-                "pnl": sector_pnl,
-                "pnlPct": sector_pnl_pct,
-                "holdings": holdings,
-            }
-        )
-
-    return {
-        "asOf": as_of,
-        "totals": {
-            "invested": total_invested,
-            "current": total_current,
-            "pnl": total_pnl,
-            "pnlPct": total_pnl_pct,
-        },
-        "sectors": sectors,
-    }
 
 
 def _display_sector_weight_pie_chart(sector_summary_df: pd.DataFrame) -> None:
@@ -1159,255 +988,6 @@ def refresh_live_ltp_for_holdings(holdings_df: pd.DataFrame) -> pd.DataFrame:
     return updated_df
 
 
-def display_kite_holdings(
-    df: pd.DataFrame,
-    kite=None,
-    *,
-    selection_key: str | None = None,
-    selected_batches_df: pd.DataFrame | None = None,
-    selected_batches_error: str | None = None,
-) -> str | None:
-    if df.empty:
-        st.session_state["ltp_by_symbol"] = {}
-        st.warning("No holdings found.")
-        return None
-
-    all_holdings_df = df.copy()
-    _cache_ltp_by_symbol(all_holdings_df)
-    df = _non_mtf_holdings_df(all_holdings_df)
-    if df.empty:
-        _display_mtf_holdings_df(all_holdings_df)
-        st.info("No non-MTF holdings found.")
-        return None
-    
-    #print("portfolio holdings columns:\n")
-    #print(df.columns)
-    
-    df["invested"] = pd.to_numeric(df["average_price"], errors="coerce") * pd.to_numeric(
-            df["quantity"], errors="coerce"
-    )
-    df["CurrentValue"] = pd.to_numeric(df["last_price"], errors="coerce") * pd.to_numeric(
-            df["quantity"], errors="coerce"
-    )
-    if "pnl_pct" not in df.columns and {"pnl", "average_price", "quantity"}.issubset(df.columns):
-        invested = df["invested"]        
-        df["pnl_pct"] = pd.to_numeric(df["pnl"], errors="coerce").where(invested.ne(0)) / invested * 100
-
-    display_cols = [
-        "tradingsymbol",
-        "isin",
-        "quantity",
-        "average_price",
-        "invested",
-        "CurrentValue",
-        "last_price",        
-        "pnl",
-        "pnl_pct",
-        "day_change_percentage",
-    ]
-    display_cols = [column for column in display_cols if column in df.columns]
-    display_df = df[display_cols] if display_cols else df
-    display_df = display_df.rename(
-        columns={
-            "tradingsymbol": "Symbol",
-            "isin": "ISIN",
-            "quantity": "Quantity",
-            "average_price": "Avg Price",
-            "invested": "Invested",
-            "CurrentValue": "Current",
-            "last_price": "LTP",
-            "pnl": "P&L",
-            "pnl_pct": "P&L %",
-            "day_change_percentage": "DayChg %",
-        }
-    )
-    breakdown_df_for_sector = (
-        selected_batches_df
-        if selected_batches_df is not None
-        else _holdings_breakdown_state_df()
-    )
-    display_df = _add_sector_to_holdings_display(display_df, breakdown_df_for_sector)
-    #st.table(display_df, width="stretch", height=_dataframe_height(len(display_df)))
-    col1, col2 ,col3= st.columns(3)
-    with col1:
-        total_invested = pd.to_numeric(df["invested"], errors="coerce").sum() if "invested" in df.columns else 0
-        #st.write("Total Invested\n", f"{total_invested:,.2f}")
-        st.metric("Total Invested", f"{total_invested:,.2f}")
-
-    with col2:
-        total_pnl = pd.to_numeric(df["pnl"], errors="coerce").sum() if "pnl" in df.columns else 0
-        total_pnl_percent = (total_pnl/total_invested) *100 if total_invested != 0 else 0        
-        st.metric("Total P&L", f"{total_pnl:,.2f}", delta=f"{total_pnl_percent:.2f}", format="%.2f%%")
-       
-        
-    with col3:
-        kite_holdings_download_filename = st.session_state.get("kite_holdings_download_filename", "")
-        holdings_as_of = (
-            kite_holdings_download_filename.split("_")[1]
-            if "_" in kite_holdings_download_filename
-            else "Unknown"
-        )
-        st.metric("As of", holdings_as_of)
-        
-    rng_colors = _rng_color_by_symbol(
-        _sort_historic_dashboard_by_rng(
-            st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame())
-        )
-    )
-    def render_holdings_table(table_df: pd.DataFrame, *, table_key: str | None = None):
-        dataframe_kwargs = {}
-        if table_key:
-            dataframe_kwargs = {
-                "key": table_key,
-                "on_select": "rerun",
-                "selection_mode": "single-row",
-            }
-        return st.dataframe(
-            _style_kite_holdings(table_df, rng_colors),
-            width="stretch",
-            height=_dataframe_height(len(table_df), max_rows=15),
-            hide_index=True,
-            column_config=_kite_holdings_column_config(),
-            **dataframe_kwargs,
-        )
-
-    def render_sector_summary() -> None:
-        sector_summary_df = _sector_holdings_summary_df(display_df)
-        if not sector_summary_df.empty:
-            chart_column, summary_column = st.columns([1, 2])
-            with chart_column:
-                _display_sector_weight_pie_chart(sector_summary_df)
-            with summary_column:
-                st.dataframe(
-                    _style_pnl_columns(sector_summary_df),
-                    width="stretch",
-                    height=_dataframe_height(len(sector_summary_df), max_rows=8),
-                    hide_index=True,
-                    column_config=_sector_summary_column_config(),
-                )
-
-    batches_df = selected_batches_df if selected_batches_df is not None else pd.DataFrame()
-    selected_symbol_state_key = f"{selection_key or 'kite_holdings'}_selected_holding_symbol"
-    selected_isin_state_key = f"{selection_key or 'kite_holdings'}_selected_holding_isin"
-    selected_sector_state_key = f"{selection_key or 'kite_holdings'}_selected_holding_sector"
-
-    def render_selected_batches_panel(selected_symbol: str | None, selected_isin: str | None = None) -> None:
-        if selected_batches_df is None and selected_batches_error is None:
-            return
-        if selected_batches_error:
-            st.warning(f"Could not load holdings breakdown from Supabase: {selected_batches_error}")
-        display_selected_holding_batches(selected_symbol, batches_df, selected_isin)
-
-    def render_sector_grouped_holdings() -> str | None:
-        active_symbol = st.session_state.get(selected_symbol_state_key)
-        active_isin = st.session_state.get(selected_isin_state_key)
-        active_sector = st.session_state.get(selected_sector_state_key)
-        total_display_invested = pd.to_numeric(display_df.get("Invested"), errors="coerce").sum()
-        for sector, sector_df in display_df.groupby("Sector", sort=False):
-            sector_key = _normalized_symbol_value(sector).replace(" ", "_") or "UNMAPPED"
-            sector_invested = pd.to_numeric(sector_df.get("Invested"), errors="coerce").sum()
-            sector_weight = (
-                sector_invested / total_display_invested * 100
-                if total_display_invested
-                else 0
-            )
-            with st.expander(
-                f"{sector} ({len(sector_df)} | Invested {sector_invested:,.2f} | Weight {sector_weight:.2f}%)",
-                expanded=True,
-            ):
-                sector_table_column = st.container()
-                sector_batches_column = None
-                if selected_batches_df is not None or selected_batches_error is not None:
-                    sector_table_column, sector_batches_column = st.columns([3, 1])
-                holdings_table_df = sector_df.drop(columns=["Sector"], errors="ignore")
-                if sector_invested:
-                    holdings_table_df["Weight %"] = (
-                        pd.to_numeric(holdings_table_df.get("Invested"), errors="coerce") / sector_invested * 100
-                    )
-                else:
-                    holdings_table_df["Weight %"] = pd.NA
-                if "Invested" in holdings_table_df.columns:
-                    invested_column_index = holdings_table_df.columns.get_loc("Invested")
-                    weight_column = holdings_table_df.pop("Weight %")
-                    holdings_table_df.insert(invested_column_index + 1, "Weight %", weight_column)
-                table_key = None
-                if selection_key:
-                    table_key = f"{selection_key}_{sector_key}"
-                with sector_table_column:
-                    selection = render_holdings_table(holdings_table_df, table_key=table_key)
-                if not selection_key:
-                    continue
-                selected_rows = selection.selection.rows if selection.selection else []
-                if selected_rows:
-                    selected_row_index = selected_rows[0]
-                    if selected_row_index < len(sector_df):
-                        selected_row = sector_df.iloc[selected_row_index]
-                        selected_symbol = str(selected_row["Symbol"]).upper().strip()
-                        selected_isin = str(selected_row.get("ISIN") or "").upper().strip()
-                        st.session_state[selected_symbol_state_key] = selected_symbol
-                        st.session_state[selected_isin_state_key] = selected_isin
-                        st.session_state[selected_sector_state_key] = sector_key
-                        active_symbol = selected_symbol
-                        active_isin = selected_isin
-                        active_sector = sector_key
-
-                sector_symbols = set(sector_df["Symbol"].astype(str).str.upper().str.strip())
-                sector_isins = (
-                    set(sector_df["ISIN"].astype(str).str.upper().str.strip())
-                    if "ISIN" in sector_df.columns
-                    else set()
-                )
-                if (
-                    sector_batches_column is not None
-                    and active_symbol
-                    and active_sector == sector_key
-                    and (
-                        str(active_symbol).upper().strip() in sector_symbols
-                        or (active_isin and str(active_isin).upper().strip() in sector_isins)
-                    )
-                ):
-                    with sector_batches_column:
-                        render_selected_batches_panel(str(active_symbol).upper().strip(), active_isin)
-        return str(active_symbol).upper().strip() if active_symbol else None
-
-    selected_symbol = None
-    has_sector_grouping = "Sector" in display_df.columns
-
-    if has_sector_grouping:
-        render_sector_summary()
-
-    _display_mtf_holdings_df(all_holdings_df)
-
-    selected_symbol = (
-        render_sector_grouped_holdings()
-        if has_sector_grouping
-        else None
-    )
-    if not has_sector_grouping:
-        selection = render_holdings_table(display_df, table_key=selection_key)
-
-    if not selection_key:
-        return None
-
-    if not has_sector_grouping:
-        selected_rows = selection.selection.rows if selection.selection else []
-        if selected_rows:
-            selected_row_index = selected_rows[0]
-            if selected_row_index < len(display_df) and "Symbol" in display_df.columns:
-                selected_row = display_df.iloc[selected_row_index]
-                selected_symbol = str(selected_row["Symbol"]).upper().strip()
-                st.session_state[selected_isin_state_key] = str(selected_row.get("ISIN") or "").upper().strip()
-
-    if not selected_symbol:
-        if not has_sector_grouping:
-            render_selected_batches_panel(None)
-        return None
-    if not has_sector_grouping:
-        render_selected_batches_panel(selected_symbol, st.session_state.get(selected_isin_state_key))
-    return selected_symbol
-
-
-
 def fetch_and_display_holdings():
     try:
         kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
@@ -1417,7 +997,7 @@ def fetch_and_display_holdings():
             _cache_ltp_by_symbol(df)
             #print("Fetched holdings:\n", df.head())
             as_of_date = datetime.now().date().isoformat()
-            returns_df, dashboard_df, failed_symbols, close_prices_df = build_historic_dashboard_frames(
+            dashboard_df, day_movers_df, failed_symbols = build_price_ladder_and_day_movers_frames(
                 kite,
                 df.to_dict(orient="records"),
                 as_of_date,
@@ -1428,10 +1008,12 @@ def fetch_and_display_holdings():
                 quantity_key="quantity",
             )
             st.session_state["kite_holdings_df"] = df
-            st.session_state["kite_holdings_returns_df"] = returns_df
             st.session_state["kite_holdings_dashboard_df"] = dashboard_df
-            st.session_state["kite_holdings_close_prices_df"] = close_prices_df
+            st.session_state["kite_holdings_day_movers_df"] = day_movers_df
             st.session_state["kite_holdings_dashboard_failed_symbols"] = failed_symbols
+            st.session_state["kite_holdings_token_rows"] = df.to_dict(orient="records")
+            st.session_state["kite_holdings_as_of_date"] = as_of_date
+            st.session_state.pop("kite_holdings_returns_df", None)
             st.session_state["kite_holdings_fetched_at"] = pd.Timestamp.now().isoformat()
             st.session_state.pop("kite_holdings_ltp_refreshed_at", None)
             st.session_state.pop("kite_holdings_ltp_refresh_error", None)
@@ -1452,7 +1034,10 @@ def fetch_and_display_holdings():
             st.session_state.pop("kite_holdings_returns_df", None)
             st.session_state.pop("kite_holdings_dashboard_df", None)
             st.session_state.pop("kite_holdings_close_prices_df", None)
+            st.session_state.pop("kite_holdings_day_movers_df", None)
             st.session_state.pop("kite_holdings_dashboard_failed_symbols", None)
+            st.session_state.pop("kite_holdings_token_rows", None)
+            st.session_state.pop("kite_holdings_as_of_date", None)
             st.session_state.pop("kite_holdings_fetched_at", None)
             st.session_state.pop("kite_holdings_ltp_refreshed_at", None)
             st.session_state.pop("kite_holdings_ltp_refresh_error", None)
@@ -1489,7 +1074,7 @@ with tab_upload_kite:
     if uploaded_kite_holdings_file is not None:
         try:
             kite_holdings_df = _read_uploaded_file(uploaded_kite_holdings_file)
-            display_kite_holdings(kite_holdings_df)            
+            portfolio_streamlit.display_kite_holdings(kite_holdings_df)
             if st.checkbox("Show holdings breakdown", key="show_upload_kite_holdings_breakdown"):
                 if _holdings_breakdown_state_df().empty:
                     _load_holdings_breakdown_state()
@@ -1518,7 +1103,7 @@ with tab_fetch_kite:
 
             #print("Holdings fetch date:", Holdings_fetchDate , "kite_holdings_download_filename:", kite_holdings_download_filename )
             
-            display_kite_holdings(
+            portfolio_streamlit.display_kite_holdings(
                 kite_holdings_df,
                 selection_key="fetch_kite_holdings_table",
                 selected_batches_df=_holdings_breakdown_state_df(),
@@ -1550,7 +1135,7 @@ with tab_fetch_kite:
             st.info("Fetch holdings from Kite to display the React portfolio UI.")
         else:
             as_of = st.session_state.get("kite_holdings_fetched_at") or pd.Timestamp.now().isoformat()
-            snapshot = build_portfolio_terminal_snapshot(
+            snapshot = portfolio_streamlit.build_portfolio_terminal_snapshot(
                 kite_holdings_df,
                 _holdings_breakdown_state_df(),
                 as_of=as_of,
@@ -1568,10 +1153,41 @@ with tab_fetch_kite:
         )
 
     with tab_returns:
-        display_historic_returns_frame(
-            st.session_state.get("kite_holdings_returns_df", pd.DataFrame()),
-            max_rows=18,
-        )
+        if st.button("Display Historical Returns", key="display_kite_holdings_returns"):
+            token_rows = st.session_state.get("kite_holdings_token_rows", [])
+            if not token_rows:
+                st.warning("Fetch holdings before loading returns.")
+            else:
+                try:
+                    returns_kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
+                    returns_df, _, returns_failed_symbols, _ = build_historic_dashboard_frames(
+                        returns_kite,
+                        token_rows,
+                        st.session_state.get("kite_holdings_as_of_date") or datetime.now().date().isoformat(),
+                        symbol_key="tradingsymbol",
+                        token_key="instrument_token",
+                        ltp_key="last_price",
+                        include_close_prices=False,
+                        include_ladders=False,
+                    )
+                    st.session_state["kite_holdings_returns_df"] = returns_df
+                    if returns_failed_symbols:
+                        st.warning(
+                            "No returns data returned for: "
+                            + ", ".join(returns_failed_symbols[:10])
+                            + ("..." if len(returns_failed_symbols) > 10 else "")
+                        )
+                except Exception as exc:
+                    if is_token_error(exc):
+                        clear_auth_state()
+                        st.error("Your session expired. Please login again to load returns.")
+                        st.rerun()
+                    st.error(f"Error loading returns: {exc}")
+        if "kite_holdings_returns_df" in st.session_state:
+            display_historic_returns_frame(
+                st.session_state.get("kite_holdings_returns_df", pd.DataFrame()),
+                max_rows=18,
+            )
 
     with tab_holdings_breakdown:
         breakdown_error = st.session_state.get("kite_holdings_breakdown_error")
@@ -1735,16 +1351,19 @@ with tab_historic_data:
                         {"Ticker": ticker, "instrument_token": token}
                         for ticker, token in token_map.items()
                     ]
-                    returns_df, dashboard_df, skipped_symbols, close_prices_df = build_historic_dashboard_frames(
+                    dashboard_df, day_movers_df, skipped_symbols = build_price_ladder_and_day_movers_frames(
                         historic_kite,
                         token_rows,
                         as_of_date,
                     )
-                    st.session_state["historic_returns_df"] = returns_df
                     st.session_state["historic_dashboard_df"] = dashboard_df
-                    st.session_state["historic_close_prices_df"] = close_prices_df
+                    st.session_state["historic_day_movers_df"] = day_movers_df
                     st.session_state["historic_skipped_symbols"] = skipped_symbols
                     st.session_state["historic_momentum_benchmark_used"] = pending_benchmark
+                    st.session_state["historic_token_rows"] = token_rows
+                    st.session_state["historic_as_of_date"] = as_of_date
+                    st.session_state.pop("historic_returns_df", None)
+                    st.session_state.pop("historic_close_prices_df", None)
 
                     if benchmark_token_map:
                         try:
@@ -1809,8 +1428,8 @@ with tab_historic_data:
             st.session_state.get("historic_dashboard_df", pd.DataFrame())
         )
         returns_df = st.session_state.get("historic_returns_df", pd.DataFrame())
+        day_movers_df = st.session_state.get("historic_day_movers_df", pd.DataFrame())
         momentum_df = st.session_state.get("historic_momentum_df", pd.DataFrame())
-        close_prices_df = st.session_state.get("historic_close_prices_df", pd.DataFrame())
         benchmark_used = st.session_state.get("historic_momentum_benchmark_used")
         #if benchmark_used and not momentum_df.empty:
         #    st.caption(f"Relative strength benchmark: {benchmark_used}")
@@ -1906,16 +1525,77 @@ with tab_historic_data:
                         ),
                     },
                 )
-        with tab_returns:
-            display_historic_returns_frame(returns_df, max_rows=18)
         with tab_ladder:
-            display_returns_day_movers_summary(returns_df)
+            display_day_movers_summary(day_movers_df)
             display_historic_price_ladder_frame(
                 sorted_dashboard_df,
                 max_rows=12,
             )
+        with tab_returns:
+            if st.button("Display Historical Returns", key="display_historic_returns"):
+                token_rows = st.session_state.get("historic_token_rows", [])
+                if not token_rows:
+                    st.warning("Fetch a historic dashboard before loading returns.")
+                else:
+                    try:
+                        returns_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
+                        returns_df, _, returns_failed_symbols, _ = build_historic_dashboard_frames(
+                            returns_kite,
+                            token_rows,
+                            st.session_state.get("historic_as_of_date") or datetime.now().date().isoformat(),
+                            include_close_prices=False,
+                            include_ladders=False,
+                        )
+                        st.session_state["historic_returns_df"] = returns_df
+                        if returns_failed_symbols:
+                            st.warning(
+                                "No returns data returned for: "
+                                + ", ".join(returns_failed_symbols[:10])
+                                + ("..." if len(returns_failed_symbols) > 10 else "")
+                            )
+                    except Exception as exc:
+                        if is_token_error(exc):
+                            clear_auth_state()
+                            st.error("Your session expired. Please login again to load returns.")
+                            st.rerun()
+                        st.error(f"Error loading returns: {exc}")
+            if "historic_returns_df" in st.session_state:
+                display_historic_returns_frame(
+                    st.session_state.get("historic_returns_df", pd.DataFrame()),
+                    max_rows=18,
+                )
         with tab_correlation:
-            display_correlation_matrix(close_prices_df)
+            if st.button("Show Correlation", key="show_historic_correlation"):
+                token_rows = st.session_state.get("historic_token_rows", [])
+                if not token_rows:
+                    st.warning("Fetch a historic dashboard before loading correlation.")
+                else:
+                    try:
+                        correlation_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
+                        _, _, correlation_failed_symbols, close_prices_df = build_historic_dashboard_frames(
+                            correlation_kite,
+                            token_rows,
+                            st.session_state.get("historic_as_of_date") or datetime.now().date().isoformat(),
+                            include_returns=False,
+                            include_ladders=False,
+                        )
+                        st.session_state["historic_close_prices_df"] = close_prices_df
+                        if correlation_failed_symbols:
+                            st.warning(
+                                "No correlation data returned for: "
+                                + ", ".join(correlation_failed_symbols[:10])
+                                + ("..." if len(correlation_failed_symbols) > 10 else "")
+                            )
+                    except Exception as exc:
+                        if is_token_error(exc):
+                            clear_auth_state()
+                            st.error("Your session expired. Please login again to load correlation.")
+                            st.rerun()
+                        st.error(f"Error loading correlation: {exc}")
+            if "historic_close_prices_df" in st.session_state:
+                display_correlation_matrix(
+                    st.session_state.get("historic_close_prices_df", pd.DataFrame())
+                )
 
 
 

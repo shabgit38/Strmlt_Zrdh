@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Clock3, PieChart } from "lucide-react";
 import { loadPortfolioSnapshot } from "./api/portfolioApi";
 import { GroupedHoldings } from "./components/GroupedHoldings";
+import { MtfHoldingsTable } from "./components/MtfHoldingsTable";
 import { SectorPieChart } from "./components/SectorPieChart";
 import { SectorSummaryTable } from "./components/SectorSummaryTable";
 import { formatMoney, formatPct, signedClass } from "./format";
@@ -87,6 +88,8 @@ export function App({ streamlitSnapshot, streamlitMode = false }: AppProps) {
             onSelectSector={setSelectedSector}
           />
         </section>
+
+        <MtfHoldingsTable holdings={snapshot.mtfHoldings ?? []} />
 
         <section>
           <div className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-terminal-muted">
