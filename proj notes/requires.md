@@ -84,17 +84,6 @@ In the existing Streamlit Momentum Ranking tab, add a compact stock memory card 
 The dashboard should continue showing the momentum ranking table, but when a user selects/clicks a stock row, a compact memory card should appear beside the table.
 
 ---
-
-## Layout Requirement
-
-Inside the `Momentum Ranking` tab, replace the full-width dataframe-only layout with a two-column layout:
-
-```python
-left_col, right_col = st.columns([3, 1])
-
-
-
-
 ### 4. Research Age
 
 - What field should define research age?
@@ -163,20 +152,14 @@ WebSocket streaming	Live tick feed from Kite	Trading / near real-time alerts
 
 For your dashboard, start with polling. Kite’s REST quote/LTP APIs support fetching LTP/quotes for many instruments in one request, while WebSocket is meant for live streaming using instrument tokens.
 
-Option 1: Polling MVP
+# Option 1: Polling MVP
 
-Install:
-
+--Install:
 uv add streamlit-autorefresh
 
-Use:
-
 from streamlit_autorefresh import st_autorefresh
-
-### REFRESH every 2 minutes
+#refresh every 1hr  minutes
 st_autorefresh(interval=120_000, key="ltp_refresh")
-
-Then fetch only LTP:
 
 def fetch_live_ltp(kite, symbols):
     instruments = [f"NSE:{s}" for s in symbols]
@@ -192,33 +175,16 @@ def fetch_live_ltp(kite, symbols):
 
     return pd.DataFrame(rows)
 
-Merge with dashboard data:
-
+--Merge with dashboard data:   
 ltp_df = fetch_live_ltp(kite, symbols)
 
 dashboard_df = dashboard_df.drop(columns=["LTP"], errors="ignore")
 dashboard_df = dashboard_df.merge(ltp_df, on="Symbol", how="left")
-Recommended flow
-App starts
-↓
-Load holdings from Supabase
-↓
-Load historical metrics from Supabase/cache
-↓
-Every 2 mins:
-    fetch only LTP from Kite
-    update Streamlit session_state
-    recompute:
-        P&L
-        EMA distance
-        range position
-        alerts
-↓
-Render dashboard
 
-Do not refetch historical data every 2 minutes.
 
-Option 2: WebSocket live feed
+Do not refetch historical data.
+
+# Option 2: WebSocket live feed
 
 Use only if you need true live ticks.
 

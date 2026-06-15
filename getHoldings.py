@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from kite_analytics import (
     build_historic_dashboard_frames,
@@ -46,6 +47,7 @@ st.set_page_config(layout="wide")
 SUPABASE_INDICES_TABLE_NAME = "Indices_constituents"
 DEFAULT_MOMENTUM_BENCHMARK = "NIFTY 50"
 WAIT_BUTTON_COLOR = "#64748B"
+LTP_REFRESH_INTERVAL_MS = 60 * 60 * 1000
 
 
 def _apply_button_palette() -> None:
@@ -1080,6 +1082,79 @@ def _cache_ltp_by_symbol(df: pd.DataFrame) -> None:
         st.session_state["ltp_by_symbol"] = {}
 
 
+def fetch_live_ltp(kite, symbols: list[str]) -> pd.DataFrame:
+    normalized_symbols = sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
+    if not normalized_symbols:
+        return pd.DataFrame(columns=["Symbol", "LTP"])
+
+    instruments = [f"NSE:{symbol}" for symbol in normalized_symbols]
+    data = kite.ltp(*instruments)
+    rows: list[dict[str, Any]] = []
+    for instrument, quote_data in data.items():
+        if not isinstance(quote_data, dict) or quote_data.get("last_price") is None:
+            continue
+        symbol = str(instrument).split(":", 1)[-1].strip().upper()
+        rows.append(
+            {
+                "Symbol": symbol,
+                "LTP": float(quote_data["last_price"]),
+            }
+        )
+    return pd.DataFrame(rows, columns=["Symbol", "LTP"])
+
+
+def _apply_live_ltp_to_holdings(holdings_df: pd.DataFrame, ltp_df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    if holdings_df.empty or "tradingsymbol" not in holdings_df.columns or ltp_df.empty:
+        return holdings_df, []
+
+    updated_df = holdings_df.copy()
+    symbol_key = updated_df["tradingsymbol"].astype(str).str.strip().str.upper()
+    ltp_by_symbol = ltp_df.set_index("Symbol")["LTP"]
+    live_ltp = pd.to_numeric(symbol_key.map(ltp_by_symbol), errors="coerce")
+    matched = live_ltp.notna()
+    if matched.any():
+        updated_df.loc[matched, "last_price"] = live_ltp[matched]
+        if {"average_price", "quantity"}.issubset(updated_df.columns):
+            average_price = pd.to_numeric(updated_df["average_price"], errors="coerce")
+            quantity = pd.to_numeric(updated_df["quantity"], errors="coerce")
+            last_price = pd.to_numeric(updated_df["last_price"], errors="coerce")
+            invested = average_price * quantity
+            updated_df["pnl"] = (last_price - average_price) * quantity
+            updated_df["pnl_pct"] = updated_df["pnl"].where(invested.ne(0)) / invested * 100
+
+    missing_symbols = sorted(set(symbol_key[~matched].dropna()) - {""})
+    return updated_df, missing_symbols
+
+
+def refresh_live_ltp_for_holdings(holdings_df: pd.DataFrame) -> pd.DataFrame:
+    if holdings_df.empty or "tradingsymbol" not in holdings_df.columns:
+        st.session_state["ltp_by_symbol"] = {}
+        return holdings_df
+
+    symbols = holdings_df["tradingsymbol"].dropna().astype(str).tolist()
+    try:
+        kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
+        ltp_df = fetch_live_ltp(kite, symbols)
+    except Exception as exc:
+        if is_token_error(exc):
+            clear_auth_state()
+            st.error("Your session expired. Please login again to refresh live LTP.")
+            st.rerun()
+        st.session_state["kite_holdings_ltp_refresh_error"] = str(exc)
+        return holdings_df
+
+    updated_df, missing_symbols = _apply_live_ltp_to_holdings(holdings_df, ltp_df)
+    _cache_ltp_by_symbol(updated_df)
+    st.session_state["kite_holdings_df"] = updated_df
+    st.session_state["kite_holdings_ltp_refreshed_at"] = pd.Timestamp.now().isoformat()
+    if missing_symbols:
+        st.session_state["kite_holdings_ltp_missing_symbols"] = missing_symbols
+    else:
+        st.session_state.pop("kite_holdings_ltp_missing_symbols", None)
+    st.session_state.pop("kite_holdings_ltp_refresh_error", None)
+    return updated_df
+
+
 def display_kite_holdings(
     df: pd.DataFrame,
     kite=None,
@@ -1353,6 +1428,10 @@ def fetch_and_display_holdings():
             st.session_state["kite_holdings_dashboard_df"] = dashboard_df
             st.session_state["kite_holdings_close_prices_df"] = close_prices_df
             st.session_state["kite_holdings_dashboard_failed_symbols"] = failed_symbols
+            st.session_state["kite_holdings_fetched_at"] = pd.Timestamp.now().isoformat()
+            st.session_state.pop("kite_holdings_ltp_refreshed_at", None)
+            st.session_state.pop("kite_holdings_ltp_refresh_error", None)
+            st.session_state.pop("kite_holdings_ltp_missing_symbols", None)
             st.session_state["kite_holdings_download_filename"] = (
                 f"holdings_{pd.Timestamp.now().strftime('%Y-%m-%d_%H.%M.%S')}.csv"
             )
@@ -1370,6 +1449,11 @@ def fetch_and_display_holdings():
             st.session_state.pop("kite_holdings_dashboard_df", None)
             st.session_state.pop("kite_holdings_close_prices_df", None)
             st.session_state.pop("kite_holdings_dashboard_failed_symbols", None)
+            st.session_state.pop("kite_holdings_fetched_at", None)
+            st.session_state.pop("kite_holdings_ltp_refreshed_at", None)
+            st.session_state.pop("kite_holdings_ltp_refresh_error", None)
+            st.session_state.pop("kite_holdings_ltp_missing_symbols", None)
+            st.session_state.pop("kite_holdings_ltp_refresh_count", None)
             st.session_state.pop("kite_holdings_download_filename", None)
             st.session_state.pop(HOLDINGS_BREAKDOWN_DF_STATE_KEY, None)
             st.session_state.pop("kite_holdings_breakdown_error", None)
@@ -1417,6 +1501,18 @@ with tab_fetch_kite:
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
 
     kite_holdings_df = st.session_state.get("kite_holdings_df")
+    if kite_holdings_df is not None:
+        ltp_refresh_count = st_autorefresh(
+            interval=LTP_REFRESH_INTERVAL_MS,
+            key="ltp_refresh",
+        )
+        previous_ltp_refresh_count = st.session_state.get("kite_holdings_ltp_refresh_count")
+        if previous_ltp_refresh_count is None:
+            st.session_state["kite_holdings_ltp_refresh_count"] = ltp_refresh_count
+        elif ltp_refresh_count != previous_ltp_refresh_count:
+            kite_holdings_df = refresh_live_ltp_for_holdings(kite_holdings_df)
+            st.session_state["kite_holdings_ltp_refresh_count"] = ltp_refresh_count
+
     tab_price_ladder, tab_portfolio_holdings, tab_portfolio_react, tab_returns, tab_holdings_breakdown = st.tabs(
         ["Price Ladder", "Portfolio Holdings", "Portfolio", "Returns", "Holdings Breakdown"]
     )
@@ -1436,6 +1532,19 @@ with tab_fetch_kite:
                 selected_batches_df=_holdings_breakdown_state_df(),
                 selected_batches_error=st.session_state.get("kite_holdings_breakdown_error"),
             )
+            ltp_refreshed_at = st.session_state.get("kite_holdings_ltp_refreshed_at")
+            if ltp_refreshed_at:
+                st.caption(f"Live LTP refreshed at {pd.Timestamp(ltp_refreshed_at).strftime('%Y-%m-%d %H:%M:%S')}")
+            ltp_refresh_error = st.session_state.get("kite_holdings_ltp_refresh_error")
+            if ltp_refresh_error:
+                st.warning(f"Could not refresh live LTP: {ltp_refresh_error}")
+            ltp_missing_symbols = st.session_state.get("kite_holdings_ltp_missing_symbols", [])
+            if ltp_missing_symbols:
+                st.warning(
+                    "No live LTP returned for: "
+                    + ", ".join(ltp_missing_symbols[:10])
+                    + ("..." if len(ltp_missing_symbols) > 10 else "")
+                )
             failed_symbols = st.session_state.get("kite_holdings_dashboard_failed_symbols", [])
             if failed_symbols:
                 st.warning(
@@ -1448,12 +1557,7 @@ with tab_fetch_kite:
         if kite_holdings_df is None:
             st.info("Fetch holdings from Kite to display the React portfolio UI.")
         else:
-            kite_holdings_download_filename = st.session_state.get("kite_holdings_download_filename", "")
-            as_of = (
-                kite_holdings_download_filename.removeprefix("holdings_").removesuffix(".csv").replace("_", " ")
-                if kite_holdings_download_filename
-                else pd.Timestamp.now().isoformat()
-            )
+            as_of = st.session_state.get("kite_holdings_fetched_at") or pd.Timestamp.now().isoformat()
             snapshot = build_portfolio_terminal_snapshot(
                 kite_holdings_df,
                 _holdings_breakdown_state_df(),

@@ -38,19 +38,26 @@ TRADE_CALCULATOR_CALCULATED_COLUMNS = ["TOTAL INVESTED", "PROFIT", "PROFIT %", "
 OPTION_CALCULATOR_COLUMNS = [
     "Symbol",
     "Open Qty",
-    "Days_Expiry",
-    "Breakeven",
-    "Dist_Spot",
     "Avg Price",
     "LTP",
     "Spot",
+    "Exit Price",
+    "Days_Expiry",
+    "Breakeven",
+    "Dist_Spot",
     "Invested",
     "Current",
     "P&L",
     "P&L %",
 ]
-OPTION_CALCULATOR_INPUT_COLUMNS = ["Symbol", "Open Qty", "Avg Price", "LTP", "Spot"]
+OPTION_CALCULATOR_EDITABLE_COLUMNS = ["Symbol", "Open Qty", "Avg Price", "Exit Price"]
+OPTION_CALCULATOR_API_COLUMNS = ["LTP", "Spot"]
 OPTION_CALCULATOR_CALCULATED_COLUMNS = ["Days_Expiry", "Breakeven", "Dist_Spot", "Invested", "Current", "P&L", "P&L %"]
+OPTION_CALCULATOR_DISABLED_COLUMNS = OPTION_CALCULATOR_API_COLUMNS + OPTION_CALCULATOR_CALCULATED_COLUMNS
+OPTION_SYMBOL_HELP = (
+    "Use Kite monthly option symbols like NIFTY26JUN25000CE or BANKNIFTY26JUN56000PE. "
+    "Format: UNDERLYING + YY + MMM + STRIKE + CE/PE."
+)
 
 
 def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None = None) -> int:
@@ -251,6 +258,80 @@ def _format_manual_spot_distance(breakeven: Any, spot: Any) -> str | None:
     return f"{distance_text} [{distance / float(spot_value) * 100:.1f}%]"
 
 
+def _option_calculator_symbols(df: pd.DataFrame) -> list[str]:
+    if df.empty or "Symbol" not in df.columns:
+        return []
+    return sorted(
+        {
+            str(symbol).upper().strip()
+            for symbol in df["Symbol"].dropna().tolist()
+            if str(symbol).strip()
+        }
+    )
+
+
+def _fetch_option_calculator_ltp(kite, symbols: list[str]) -> dict[str, dict[str, float]]:
+    normalized_symbols = sorted({symbol.upper().strip() for symbol in symbols if symbol.strip()})
+    if not normalized_symbols:
+        return {}
+
+    option_instruments = [f"NFO:{symbol}" for symbol in normalized_symbols]
+    underlying_by_symbol = {
+        symbol: underlying
+        for symbol in normalized_symbols
+        if (underlying := _option_underlying_instrument(symbol))
+    }
+    instruments = option_instruments + sorted(set(underlying_by_symbol.values()))
+    quotes = kite.ltp(*instruments)
+
+    market_data: dict[str, dict[str, float]] = {symbol: {} for symbol in normalized_symbols}
+    for symbol in normalized_symbols:
+        option_quote = quotes.get(f"NFO:{symbol}")
+        if isinstance(option_quote, dict) and option_quote.get("last_price") is not None:
+            market_data[symbol]["LTP"] = float(option_quote["last_price"])
+
+        underlying = underlying_by_symbol.get(symbol)
+        spot_quote = quotes.get(underlying) if underlying else None
+        if isinstance(spot_quote, dict) and spot_quote.get("last_price") is not None:
+            market_data[symbol]["Spot"] = float(spot_quote["last_price"])
+
+    return market_data
+
+
+def _hydrate_option_calculator_ltp(df: pd.DataFrame) -> pd.DataFrame:
+    calculated_df = _calculate_option_rows(df)
+    symbols = _option_calculator_symbols(calculated_df)
+    if not symbols:
+        return calculated_df
+
+    try:
+        kite, _, _ = bootstrap_kite_app("Zerodha Open Positions")
+        market_data = _fetch_option_calculator_ltp(kite, symbols)
+    except Exception as exc:
+        if is_token_error(exc):
+            clear_auth_state()
+            st.error("Your session expired. Please login again to fetch option LTP.")
+            st.rerun()
+        st.warning(f"Could not fetch option LTP: {exc}")
+        return calculated_df
+
+    hydrated_df = calculated_df.copy()
+    symbol_key = hydrated_df["Symbol"].astype("string").str.upper().str.strip()
+    for symbol, values in market_data.items():
+        row_mask = symbol_key.eq(symbol).fillna(False)
+        if not row_mask.any():
+            continue
+        if "LTP" in values:
+            hydrated_df.loc[row_mask, "LTP"] = values["LTP"]
+            avg_price = pd.to_numeric(hydrated_df.loc[row_mask, "Avg Price"], errors="coerce")
+            avg_price_missing = hydrated_df.index.isin(avg_price[avg_price.isna()].index)
+            hydrated_df.loc[row_mask & avg_price_missing, "Avg Price"] = values["LTP"]
+        if "Spot" in values:
+            hydrated_df.loc[row_mask, "Spot"] = values["Spot"]
+
+    return _calculate_option_rows(hydrated_df)
+
+
 def _calculate_option_rows(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return _empty_option_calculator_df()
@@ -264,7 +345,7 @@ def _calculate_option_rows(df: pd.DataFrame) -> pd.DataFrame:
     calculated_df["Symbol"] = calculated_df["Symbol"].astype("string").str.upper().str.strip()
     calculated_df["Symbol"] = calculated_df["Symbol"].replace({"": pd.NA, "<NA>": pd.NA})
 
-    for column in ["Open Qty", "Avg Price", "LTP", "Spot"]:
+    for column in ["Open Qty", "Avg Price", "LTP", "Spot", "Exit Price"]:
         calculated_df[column] = pd.to_numeric(calculated_df[column], errors="coerce")
 
     option_details = calculated_df["Symbol"].apply(_parse_option_position)
@@ -277,69 +358,57 @@ def _calculate_option_rows(df: pd.DataFrame) -> pd.DataFrame:
         lambda row: _format_manual_spot_distance(row.get("Breakeven"), row.get("Spot")),
         axis=1,
     )
+    exit_price = calculated_df["Exit Price"]
+    valuation_price = exit_price.where(exit_price.notna(), calculated_df["LTP"])
     calculated_df["Invested"] = calculated_df["Open Qty"].abs() * calculated_df["Avg Price"]
-    calculated_df["Current"] = calculated_df["Open Qty"] * calculated_df["LTP"]
-    calculated_df["P&L"] = calculated_df["Open Qty"] * (calculated_df["LTP"] - calculated_df["Avg Price"])
+    calculated_df["Current"] = calculated_df["Open Qty"] * valuation_price
+    calculated_df["P&L"] = calculated_df["Open Qty"] * (valuation_price - calculated_df["Avg Price"])
     calculated_df["P&L %"] = calculated_df["P&L"].where(calculated_df["Invested"].ne(0)) / calculated_df["Invested"] * 100
 
-    blank_rows = calculated_df[OPTION_CALCULATOR_INPUT_COLUMNS].isna().all(axis=1)
+    blank_rows = calculated_df[OPTION_CALCULATOR_EDITABLE_COLUMNS + OPTION_CALCULATOR_API_COLUMNS].isna().all(axis=1)
     calculated_df.loc[blank_rows, OPTION_CALCULATOR_CALCULATED_COLUMNS] = None
     return calculated_df
 
 
-def _option_calculator_inputs_changed(previous_df: pd.DataFrame, current_df: pd.DataFrame) -> bool:
-    previous_inputs = _calculate_option_rows(previous_df)[OPTION_CALCULATOR_INPUT_COLUMNS].reset_index(drop=True)
-    current_inputs = _calculate_option_rows(current_df)[OPTION_CALCULATOR_INPUT_COLUMNS].reset_index(drop=True)
+def _option_calculator_editable_values_changed(previous_df: pd.DataFrame, current_df: pd.DataFrame) -> bool:
+    previous_inputs = _calculate_option_rows(previous_df)[OPTION_CALCULATOR_EDITABLE_COLUMNS].reset_index(drop=True)
+    current_inputs = _calculate_option_rows(current_df)[OPTION_CALCULATOR_EDITABLE_COLUMNS].reset_index(drop=True)
     return not previous_inputs.astype("string").fillna("").equals(current_inputs.astype("string").fillna(""))
 
 
 def render_option_calculator() -> None:
-    st.subheader("OPTION CALCULATOR")
+    st.subheader("OPTION CALCULATOR", help=OPTION_SYMBOL_HELP)
     if "option_calculator_df" not in st.session_state:
         st.session_state["option_calculator_df"] = _empty_option_calculator_df()
 
-    editor_df = _calculate_option_rows(st.session_state["option_calculator_df"])[OPTION_CALCULATOR_INPUT_COLUMNS]
+    editor_df = _calculate_option_rows(st.session_state["option_calculator_df"])
     edited_df = st.data_editor(
         editor_df,
         key="option_calculator_editor",
         width="stretch",
         hide_index=True,
         num_rows="dynamic",
-        column_order=OPTION_CALCULATOR_INPUT_COLUMNS,
+        disabled=OPTION_CALCULATOR_DISABLED_COLUMNS,
+        column_order=OPTION_CALCULATOR_COLUMNS,
         column_config={
             "Symbol": st.column_config.TextColumn("Symbol", width="small"),
             "Open Qty": st.column_config.NumberColumn("Open Qty", width="small", format="%d"),
             "Avg Price": st.column_config.NumberColumn("Avg Price", width="small", format="%.2f"),
             "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
             "Spot": st.column_config.NumberColumn("Spot", width="small", format="%.2f"),
+            "Exit Price": st.column_config.NumberColumn("Exit Price", width="small", format="%.2f"),
+            "Days_Expiry": st.column_config.NumberColumn("Days_Expiry", width="small", format="%d"),
+            "Breakeven": st.column_config.NumberColumn("Breakeven", width="small", format="%.2f"),
+            "Dist_Spot": st.column_config.TextColumn("Dist_Spot", width="small"),
+            "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
+            "Current": st.column_config.NumberColumn("Current", width="small", format="%.2f"),
+            "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
+            "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
         },
     )
-    if _option_calculator_inputs_changed(st.session_state["option_calculator_df"], edited_df):
-        st.session_state["option_calculator_df"] = _calculate_option_rows(edited_df)
+    if _option_calculator_editable_values_changed(st.session_state["option_calculator_df"], edited_df):
+        st.session_state["option_calculator_df"] = _hydrate_option_calculator_ltp(edited_df)
         st.rerun()
-
-    result_df = _calculate_option_rows(st.session_state["option_calculator_df"])
-    result_df = result_df[result_df[OPTION_CALCULATOR_INPUT_COLUMNS].notna().any(axis=1)]
-    if not result_df.empty:
-        st.dataframe(
-            _style_pnl_columns(result_df),
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Symbol": st.column_config.TextColumn("Symbol", width="small"),
-                "Open Qty": st.column_config.NumberColumn("Open Qty", width="small", format="%d"),
-                "Days_Expiry": st.column_config.NumberColumn("Days_Expiry", width="small", format="%d"),
-                "Breakeven": st.column_config.NumberColumn("Breakeven", width="small", format="%.2f"),
-                "Dist_Spot": st.column_config.TextColumn("Dist_Spot", width="small"),
-                "Avg Price": st.column_config.NumberColumn("Avg Price", width="small", format="%.2f"),
-                "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
-                "Spot": st.column_config.NumberColumn("Spot", width="small", format="%.2f"),
-                "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
-                "Current": st.column_config.NumberColumn("Current", width="small", format="%.2f"),
-                "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
-                "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
-            },
-        )
 
 
 def _last_tuesday(year: int, month: int) -> date:

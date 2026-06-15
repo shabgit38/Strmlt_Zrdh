@@ -1,0 +1,181 @@
+## Correct calculation
+
+For **today’s top gainers/losers**, use **day change %**, not absolute ₹ change.
+
+```python
+day_change_pct = ((ltp - previous_close) / previous_close) * 100
+```
+
+Use:
+
+```python
+day_change_abs = ltp - previous_close
+```
+
+only as secondary context.
+
+---
+
+## Required fields
+
+| Field                 | Use                             |
+| --------------------- | ------------------------------- |
+| `ltp`                 | Current live price              |
+| `previous_close`      | Yesterday’s official close      |
+| `day_change_pct`      | Ranking gainers/losers          |
+| `day_change_abs`      | ₹ impact per share              |
+| `quantity`            | Portfolio impact                |
+| `portfolio_pnl_today` | Actual impact on your portfolio |
+
+---
+
+## Two different “top gainer” meanings
+
+| View                      | Formula                         | Meaning                           |
+| ------------------------- | ------------------------------- | --------------------------------- |
+| **Market mover**          | `% change from previous close`  | Stock moved most today            |
+| **Portfolio contributor** | `(ltp - prev_close) × quantity` | Stock added/lost most money today |
+
+You should show both, but do not mix them.
+
+---
+
+# 1. Top gainers / losers by stock move
+
+```python
+df["day_change_pct"] = ((df["ltp"] - df["previous_close"]) / df["previous_close"]) * 100
+df["day_change_abs"] = df["ltp"] - df["previous_close"]
+
+top_gainers = df.sort_values("day_change_pct", ascending=False).head(5)
+top_losers = df.sort_values("day_change_pct", ascending=True).head(5)
+```
+
+Display:
+
+```text
+Top Gainer: CAMS +1.93%
+Top Loser: COFORGE -2.79%
+```
+
+---
+
+# 2. Top contributors to portfolio P&L today
+
+```python
+df["today_pnl"] = (df["ltp"] - df["previous_close"]) * df["quantity"]
+df["today_pnl_pct_of_portfolio"] = (df["today_pnl"] / df["portfolio_current_value"].sum()) * 100
+```
+
+Sort:
+
+```python
+top_positive_contributors = df.sort_values("today_pnl", ascending=False).head(5)
+top_negative_contributors = df.sort_values("today_pnl", ascending=True).head(5)
+```
+
+Display:
+
+```text
+Top Contributor: BHEL +₹8,920
+Top Drag: INFY -₹4,300
+```
+
+---
+
+## Recommended dashboard logic
+
+### Summary strip
+
+```text
+Today
+Top Gainer: CAMS +1.93%
+Top Loser: COFORGE -2.79%
+Top Contributor: BHEL +₹892
+Top Drag: INFY -₹430
+```
+
+This separates:
+
+* **price movement**
+* **actual portfolio impact**
+
+---
+
+## Highlight logic
+
+Use thresholds, not just top rank.
+
+| Condition              | Badge         |
+| ---------------------- | ------------- |
+| `day_change_pct >= 2`  | Strong Gainer |
+| `day_change_pct >= 1`  | Gainer        |
+| `day_change_pct <= -2` | Strong Loser  |
+| `day_change_pct <= -1` | Loser         |
+| otherwise              | Neutral       |
+
+```python
+def classify_day_move(day_change_pct):
+    if day_change_pct >= 2:
+        return "Strong Gainer"
+    elif day_change_pct >= 1:
+        return "Gainer"
+    elif day_change_pct <= -2:
+        return "Strong Loser"
+    elif day_change_pct <= -1:
+        return "Loser"
+    return "Neutral"
+```
+
+---
+
+## For serious portfolio use
+
+Add **movement significance**:
+
+```python
+df["impact_score"] = abs(df["day_change_pct"]) * df["portfolio_weight"]
+```
+
+Where:
+
+```python
+df["portfolio_weight"] = df["current_value"] / df["current_value"].sum()
+```
+
+This tells you:
+
+> which stock movement actually matters to your portfolio.
+
+Example:
+
+| Stock         | Day % | Weight | Impact Score |
+| ------------- | ----: | -----: | -----------: |
+| Small holding |   +5% |     1% |         0.05 |
+| Large holding | +1.5% |    20% |         0.30 |
+
+The second one matters more.
+
+---
+
+## Best final ranking metrics
+
+| Dashboard section    | Sort by                                       |
+| -------------------- | --------------------------------------------- |
+| Top gainer           | `day_change_pct DESC`                         |
+| Top loser            | `day_change_pct ASC`                          |
+| Top contributor      | `today_pnl DESC`                              |
+| Top drag             | `today_pnl ASC`                               |
+| Most important mover | `abs(day_change_pct) × portfolio_weight DESC` |
+
+Final recommendation:
+
+```text
+Show 4 labels:
+1. Top Gainer %
+2. Top Loser %
+3. Top Contributor ₹
+4. Top Drag ₹
+```
+
+That gives both **market move** and **portfolio relevance**.
+

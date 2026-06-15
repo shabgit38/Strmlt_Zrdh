@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, Clock3, Database, PieChart } from "lucide-react";
+import { Clock3, PieChart } from "lucide-react";
 import { loadPortfolioSnapshot } from "./api/portfolioApi";
 import { GroupedHoldings } from "./components/GroupedHoldings";
 import { SectorPieChart } from "./components/SectorPieChart";
@@ -67,29 +67,11 @@ export function App({ streamlitSnapshot, streamlitMode = false }: AppProps) {
 
   return (
     <main className="min-h-screen bg-terminal-bg">
-      <header className="border-b border-terminal-line bg-terminal-panel">
-        <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-terminal-muted">
-              <Activity className="h-4 w-4" />
-              Portfolio Terminal Demo
-            </div>
-            <h1 className="mt-1 text-2xl font-bold text-terminal-ink">Portfolio Holdings</h1>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 text-sm text-terminal-muted">
-            <span className="inline-flex items-center gap-2 rounded-md border border-terminal-line bg-terminal-panel-alt px-3 py-2">
-              <Clock3 className="h-4 w-4" />
-              {new Date(snapshot.asOf).toLocaleString()}
-            </span>
-            <span className="inline-flex items-center gap-2 rounded-md border border-terminal-line bg-terminal-panel-alt px-3 py-2">
-              <Database className="h-4 w-4" />
-              {streamlitMode ? "Streamlit data" : "Static snapshot"}
-            </span>
-          </div>
-        </div>
-      </header>
-
       <div className="mx-auto max-w-[1680px] space-y-5 px-5 py-5">
+        <div className="flex items-center justify-end gap-2 text-xs font-semibold uppercase tracking-wide text-terminal-muted">
+          <Clock3 className="h-3.5 w-3.5" />
+          <span>As of {new Date(snapshot.asOf).toLocaleString()}</span>
+        </div>
         <section className="grid gap-3 md:grid-cols-4">
           <Metric label="Invested" value={formatMoney(snapshot.totals.invested)} />
           <Metric label="Current" value={formatMoney(snapshot.totals.current)} />
