@@ -342,8 +342,9 @@ def build_live_portfolio_snapshot() -> dict[str, Any]:
         mtf_quantity = _int(mtf.get("quantity"))
         if mtf_quantity > 0:
             mtf_invested = _float(mtf.get("value"))
-            mtf_pnl = _float(holding.get("pnl"))
-            mtf_current = mtf_invested + mtf_pnl
+            mtf_ltp = _float(holding.get("last_price"))
+            mtf_current = mtf_ltp * mtf_quantity
+            mtf_pnl = mtf_current - mtf_invested
             mtf_day_pnl = _day_pnl_from_ltp_change(
                 holding.get("last_price"),
                 holding.get("day_change_percentage"),
@@ -358,7 +359,7 @@ def build_live_portfolio_snapshot() -> dict[str, Any]:
                     "mtfQty": mtf_quantity,
                     "mtfAvgPrice": _float(mtf.get("average_price")),
                     "mtfValue": mtf_invested,
-                    "ltp": _float(holding.get("last_price")),
+                    "ltp": mtf_ltp,
                     "pnl": mtf_pnl,
                     "dayChangePct": _float(holding.get("day_change_percentage")),
                 }

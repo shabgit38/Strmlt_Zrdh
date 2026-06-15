@@ -56,6 +56,12 @@ WAIT_BUTTON_COLOR = "#64748B"
 LTP_REFRESH_INTERVAL_MS = 60 * 60 * 1000
 
 
+def _live_ltp_refreshed_caption(state_key: str) -> None:
+    refreshed_at = st.session_state.get(state_key)
+    if refreshed_at:
+        st.caption(f"Live LTP refreshed at {pd.Timestamp(refreshed_at).strftime('%Y-%m-%d %H:%M:%S')}")
+
+
 def _apply_button_palette() -> None:
     st.markdown(
         f"""
@@ -1021,7 +1027,7 @@ def fetch_and_display_holdings():
             st.session_state["kite_holdings_as_of_date"] = as_of_date
             st.session_state.pop("kite_holdings_returns_df", None)
             st.session_state["kite_holdings_fetched_at"] = pd.Timestamp.now().isoformat()
-            st.session_state.pop("kite_holdings_ltp_refreshed_at", None)
+            st.session_state["kite_holdings_ltp_refreshed_at"] = st.session_state["kite_holdings_fetched_at"]
             st.session_state.pop("kite_holdings_ltp_refresh_error", None)
             st.session_state.pop("kite_holdings_ltp_missing_symbols", None)
             st.session_state["kite_holdings_download_filename"] = (
@@ -1091,8 +1097,12 @@ with tab_upload_kite:
             st.error(f"Failed to upload Kite holdings: {exc}")
 
 with tab_fetch_kite:
-    if st.button("Fetch Holdings from Kite", type="primary"):
-        fetch_and_display_holdings()#get holdings from kite,
+    fetch_holdings_col, holdings_ltp_col = st.columns([1, 3], vertical_alignment="center")
+    with fetch_holdings_col:
+        if st.button("Fetch Holdings from Kite", type="primary"):
+            fetch_and_display_holdings()#get holdings from kite,
+    with holdings_ltp_col:
+        _live_ltp_refreshed_caption("kite_holdings_ltp_refreshed_at")
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
 
     kite_holdings_df = st.session_state.get("kite_holdings_df")
@@ -1111,9 +1121,6 @@ with tab_fetch_kite:
                 as_of=as_of,
             )
             render_portfolio_terminal(snapshot, key="portfolio_terminal_component")
-            ltp_refreshed_at = st.session_state.get("kite_holdings_ltp_refreshed_at")
-            if ltp_refreshed_at:
-                st.caption(f"Live LTP refreshed at {pd.Timestamp(ltp_refreshed_at).strftime('%Y-%m-%d %H:%M:%S')}")
             ltp_refresh_error = st.session_state.get("kite_holdings_ltp_refresh_error")
             if ltp_refresh_error:
                 st.warning(f"Could not refresh live LTP: {ltp_refresh_error}")
@@ -1297,7 +1304,13 @@ with tab_historic_data:
         help="Enter one or more stock ticker symbols separated by commas.",
     )
 
-    if st.button("Fetch dashboard", type="primary", key="historic_fetch_dashboard"):
+    fetch_dashboard_col, historic_ltp_col = st.columns([1, 3], vertical_alignment="center")
+    with fetch_dashboard_col:
+        fetch_dashboard_clicked = st.button("Fetch dashboard", type="primary", key="historic_fetch_dashboard")
+    with historic_ltp_col:
+        _live_ltp_refreshed_caption("historic_ltp_refreshed_at")
+
+    if fetch_dashboard_clicked:
         raw_tickers = [item.strip().upper() for item in tickers_input.split(",") if item.strip()]
         benchmark_symbol = benchmark_symbol.strip().upper()
 
@@ -1352,6 +1365,7 @@ with tab_historic_data:
                     st.session_state["historic_momentum_benchmark_used"] = pending_benchmark
                     st.session_state["historic_token_rows"] = token_rows
                     st.session_state["historic_as_of_date"] = as_of_date
+                    st.session_state["historic_ltp_refreshed_at"] = pd.Timestamp.now().isoformat()
                     st.session_state.pop("historic_returns_df", None)
                     st.session_state.pop("historic_close_prices_df", None)
 

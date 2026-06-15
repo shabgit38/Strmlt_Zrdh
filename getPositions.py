@@ -497,6 +497,12 @@ def _fetch_underlying_ltp(kite, positions: dict[str, Any]) -> dict[str, float]:
     }
 
 
+def _live_ltp_refreshed_caption(state_key: str) -> None:
+    refreshed_at = st.session_state.get(state_key)
+    if refreshed_at:
+        st.caption(f"Live LTP refreshed at {pd.Timestamp(refreshed_at).strftime('%Y-%m-%d %H:%M:%S')}")
+
+
 def _open_positions_display_df(
     positions: dict[str, Any],
     underlying_ltp: dict[str, float] | None = None,
@@ -619,6 +625,7 @@ def fetch_open_positions() -> None:
         positions = kite.positions()
         st.session_state["kite_open_positions"] = positions
         st.session_state["kite_open_positions_fetched_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+        st.session_state["kite_open_positions_ltp_refreshed_at"] = pd.Timestamp.now().isoformat()
         try:
             st.session_state["kite_open_positions_underlying_ltp"] = _fetch_underlying_ltp(kite, positions)
             st.session_state.pop("kite_open_positions_ltp_error", None)
@@ -634,14 +641,12 @@ def fetch_open_positions() -> None:
 
 
 def render_open_positions_tab() -> None:
-    fetched_at = st.session_state.get("kite_open_positions_fetched_at")
     fetch_col, as_of_col = st.columns([1, 3], vertical_alignment="center")
     with fetch_col:
         if st.button("Fetch Open Positions", type="primary"):
             fetch_open_positions()
     with as_of_col:
-        if fetched_at:
-            st.caption(f"As of {fetched_at}")
+        _live_ltp_refreshed_caption("kite_open_positions_ltp_refreshed_at")
 
     open_positions = st.session_state.get("kite_open_positions")
     ltp_error = st.session_state.get("kite_open_positions_ltp_error")

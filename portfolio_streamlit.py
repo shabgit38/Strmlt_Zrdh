@@ -277,6 +277,9 @@ def _mtf_holdings_display_df(df: pd.DataFrame) -> pd.DataFrame:
         }
     )
     display_df["MTF Qty"] = pd.to_numeric(display_df["MTF Qty"], errors="coerce").fillna(0)
+    mtf_value = pd.to_numeric(display_df["MTF Value"], errors="coerce").fillna(0)
+    ltp = pd.to_numeric(display_df["LTP"], errors="coerce").fillna(0)
+    display_df["P&L"] = (ltp * display_df["MTF Qty"]) - mtf_value
     return display_df[display_df["MTF Qty"].gt(0)].copy()
 
 
