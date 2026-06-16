@@ -23,6 +23,7 @@ from kite_analytics import (
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 from momentum_score import calculate_momentum_scores_from_kite
 from portfolio_terminal_component import render_portfolio_terminal
+from stock_memory_cards import _merge_stock_notes, render_stock_memory_card
 from top_gainers_losers import (
     display_day_movers_summary,
     display_portfolio_day_movers_summary,
@@ -1487,6 +1488,14 @@ with tab_historic_data:
                         ascending=[False] * len(sort_columns),
                         na_position="last",
                     )
+                momentum_display_df = _merge_stock_notes(momentum_display_df)
+                note_columns = [column for column in ["why", "moat", "risk"] if column in momentum_display_df.columns]
+                if note_columns:
+                    note_values = momentum_display_df[note_columns].fillna("").astype(str)
+                    momentum_display_df["notes_status"] = note_values.apply(
+                        lambda row: "Yes" if any(value.strip() for value in row) else "No",
+                        axis=1,
+                    )
                 momentum_display_columns = [
                     "ticker",
                     "ltp",
@@ -1494,6 +1503,9 @@ with tab_historic_data:
                     "pullback_score",
                     "entry_signal",
                     "Entry",
+                    "notes_status",
+                    "research_age_days",
+                    "last_reviewed_date",
                     "ret_12_1",
                     "ret_6m",
                     "rs_vs_nifty",
@@ -1513,55 +1525,79 @@ with tab_historic_data:
                     [column for column in momentum_display_columns if column in momentum_display_df.columns]
                 ]
                 display_momentum_label_summary(momentum_display_df)
-                st.dataframe(
-                    momentum_display_df.style.format(
-                        {
-                            "ltp": "{:.2f}",
-                            "latest_close": "{:.2f}",
-                            "pullback_score": "{:.1f}",
-                            "ret_6m": "{:.2%}",
-                            "ret_12_1": "{:.2%}",
-                            "rs_vs_nifty": "{:.2%}",
-                            "ema10_extension_pct": "{:.2f}%",
-                            "ema20_extension_pct": "{:.2f}%",
-                            "atr14": "{:.2f}",
-                            "rsi14": "{:.1f}",
-                            "volume_ratio": "{:.2f}",
-                            "zscore_50": "{:.2f}",
-                            "dist_52w_high": "{:.2%}",
-                            "dist_52w_score": "{:.1f}",
-                            "above_ema200_score": "{:.1f}",
-                            "ema_trend_score": "{:.1f}",
-                            "vol_adj_mtm": "{:.2f}",
+                table_col, notes_col = st.columns([3, 1], vertical_alignment="top")
+                with table_col:
+                    momentum_selection = st.dataframe(
+                        momentum_display_df.style.format(
+                            {
+                                "ltp": "{:.2f}",
+                                "latest_close": "{:.2f}",
+                                "pullback_score": "{:.1f}",
+                                "ret_6m": "{:.2%}",
+                                "ret_12_1": "{:.2%}",
+                                "rs_vs_nifty": "{:.2%}",
+                                "ema10_extension_pct": "{:.2f}%",
+                                "ema20_extension_pct": "{:.2f}%",
+                                "atr14": "{:.2f}",
+                                "rsi14": "{:.1f}",
+                                "volume_ratio": "{:.2f}",
+                                "zscore_50": "{:.2f}",
+                                "dist_52w_high": "{:.2%}",
+                                "dist_52w_score": "{:.1f}",
+                                "above_ema200_score": "{:.1f}",
+                                "ema_trend_score": "{:.1f}",
+                                "vol_adj_mtm": "{:.2f}",
+                            },
+                            na_rep="-",
+                        ).apply(highlight_momentum_rank_cells, axis=None),
+                        width="stretch",
+                        height=_dataframe_height(len(momentum_display_df), max_rows=18),
+                        hide_index=True,
+                        column_config={
+                            "ticker": st.column_config.TextColumn(
+                                "ticker",
+                                width="medium",
+                            ),
+                            "ltp": st.column_config.NumberColumn(
+                                "LTP",
+                                format="%.2f",
+                            ),
+                            "latest_close": st.column_config.NumberColumn(
+                                "Latest Close",
+                                format="%.2f",
+                            ),
+                            "notes_status": st.column_config.TextColumn(
+                                "Notes",
+                                width="small",
+                            ),
+                            "research_age_days": st.column_config.NumberColumn(
+                                "Review Age",
+                                format="%d",
+                                width="small",
+                            ),
+                            "last_reviewed_date": st.column_config.TextColumn(
+                                "Last Reviewed",
+                                width="small",
+                            ),
+                            "ema10_extension_pct": st.column_config.NumberColumn(
+                                "ema10_ext",
+                                format="%.2f%%",
+                            ),
+                            "ema20_extension_pct": st.column_config.NumberColumn(
+                                "ema20_ext",
+                                format="%.2f%%",
+                            ),
                         },
-                        na_rep="-",
-                    ).apply(highlight_momentum_rank_cells, axis=None),
-                    width="stretch",
-                    height=_dataframe_height(len(momentum_display_df), max_rows=18),
-                    hide_index=True,
-                    column_config={
-                        "ticker": st.column_config.TextColumn(
-                            "ticker",
-                            width="medium",
-                        ),
-                        "ltp": st.column_config.NumberColumn(
-                            "LTP",
-                            format="%.2f",
-                        ),
-                        "latest_close": st.column_config.NumberColumn(
-                            "Latest Close",
-                            format="%.2f",
-                        ),
-                        "ema10_extension_pct": st.column_config.NumberColumn(
-                            "ema10_ext",
-                            format="%.2f%%",
-                        ),
-                        "ema20_extension_pct": st.column_config.NumberColumn(
-                            "ema20_ext",
-                            format="%.2f%%",
-                        ),
-                    },
-                )
+                        key="historic_momentum_ranking_table",
+                        on_select="rerun",
+                        selection_mode="single-row",
+                    )
+                with notes_col:
+                    selected_rows = momentum_selection.selection.rows if momentum_selection.selection else []
+                    if selected_rows:
+                        render_stock_memory_card(momentum_display_df.iloc[selected_rows[0]])
+                    else:
+                        st.info("Select a stock row to view or add notes.")
         with tab_ladder:
             display_day_movers_summary(day_movers_df)
             display_historic_price_ladder_frame(
