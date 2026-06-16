@@ -22,6 +22,7 @@ SUPABASE_INDICES_TABLE_NAME = "Indices_constituents"
 DISPLAY_COLUMNS = [
     "ticker",
     "ltp",
+    "latest_close",
     "pullback_score",
     "entry_signal",
     "mtm_score",
@@ -347,6 +348,7 @@ if score_df is not None and not score_df.empty:
             score_df[visible_columns].style.format(
                 {
                     "ltp": "{:.2f}",
+                    "latest_close": "{:.2f}",
                     "pullback_score": "{:.1f}",
                     "ret_6m": "{:.2%}",
                     "ret_12_1": "{:.2%}",
@@ -366,6 +368,14 @@ if score_df is not None and not score_df.empty:
             width="stretch",
             hide_index=True,
             column_config={
+                "ltp": st.column_config.NumberColumn(
+                    "LTP",
+                    format="%.2f",
+                ),
+                "latest_close": st.column_config.NumberColumn(
+                    "Latest Close",
+                    format="%.2f",
+                ),
                 "pullback_score": st.column_config.NumberColumn(
                     "pullback_score",
                     help=(
@@ -420,5 +430,3 @@ if score_df is not None and not score_df.empty:
             render_stock_memory_card(score_df.iloc[selected_rows[0]])
         else:
             st.info("Select a stock row to view notes.")
-
-

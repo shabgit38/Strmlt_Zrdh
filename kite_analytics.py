@@ -157,7 +157,7 @@ def get_high_low_resampled(df: pd.DataFrame) -> dict:
     return ranges
 
 
-def build_metric_values(analytics_df: pd.DataFrame) -> dict[str, float]:
+def build_metric_values(analytics_df: pd.DataFrame, live_ltp: float | None = None) -> dict[str, float]:
     """
     Build the shared 2Y daily metric values used by dashboards and holdings.
     """
@@ -169,9 +169,14 @@ def build_metric_values(analytics_df: pd.DataFrame) -> dict[str, float]:
     latest_date = pd.to_datetime(analytics_df.index[-1])
     high_low = get_high_low_resampled(analytics_df)
 
+    latest_close = float(latest["Close"])
+    live_ltp_value = pd.to_numeric(live_ltp, errors="coerce")
+
     metrics = {
-        "LTP": float(latest["Close"]),
+        "Latest Close": latest_close,
     }
+    if pd.notna(live_ltp_value):
+        metrics["LTP"] = float(live_ltp_value)
     if latest_date.date() == datetime.now().date():
         metrics["Today Low"] = float(latest["Low"])
         metrics["Today High"] = float(latest["High"])
@@ -200,7 +205,7 @@ def build_metric_values(analytics_df: pd.DataFrame) -> dict[str, float]:
 def calculate_range_position(metrics: dict[str, float]) -> tuple[float, float, float] | None:
     lows = [value for label, value in metrics.items() if "Low" in label]
     highs = [value for label, value in metrics.items() if "High" in label]
-    ltp = metrics.get("LTP")
+    ltp = metrics.get("LTP", metrics.get("Latest Close"))
 
     if ltp is None or not lows or not highs:
         return None
@@ -380,6 +385,7 @@ def pivot_points(df: pd.DataFrame) -> dict[str, float]:
 def build_metric_ladder(
     analytics_df: pd.DataFrame,
     *,
+    live_ltp: float | None = None,
     buy_avg: float | None = None,
     quantity: float | None = None,
     invested: float | None = None,
@@ -387,12 +393,12 @@ def build_metric_ladder(
     """
     Build an ascending price ladder from the cached 2Y daily dataframe.
     """
-    metrics = build_metric_values(analytics_df)
+    metrics = build_metric_values(analytics_df, live_ltp=live_ltp)
     range_position = calculate_range_position(metrics)
-    ltp = metrics.get("LTP")
+    current_price = metrics.get("LTP", metrics.get("Latest Close"))
     range_with_ltp = (
-        (range_position[0], range_position[1], range_position[2], ltp)
-        if range_position is not None and ltp is not None
+        (range_position[0], range_position[1], range_position[2], current_price)
+        if range_position is not None and current_price is not None
         else None
     )
     ladder: list[tuple[str, float | tuple[float, ...] | None]] = [
@@ -413,7 +419,7 @@ def build_metric_ladder(
     ladder.append(("Range Used", range_position))
     for span in [20, 50, 100, 200]:
         label = f"EMA{span}"
-        ladder.append((f"__EMA_DISTANCE__{label}", calculate_distance_pct(ltp, metrics.get(label))))
+        ladder.append((f"__EMA_DISTANCE__{label}", calculate_distance_pct(current_price, metrics.get(label))))
     ladder.extend(sorted({**metrics, **pivot_points(analytics_df)}.items(), key=lambda item: item[1]))
     return ladder
 
@@ -487,6 +493,7 @@ def build_historic_dashboard_frames(
     buy_avg_key: str | None = None,
     quantity_key: str | None = None,
     invested_key: str | None = None,
+    live_ltp_by_symbol: dict[str, float] | None = None,
     include_returns: bool = True,
     include_close_prices: bool = True,
     include_ladders: bool = True,
@@ -512,7 +519,8 @@ def build_historic_dashboard_frames(
         if include_close_prices and "Close" in analytics_df.columns:
             close_prices[symbol] = pd.to_numeric(analytics_df["Close"], errors="coerce")
 
-        ltp = row.get(ltp_key) if ltp_key is not None else None
+        live_ltp = row.get(ltp_key) if ltp_key is not None else (live_ltp_by_symbol or {}).get(symbol)
+        ltp = live_ltp
         buy_avg = pd.to_numeric(row.get(buy_avg_key), errors="coerce") if buy_avg_key is not None else None
         quantity = pd.to_numeric(row.get(quantity_key), errors="coerce") if quantity_key is not None else None
         invested = pd.to_numeric(row.get(invested_key), errors="coerce") if invested_key is not None else None
@@ -540,6 +548,7 @@ def build_historic_dashboard_frames(
         if include_ladders:
             ladders[symbol] = build_metric_ladder(
                 analytics_df,
+                live_ltp=live_ltp,
                 buy_avg=float(buy_avg) if pd.notna(buy_avg) else None,
                 quantity=float(quantity) if pd.notna(quantity) else None,
                 invested=float(invested) if pd.notna(invested) else None,
@@ -584,24 +593,29 @@ def build_price_ladder_and_day_movers_frames(
     buy_avg_key: str | None = None,
     quantity_key: str | None = None,
     invested_key: str | None = None,
+    live_ltp_by_symbol: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     ladders: dict[str, list[tuple[str, float]]] = {}
     day_mover_rows: list[dict[str, float | str]] = []
     skipped_symbols: list[str] = []
-    live_ltp_by_symbol: dict[str, float] = {}
+    resolved_live_ltp_by_symbol: dict[str, float] = {
+        str(symbol).strip().upper(): float(ltp)
+        for symbol, ltp in (live_ltp_by_symbol or {}).items()
+        if str(symbol).strip() and pd.notna(pd.to_numeric(ltp, errors="coerce"))
+    }
 
-    if ltp_key is None:
+    if ltp_key is None and not resolved_live_ltp_by_symbol:
         symbols = sorted({str(row.get(symbol_key) or "").strip().upper() for row in token_rows if row.get(symbol_key)})
         if symbols:
             try:
                 quotes = _kite.ltp(*[f"NSE:{symbol}" for symbol in symbols])
-                live_ltp_by_symbol = {
+                resolved_live_ltp_by_symbol = {
                     str(instrument).split(":", 1)[-1].strip().upper(): float(quote["last_price"])
                     for instrument, quote in quotes.items()
                     if isinstance(quote, dict) and quote.get("last_price") is not None
                 }
             except Exception:
-                live_ltp_by_symbol = {}
+                resolved_live_ltp_by_symbol = {}
 
     for row in token_rows:
         symbol = str(row.get(symbol_key) or "").strip().upper()
@@ -614,7 +628,8 @@ def build_price_ladder_and_day_movers_frames(
             skipped_symbols.append(symbol)
             continue
 
-        ltp = row.get(ltp_key) if ltp_key is not None else live_ltp_by_symbol.get(symbol)
+        live_ltp = row.get(ltp_key) if ltp_key is not None else resolved_live_ltp_by_symbol.get(symbol)
+        ltp = live_ltp
         buy_avg = pd.to_numeric(row.get(buy_avg_key), errors="coerce") if buy_avg_key is not None else None
         quantity = pd.to_numeric(row.get(quantity_key), errors="coerce") if quantity_key is not None else None
         invested = pd.to_numeric(row.get(invested_key), errors="coerce") if invested_key is not None else None
@@ -627,6 +642,7 @@ def build_price_ladder_and_day_movers_frames(
             day_mover_rows.append(day_mover)
         ladders[symbol] = build_metric_ladder(
             analytics_df,
+            live_ltp=live_ltp,
             buy_avg=float(buy_avg) if pd.notna(buy_avg) else None,
             quantity=float(quantity) if pd.notna(quantity) else None,
             invested=float(invested) if pd.notna(invested) else None,

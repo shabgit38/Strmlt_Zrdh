@@ -280,6 +280,7 @@ def calculate_momentum_features(
     benchmark_df: pd.DataFrame,
     *,
     ticker: str | None = None,
+    live_ltp: float | None = None,
 ) -> dict[str, float | bool | str]:
     stock_close = _get_close_series(stock_df)
     benchmark_close = _get_close_series(benchmark_df)
@@ -289,6 +290,7 @@ def calculate_momentum_features(
         return {
             "ticker": resolved_ticker,
             "ltp": np.nan,
+            "latest_close": np.nan,
             "ret_6m": np.nan,
             "ret_12_1": np.nan,
             "rs_vs_nifty": np.nan,
@@ -303,7 +305,9 @@ def calculate_momentum_features(
             **_empty_entry_features(),
         }
 
-    ltp = float(stock_close.iloc[-1])
+    latest_close = float(stock_close.iloc[-1])
+    live_ltp_value = pd.to_numeric(live_ltp, errors="coerce")
+    ltp = float(live_ltp_value) if pd.notna(live_ltp_value) else latest_close
     ret_6m = calculate_return(stock_close, 126)
     ret_12_1 = calculate_12_1_momentum(stock_close)
     benchmark_6m_return = calculate_return(benchmark_close, 126)
@@ -377,7 +381,8 @@ def calculate_momentum_features(
 
     return {
         "ticker": resolved_ticker,
-        "ltp": ltp,
+        "ltp": float(live_ltp_value) if pd.notna(live_ltp_value) else np.nan,
+        "latest_close": latest_close,
         "ret_6m": ret_6m,
         "ret_12_1": ret_12_1,
         "rs_vs_nifty": rs_vs_nifty,
@@ -468,9 +473,16 @@ def calculate_final_momentum_score(features_df: pd.DataFrame) -> pd.DataFrame:
 def calculate_all_momentum_scores(
     stock_data_dict: dict[str, pd.DataFrame],
     benchmark_df: pd.DataFrame,
+    *,
+    live_ltp_by_symbol: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     feature_rows = [
-        calculate_momentum_features(stock_df, benchmark_df, ticker=ticker)
+        calculate_momentum_features(
+            stock_df,
+            benchmark_df,
+            ticker=ticker,
+            live_ltp=(live_ltp_by_symbol or {}).get(ticker),
+        )
         for ticker, stock_df in stock_data_dict.items()
     ]
     if not feature_rows:
@@ -487,6 +499,7 @@ def calculate_momentum_scores_from_kite(
     *,
     symbol_key: str = "Ticker",
     token_key: str = "instrument_token",
+    live_ltp_by_symbol: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     failed_symbols: list[str] = []
     stock_data: dict[str, pd.DataFrame] = {}
@@ -516,4 +529,11 @@ def calculate_momentum_scores_from_kite(
     if not stock_data:
         return pd.DataFrame(), failed_symbols
 
-    return calculate_all_momentum_scores(stock_data, benchmark_df), failed_symbols
+    return (
+        calculate_all_momentum_scores(
+            stock_data,
+            benchmark_df,
+            live_ltp_by_symbol=live_ltp_by_symbol,
+        ),
+        failed_symbols,
+    )

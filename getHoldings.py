@@ -632,6 +632,7 @@ def build_consolidated_momentum_dashboard(
 
     rename_map = {
         "ltp": "LTP",
+        "latest_close": "Latest Close",
         "ret_6m": "6M Momentum",
         "ret_12_1": "12-1 Momentum",
         "rs_vs_nifty": "RS vs Nifty",
@@ -665,6 +666,7 @@ def build_consolidated_momentum_dashboard(
         "Label",
         "Status",
         "LTP",
+        "Latest Close",
         "Range %",
         "6M Momentum",
         "12-1 Momentum",
@@ -709,6 +711,7 @@ def display_consolidated_momentum_dashboard(consolidated_df: pd.DataFrame) -> No
     formatters = {
         "Momentum Score": "{:.1f}",
         "LTP": "{:.2f}",
+        "Latest Close": "{:.2f}",
         "Vol Adj Momentum": "{:.2f}",
         "52W High": "{:.2f}",
         "52W Low": "{:.2f}",
@@ -953,6 +956,17 @@ def fetch_live_ltp(kite, symbols: list[str]) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows, columns=["Symbol", "LTP"])
+
+
+def fetch_live_ltp_by_symbol(kite, symbols: list[str]) -> dict[str, float]:
+    ltp_df = fetch_live_ltp(kite, symbols)
+    if ltp_df.empty:
+        return {}
+    return {
+        str(row["Symbol"]).strip().upper(): float(row["LTP"])
+        for _, row in ltp_df.iterrows()
+        if pd.notna(row.get("LTP"))
+    }
 
 
 def _apply_live_ltp_to_holdings(holdings_df: pd.DataFrame, ltp_df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
@@ -1364,13 +1378,16 @@ with tab_historic_data:
                         {"Ticker": ticker, "instrument_token": token}
                         for ticker, token in token_map.items()
                     ]
+                    live_ltp_by_symbol = fetch_live_ltp_by_symbol(historic_kite, pending_historic_tickers)
                     dashboard_df, day_movers_df, skipped_symbols = build_price_ladder_and_day_movers_frames(
                         historic_kite,
                         token_rows,
                         as_of_date,
+                        live_ltp_by_symbol=live_ltp_by_symbol,
                     )
                     st.session_state["historic_dashboard_df"] = dashboard_df
                     st.session_state["historic_day_movers_df"] = day_movers_df
+                    st.session_state["historic_live_ltp_by_symbol"] = live_ltp_by_symbol
                     st.session_state["historic_skipped_symbols"] = skipped_symbols
                     st.session_state["historic_momentum_benchmark_used"] = pending_benchmark
                     st.session_state["historic_token_rows"] = token_rows
@@ -1386,6 +1403,7 @@ with tab_historic_data:
                                 token_rows,
                                 benchmark_token_map[pending_benchmark],
                                 as_of_date,
+                                live_ltp_by_symbol=live_ltp_by_symbol,
                             )
                             st.session_state["historic_momentum_df"] = momentum_df
                             st.session_state["historic_momentum_failed_symbols"] = momentum_failed_symbols
@@ -1472,6 +1490,7 @@ with tab_historic_data:
                 momentum_display_columns = [
                     "ticker",
                     "ltp",
+                    "latest_close",
                     "pullback_score",
                     "entry_signal",
                     "Entry",
@@ -1498,6 +1517,7 @@ with tab_historic_data:
                     momentum_display_df.style.format(
                         {
                             "ltp": "{:.2f}",
+                            "latest_close": "{:.2f}",
                             "pullback_score": "{:.1f}",
                             "mtm_score": "{:.1f}",
                             "ret_6m": "{:.2%}",
@@ -1529,6 +1549,14 @@ with tab_historic_data:
                             "ticker",
                             width="medium",
                         ),
+                        "ltp": st.column_config.NumberColumn(
+                            "LTP",
+                            format="%.2f",
+                        ),
+                        "latest_close": st.column_config.NumberColumn(
+                            "Latest Close",
+                            format="%.2f",
+                        ),
                         "ema10_extension_pct": st.column_config.NumberColumn(
                             "ema10_ext",
                             format="%.2f%%",
@@ -1557,6 +1585,7 @@ with tab_historic_data:
                             returns_kite,
                             token_rows,
                             st.session_state.get("historic_as_of_date") or datetime.now().date().isoformat(),
+                            live_ltp_by_symbol=st.session_state.get("historic_live_ltp_by_symbol", {}),
                             include_close_prices=False,
                             include_ladders=False,
                         )

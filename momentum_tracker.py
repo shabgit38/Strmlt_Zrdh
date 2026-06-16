@@ -136,12 +136,19 @@ def _as_float(value: Any) -> float | None:
     return float(converted)
 
 
+def _current_price(levels: dict[str, Any]) -> tuple[float | None, str]:
+    ltp = _as_float(levels.get("LTP"))
+    if ltp is not None:
+        return ltp, "LTP"
+    return _as_float(levels.get("Latest Close")), "Latest Close"
+
+
 def calculate_range_position(levels: dict[str, Any]) -> float | None:
     lows = [_as_float(value) for key, value in levels.items() if "Low" in key]
     highs = [_as_float(value) for key, value in levels.items() if "High" in key]
     lows = [value for value in lows if value is not None]
     highs = [value for value in highs if value is not None]
-    ltp = _as_float(levels.get("LTP"))
+    ltp, _ = _current_price(levels)
 
     if ltp is None or not lows or not highs:
         return None
@@ -164,7 +171,7 @@ def calculate_distance_pct(ltp: Any, reference_value: Any) -> float | None:
 
 
 def get_trend_label(levels: dict[str, Any]) -> str:
-    ltp = _as_float(levels.get("LTP"))
+    ltp, _ = _current_price(levels)
     ema20 = _as_float(levels.get("EMA20"))
     ema50 = _as_float(levels.get("EMA50"))
     ema100 = _as_float(levels.get("EMA100"))
@@ -207,7 +214,7 @@ def _nearest_level(levels: dict[str, Any], label_fragment: str, ltp: float) -> t
 
 
 def build_structure_bar_figure(levels: dict[str, Any]) -> go.Figure:
-    ltp = _as_float(levels.get("LTP"))
+    ltp, price_label = _current_price(levels)
     fig = go.Figure()
 
     if ltp is None:
@@ -273,11 +280,11 @@ def build_structure_bar_figure(levels: dict[str, Any]) -> go.Figure:
             mode="lines+markers+text",
             line=dict(color="#dc2626", width=3),
             marker=dict(color="#dc2626", size=9),
-            text=["", f"LTP {ltp:.2f}<br>{ltp_position:.1f}%"],
+            text=["", f"{price_label} {ltp:.2f}<br>{ltp_position:.1f}%"],
             textposition="top center",
             textfont=dict(color="#991b1b", size=11),
-            name="LTP",
-            hovertemplate=f"LTP: {ltp:.2f}<br>Position: {ltp_position:.1f}%<extra></extra>",
+            name=price_label,
+            hovertemplate=f"{price_label}: {ltp:.2f}<br>Position: {ltp_position:.1f}%<extra></extra>",
             showlegend=False,
         )
     )
@@ -344,17 +351,20 @@ def _format_pct(value: float | None) -> str:
 
 
 def render_stock_card(symbol: str, levels: dict[str, Any]) -> None:
-    ltp = levels.get("LTP")
+    current_price, current_price_label = _current_price(levels)
     trend_label = get_trend_label(levels)
     range_position = calculate_range_position(levels)
-    ema20_distance = calculate_distance_pct(ltp, levels.get("EMA20"))
-    ema200_distance = calculate_distance_pct(ltp, levels.get("EMA200"))
+    ema20_distance = calculate_distance_pct(current_price, levels.get("EMA20"))
+    ema200_distance = calculate_distance_pct(current_price, levels.get("EMA200"))
     trend_color = _trend_color(trend_label)
 
     with st.container(border=True):
         header_col, ltp_col = st.columns([1.2, 1])
         header_col.markdown(f"**{symbol}**")
-        ltp_col.markdown(f"<div style='text-align:right;font-weight:700'>Rs {_format_currency(ltp)}</div>", unsafe_allow_html=True)
+        ltp_col.markdown(
+            f"<div style='text-align:right;font-weight:700'>{current_price_label}: Rs {_format_currency(current_price)}</div>",
+            unsafe_allow_html=True,
+        )
         st.markdown(
             f"""
             <div style="display:flex;justify-content:space-between;align-items:center;margin-top:-0.25rem;">
@@ -389,6 +399,22 @@ def build_momentum_cards(kite, token_rows: list[dict]) -> tuple[list[dict], list
     as_of_date = datetime.now().date().isoformat()
     cards: list[dict] = []
     failed_symbols: list[str] = []
+    symbols = sorted(
+        {
+            str(row.get("symbol") or row.get("tradingsymbol") or "").strip().upper()
+            for row in token_rows
+            if str(row.get("symbol") or row.get("tradingsymbol") or "").strip()
+        }
+    )
+    try:
+        quotes = kite.ltp(*[f"NSE:{symbol}" for symbol in symbols]) if symbols else {}
+        live_ltp_by_symbol = {
+            str(instrument).split(":", 1)[-1].strip().upper(): float(quote["last_price"])
+            for instrument, quote in quotes.items()
+            if isinstance(quote, dict) and quote.get("last_price") is not None
+        }
+    except Exception:
+        live_ltp_by_symbol = {}
 
     for row in token_rows:
         symbol = str(row.get("symbol") or row.get("tradingsymbol") or "").strip().upper()
@@ -397,7 +423,7 @@ def build_momentum_cards(kite, token_rows: list[dict]) -> tuple[list[dict], list
             continue
         try:
             analytics_df = load_analytics_history(kite, token, as_of_date)
-            levels = build_metric_values(analytics_df)
+            levels = build_metric_values(analytics_df, live_ltp=live_ltp_by_symbol.get(symbol))
         except Exception:
             failed_symbols.append(symbol)
             continue

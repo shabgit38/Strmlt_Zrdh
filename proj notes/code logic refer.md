@@ -68,3 +68,12 @@ feature_testing.py is not impoted or referenced by other Python files
 
 ### Built a Python snapshot converter 
 at [getHoldings.py (line 537)] using current Kite holdings plus loaded breakdown rows.
+
+# Implemented the LTP consistency change.
+What changed:
+-LTP now represents live quote data when available.
+-Historical fallback is exposed as Latest Close, not mislabeled as LTP.
+Historic price ladder now accepts/passes live LTP and uses it for range position / EMA distance / day mover current-price calculations.
+-Momentum scoring now accepts live_ltp_by_symbol; current-price features use live LTP when available, while historical returns/momentum lookbacks still use the historical close series.
+-Momentum displays now show both LTP and Latest Close.
+-momentum_tracker.py now fetches live quotes for cards and falls back to Latest Close labeling if live quote fetch fails
