@@ -190,19 +190,3 @@ def calculate_annualized_volatility(close: pd.Series, window: int = 126) -> floa
     daily_returns = pd.to_numeric(close, errors="coerce").pct_change()
     volatility = daily_returns.tail(window).std() * np.sqrt(252)
     return float(volatility) if pd.notna(volatility) else np.nan
-
-
-def get_momentum_label(score: float | int | None) -> str:
-    score_value = pd.to_numeric(score, errors="coerce")
-    if pd.isna(score_value):
-        return "Insufficient Data"
-
-    if score_value >= 85:
-        return "Elite"
-    if score_value >= 70:
-        return "Strong"
-    if score_value >= 55:
-        return "Watch"
-    if score_value >= 40:
-        return "Weak"
-    return "Avoid"

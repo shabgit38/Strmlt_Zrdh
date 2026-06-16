@@ -7,7 +7,7 @@ Input:
 symbol, date, open, high, low, close, volume
 
 Required app features:
-3. Calculate indicators per symbol:
+## 3. Calculate indicators per symbol:
    - EMA10, EMA20, EMA50, EMA100, EMA200
    - ATR14
    - RSI14
@@ -19,7 +19,7 @@ Required app features:
    - EMA20 extension %
    - Relative Strength vs Nifty benchmark
 
-4. Build pullback scoring system:
+## 4. Build pullback scoring system:
    - Bullish EMA stack: EMA10 > EMA20 > EMA50 > EMA100 > EMA200: +20
    - Price position: Close > EMA20: required filter
    - EMA10 extension between -3% and +7%: +15
@@ -35,13 +35,13 @@ Use:
 EMA20 <= Close <= EMA20 + 0.5 * ATR14
 This avoids buying weak breakdowns below EMA20.
 
-5. Classify signals:
+## 5. Classify signals:
    - >=80: Strong Entry Candidate
    - 65-79: Watchlist / Near Entry
    - 45-64: Wait
    - <45: Avoid
 
-Entry price Range
+### Entry price Range
 | Field       | Formula            |
 | ----------- | ------------------ |
 | Entry Lower | EMA20              |
@@ -63,27 +63,7 @@ explanation why use 0.5ATR
 
 
 
-7. Show latest row per stock in Streamlit table.
-
-9. Add selected-stock detail panel:
-   - Latest close
-   - EMA values
-   - ATR pullback zone
-   - RSI
-   - Volume ratio
-   - Z-score
-   - Signal reason list
-
-Implementation rules:
-- Keep everything in one file.
-- Use pandas, numpy, streamlit.
-- Use defensive error handling.
-- Do not use TA-Lib.
-- All indicators must be implemented manually.
-- Code should run with:
-  uv run streamlit run momentum_pullback_scanner.py
-
-### pullback scoring logic:
+## pullback scoring logic:
 entry_candidate = (
 
     EMA10 > EMA20 >
@@ -112,7 +92,7 @@ entry_candidate = (
 
 )
 
-Z-score measures: How many standard deviations away from average?
+### Z-score measures: How many standard deviations away from average?
 | Z  | Interpretation         |
 | -- | ---------------------- |
 | +3 | Extremely expensive    |

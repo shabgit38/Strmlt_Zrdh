@@ -25,8 +25,6 @@ DISPLAY_COLUMNS = [
     "latest_close",
     "pullback_score",
     "entry_signal",
-    "mtm_score",
-    "mtm_label",
     "ret_6m",
     "ret_12_1",
     "rs_vs_nifty",
@@ -361,7 +359,6 @@ if score_df is not None and not score_df.empty:
                     "zscore_50": "{:.2f}",
                     "dist_52w_high": "{:.2%}",
                     "vol_adj_mtm": "{:.2f}",
-                    "mtm_score": "{:.1f}",
                 },
                 na_rep="-",
             ),
@@ -401,23 +398,6 @@ if score_df is not None and not score_df.empty:
                         "45-64 Wait\n"
                         "<45 Avoid"
                     ),
-                ),
-                "mtm_score": st.column_config.NumberColumn(
-                    "mtm_score",
-                    help=(
-                        "Momentum score components:\n"
-                        "12-1 momentum rank\n"
-                        "6M return rank\n"
-                        "RS vs Nifty rank\n"
-                        "52W high proximity\n"
-                        "EMA trend\n"
-                        "Volatility-adjusted momentum"
-                    ),
-                    format="%.1f",
-                ),
-                "mtm_label": st.column_config.TextColumn(
-                    "mtm_label",
-                    help="Momentum label derived from mtm_score.",
                 ),
             },
             key="momentum_score_check_table",

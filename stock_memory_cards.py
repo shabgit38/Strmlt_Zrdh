@@ -247,8 +247,8 @@ def _stock_card_html(row: pd.Series) -> str:
     symbol = escape(_format_card_value(row.get("ticker") or row.get("symbol")))
     ltp = pd.to_numeric(row.get("ltp"), errors="coerce")
     price = "-" if pd.isna(ltp) else f"Rs {float(ltp):.2f}"
-    label = escape(_format_card_value(row.get("mtm_label"), "No label"))
-    score = pd.to_numeric(row.get("mtm_score"), errors="coerce")
+    label = escape(_format_card_value(row.get("entry_signal"), "No signal"))
+    score = pd.to_numeric(row.get("pullback_score"), errors="coerce")
     score_text = "-" if pd.isna(score) else f"{float(score):.1f}"
     age_class = _research_age_class(row.get("research_age_days"))
     reviewed = escape(_format_research_age(row.get("research_age_days")))
@@ -429,7 +429,7 @@ def render_stock_memory_card(momentum_row: pd.Series) -> None:
             st.markdown(f"**{symbol or '-'}**")
         with header_cols[1]:
             st.markdown(
-                f"<div class='stock-memory-card-meta'>{escape(_format_card_value(card_row.get('mtm_label'), 'No label'))}</div>",
+                f"<div class='stock-memory-card-meta'>{escape(_format_card_value(card_row.get('entry_signal'), 'No signal'))}</div>",
                 unsafe_allow_html=True,
             )
         with header_cols[2]:

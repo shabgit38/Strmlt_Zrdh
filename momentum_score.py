@@ -16,28 +16,9 @@ from quant_calcs import (
     calculate_rsi,
     calculate_volume_ma,
     calculate_zscore,
-    get_momentum_label,
 )
 
 st.set_page_config(layout="wide") 
-
-MOMENTUM_SCORE_WEIGHTS = {
-    "ret_12_1_rank": 0.25,
-    "ret_6m_rank": 0.20,
-    "rs_rank": 0.15,
-    "dist_52w_score": 0.15,
-    "above_ema200_score": 0.10,
-    "ema_trend_score": 0.10,
-    "vol_adj_rank": 0.05,
-}
-
-REQUIRED_FEATURE_COLUMNS = [
-    "ret_6m",
-    "ret_12_1",
-    "rs_vs_nifty",
-    "dist_52w_score",
-    "vol_adj_mtm",
-]
 
 ENTRY_SIGNAL_LABELS = {
     "strong": "Strong Entry",
@@ -423,53 +404,6 @@ def calculate_momentum_features(
     }
 
 
-def add_percentile_ranks(features_df: pd.DataFrame) -> pd.DataFrame:
-    ranked_df = features_df.copy()
-    rank_columns = {
-        "ret_12_1": "ret_12_1_rank",
-        "ret_6m": "ret_6m_rank",
-        "rs_vs_nifty": "rs_rank",
-        "vol_adj_mtm": "vol_adj_rank",
-    }
-
-    for source_column, rank_column in rank_columns.items():
-        if source_column not in ranked_df.columns:
-            ranked_df[rank_column] = np.nan
-            continue
-
-        ranked_df[rank_column] = (
-            pd.to_numeric(ranked_df[source_column], errors="coerce")
-            .rank(pct=True)
-            .mul(100)
-        )
-
-    return ranked_df
-
-
-def calculate_final_momentum_score(features_df: pd.DataFrame) -> pd.DataFrame:
-    scored_df = add_percentile_ranks(features_df)
-
-    weighted_parts = []
-    for column, weight in MOMENTUM_SCORE_WEIGHTS.items():
-        if column not in scored_df.columns:
-            scored_df[column] = np.nan
-        weighted_parts.append(pd.to_numeric(scored_df[column], errors="coerce") * weight)
-
-    scored_df["mtm_score"] = sum(weighted_parts)
-    if "data_status" not in scored_df.columns:
-        scored_df["data_status"] = "OK"
-    missing_required = scored_df[REQUIRED_FEATURE_COLUMNS].isna().any(axis=1)
-    scored_df.loc[missing_required & scored_df["data_status"].eq("OK"), "data_status"] = "Insufficient Data"
-    scored_df.loc[scored_df["data_status"].ne("OK"), "mtm_score"] = np.nan
-    scored_df["mtm_label"] = scored_df["mtm_score"].apply(get_momentum_label)
-
-    return scored_df.sort_values(
-        by="mtm_score",
-        ascending=False,
-        na_position="last",
-    ).reset_index(drop=True)
-
-
 def calculate_all_momentum_scores(
     stock_data_dict: dict[str, pd.DataFrame],
     benchmark_df: pd.DataFrame,
@@ -488,7 +422,14 @@ def calculate_all_momentum_scores(
     if not feature_rows:
         return pd.DataFrame()
 
-    return calculate_final_momentum_score(pd.DataFrame(feature_rows))
+    features_df = pd.DataFrame(feature_rows)
+    if "pullback_score" in features_df.columns:
+        features_df = features_df.sort_values(
+            by="pullback_score",
+            ascending=False,
+            na_position="last",
+        )
+    return features_df.reset_index(drop=True)
 
 
 def calculate_momentum_scores_from_kite(

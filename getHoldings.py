@@ -633,6 +633,8 @@ def build_consolidated_momentum_dashboard(
     rename_map = {
         "ltp": "LTP",
         "latest_close": "Latest Close",
+        "pullback_score": "Pullback Score",
+        "entry_signal": "Entry Signal",
         "ret_6m": "6M Momentum",
         "ret_12_1": "12-1 Momentum",
         "rs_vs_nifty": "RS vs Nifty",
@@ -640,8 +642,6 @@ def build_consolidated_momentum_dashboard(
         "above_ema200": "Above EMA200",
         "ema50_gt_ema200": "EMA50 > EMA200",
         "vol_adj_mtm": "Vol Adj Mtm",
-        "mtm_score": "Mtm Score",
-        "mtm_label": "Label",
         "data_status": "Status",
     }
     consolidated = consolidated.rename(columns=rename_map)
@@ -662,8 +662,8 @@ def build_consolidated_momentum_dashboard(
 
     preferred_columns = [
         "Ticker",
-        "Momentum Score",
-        "Label",
+        "Pullback Score",
+        "Entry Signal",
         "Status",
         "LTP",
         "Latest Close",
@@ -685,7 +685,7 @@ def build_consolidated_momentum_dashboard(
         "EMA50 Dist %",
         "EMA100 Dist %",
         "EMA200 Dist %",
-        "Vol Adj Momentum",
+        "Vol Adj Mtm",
         "52W High",
         "52W Low",
     ]
@@ -709,10 +709,10 @@ def display_consolidated_momentum_dashboard(consolidated_df: pd.DataFrame) -> No
         if column in consolidated_df.columns
     ]
     formatters = {
-        "Momentum Score": "{:.1f}",
+        "Pullback Score": "{:.1f}",
         "LTP": "{:.2f}",
         "Latest Close": "{:.2f}",
-        "Vol Adj Momentum": "{:.2f}",
+        "Vol Adj Mtm": "{:.2f}",
         "52W High": "{:.2f}",
         "52W Low": "{:.2f}",
         **{column: "{:.2%}" for column in percent_fraction_columns},
@@ -1478,7 +1478,7 @@ with tab_historic_data:
                     momentum_display_df["Entry"] = momentum_display_df.apply(_format_entry_range, axis=1)
                 sort_columns = [
                     column
-                    for column in ["pullback_score", "mtm_score"]
+                    for column in ["pullback_score"]
                     if column in momentum_display_df.columns
                 ]
                 if sort_columns:
@@ -1519,13 +1519,9 @@ with tab_historic_data:
                             "ltp": "{:.2f}",
                             "latest_close": "{:.2f}",
                             "pullback_score": "{:.1f}",
-                            "mtm_score": "{:.1f}",
                             "ret_6m": "{:.2%}",
-                            "ret_6m_rank": "{:.1f}",
                             "ret_12_1": "{:.2%}",
-                            "ret_12_1_rank": "{:.1f}",
                             "rs_vs_nifty": "{:.2%}",
-                            "rs_rank": "{:.1f}",
                             "ema10_extension_pct": "{:.2f}%",
                             "ema20_extension_pct": "{:.2f}%",
                             "atr14": "{:.2f}",
@@ -1537,7 +1533,6 @@ with tab_historic_data:
                             "above_ema200_score": "{:.1f}",
                             "ema_trend_score": "{:.1f}",
                             "vol_adj_mtm": "{:.2f}",
-                            "vol_adj_rank": "{:.1f}",
                         },
                         na_rep="-",
                     ).apply(highlight_momentum_rank_cells, axis=None),
