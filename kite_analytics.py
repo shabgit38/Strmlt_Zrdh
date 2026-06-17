@@ -664,12 +664,13 @@ def display_historic_dashboard_frames(
     returns_df: pd.DataFrame,
     *,
     max_rows: int = 12,
+    highlight_symbols: dict[str, str] | None = None,
 ) -> None:
     """
     Display the shared returns and sorted price ladder dashboard.
     """
 
-    display_historic_price_ladder_frame(dashboard_df, max_rows=max_rows)
+    display_historic_price_ladder_frame(dashboard_df, max_rows=max_rows, highlight_symbols=highlight_symbols)
     display_historic_returns_frame(returns_df, max_rows=max_rows)
 
 
@@ -677,6 +678,7 @@ def display_historic_price_ladder_frame(
     dashboard_df: pd.DataFrame,
     *,
     max_rows: int = 12,
+    highlight_symbols: dict[str, str] | None = None,
 ) -> None:
     """
     Display the sorted price ladder dashboard.
@@ -689,7 +691,7 @@ def display_historic_price_ladder_frame(
     symbol_color_groups = _group_dashboard_symbols_by_range_color(dashboard_df)
     if any(symbol_color_groups.values()):
         st.markdown(
-            _format_symbol_color_summary(symbol_color_groups),
+            _format_symbol_color_summary(symbol_color_groups, highlight_symbols=highlight_symbols),
             unsafe_allow_html=True,
         )
 
@@ -769,7 +771,36 @@ def _get_symbol_range_pct(symbol_values: pd.Series) -> float | None:
     return None
 
 
-def _format_symbol_color_summary(color_groups: dict[str, list[str]]) -> str:
+def _format_summary_symbols(symbols: list[str], highlight_symbols: dict[str, str] | None = None) -> str:
+    highlight_accents = {
+        str(symbol).strip().upper(): str(accent).strip()
+        for symbol, accent in (highlight_symbols or {}).items()
+        if str(symbol).strip() and str(accent).strip()
+    }
+    if not symbols:
+        return "-"
+
+    formatted_symbols: list[str] = []
+    for symbol in symbols:
+        symbol_text = str(symbol).strip()
+        accent = highlight_accents.get(symbol_text.upper())
+        if accent:
+            formatted_symbols.append(
+                "<span style='display:inline-block;margin:0.05rem 0.08rem 0.05rem 0;"
+                f"padding:0.03rem 0.2rem;border:1px solid {accent};"
+                f"border-left:3px solid {accent};border-radius:0.2rem;'>"
+                f"{escape(symbol_text)}</span>"
+            )
+        else:
+            formatted_symbols.append(escape(symbol_text))
+    return ", ".join(formatted_symbols)
+
+
+def _format_symbol_color_summary(
+    color_groups: dict[str, list[str]],
+    *,
+    highlight_symbols: dict[str, str] | None = None,
+) -> str:
     summary_items = [
         (">= 75", *MOMENTUM_PALETTE["entry"], color_groups["green"]),
         (">= 50 and < 75", *MOMENTUM_PALETTE["near"], color_groups["light_green"]),
@@ -778,12 +809,13 @@ def _format_symbol_color_summary(color_groups: dict[str, list[str]]) -> str:
     ]
     rows = []
     for label, background, foreground, symbols in summary_items:
-        symbol_text = escape(", ".join(symbols)) if symbols else "-"
+        symbol_text = _format_summary_symbols(symbols, highlight_symbols)
         rows.append(
             "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:6.5rem;font-weight:700;color:{background};'>{label}</span>"
-            f"<span style='background:{background};color:{foreground};font-weight:700;"
-            "padding:0.2rem 0.45rem;border-radius:0.25rem;'>"
+            f"<span style='background:transparent;color:{background};font-weight:700;"
+            f"padding:0.2rem 0.45rem;border:1px solid {background};"
+            f"border-left:3px solid {background};border-radius:0.25rem;'>"
             f"{symbol_text}</span></div>"
         )
     return (

@@ -25,6 +25,8 @@ from momentum_score import calculate_momentum_scores_from_kite
 from portfolio_terminal_component import render_portfolio_terminal
 from stock_memory_cards import _merge_stock_notes, render_stock_memory_card
 from top_gainers_losers import (
+    build_day_movers_summary,
+    build_portfolio_day_movers_summary,
     display_day_movers_summary,
     display_portfolio_day_movers_summary,
 )
@@ -839,7 +841,46 @@ def _group_momentum_symbols_by_label(momentum_df: pd.DataFrame) -> dict[str, lis
     return label_groups
 
 
-def _format_momentum_label_summary(label_groups: dict[str, list[str]]) -> str:
+SUMMARY_HIGHLIGHT_ACCENTS = {
+    "Top Gainer": "#7DCE9B",
+    "Top Gainers": "#7DCE9B",
+    "Top Loser": "#DC2626",
+    "Top Losers": "#DC2626",
+    "Top Contributor": "#7DCE9B",
+    "Top Drag": "#DC2626",
+}
+
+
+def _format_summary_symbols(symbols: list[str], highlight_symbols: dict[str, str] | None = None) -> str:
+    highlight_accents = {
+        str(symbol).strip().upper(): str(accent).strip()
+        for symbol, accent in (highlight_symbols or {}).items()
+        if str(symbol).strip() and str(accent).strip()
+    }
+    if not symbols:
+        return "-"
+
+    formatted_symbols: list[str] = []
+    for symbol in symbols:
+        symbol_text = str(symbol).strip()
+        accent = highlight_accents.get(symbol_text.upper())
+        if accent:
+            formatted_symbols.append(
+                "<span style='display:inline-block;margin:0.05rem 0.08rem 0.05rem 0;"
+                f"padding:0.03rem 0.2rem;border:1px solid {accent};"
+                f"border-left:3px solid {accent};border-radius:0.2rem;'>"
+                f"{escape(symbol_text)}</span>"
+            )
+        else:
+            formatted_symbols.append(escape(symbol_text))
+    return ", ".join(formatted_symbols)
+
+
+def _format_momentum_label_summary(
+    label_groups: dict[str, list[str]],
+    *,
+    highlight_symbols: dict[str, str] | None = None,
+) -> str:
     summary_items = [
         ("Strong Entry", "#0F766E", "#FFFFFF", label_groups["Strong Entry"]),
         ("Watchlist - Below EMA20", "#7DCE9B", "#111827", label_groups["Watchlist - Below EMA20"]),
@@ -849,12 +890,13 @@ def _format_momentum_label_summary(label_groups: dict[str, list[str]]) -> str:
     ]
     rows = []
     for label, background, foreground, symbols in summary_items:
-        symbol_text = escape(", ".join(symbols)) if symbols else "-"
+        symbol_text = _format_summary_symbols(symbols, highlight_symbols)
         rows.append(
             "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:5rem;font-weight:700;color:{background};'>{label}</span>"
-            f"<span style='background:{background};color:{foreground};font-weight:700;"
-            "padding:0.2rem 0.45rem;border-radius:0.25rem;'>"
+            f"<span style='background:transparent;color:{background};font-weight:700;"
+            f"padding:0.2rem 0.45rem;border:1px solid {background};"
+            f"border-left:3px solid {background};border-radius:0.25rem;'>"
             f"{symbol_text}</span></div>"
         )
     return (
@@ -864,13 +906,31 @@ def _format_momentum_label_summary(label_groups: dict[str, list[str]]) -> str:
     )
 
 
-def display_momentum_label_summary(momentum_df: pd.DataFrame) -> None:
+def display_momentum_label_summary(
+    momentum_df: pd.DataFrame,
+    *,
+    highlight_symbols: dict[str, str] | None = None,
+) -> None:
     label_groups = _group_momentum_symbols_by_label(momentum_df)
     if any(label_groups.values()):
         st.markdown(
-            _format_momentum_label_summary(label_groups),
+            _format_momentum_label_summary(label_groups, highlight_symbols=highlight_symbols),
             unsafe_allow_html=True,
         )
+
+
+def _summary_ticker_accents(summary_df: pd.DataFrame) -> dict[str, str]:
+    if summary_df.empty or not {"Metric", "Ticker"}.issubset(summary_df.columns):
+        return {}
+
+    accents: dict[str, str] = {}
+    for _, row in summary_df.iterrows():
+        symbol = str(row.get("Ticker") or "").strip().upper()
+        metric = str(row.get("Metric") or "").strip()
+        accent = SUMMARY_HIGHLIGHT_ACCENTS.get(metric)
+        if symbol and accent:
+            accents[symbol] = accent
+    return accents
 
 
 def _format_entry_range(row: pd.Series) -> str:
@@ -1162,13 +1222,18 @@ with tab_fetch_kite:
                 )
 
     with tab_price_ladder:
+        price_ladder_highlight_symbols: dict[str, str] = {}
         if kite_holdings_df is not None:
+            price_ladder_highlight_symbols = _summary_ticker_accents(
+                build_portfolio_day_movers_summary(kite_holdings_df)
+            )
             display_portfolio_day_movers_summary(kite_holdings_df)
         display_historic_price_ladder_frame(
             _sort_historic_dashboard_by_rng(
                 st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame())
             ),
             max_rows=12,
+            highlight_symbols=price_ladder_highlight_symbols,
         )
 
     with tab_returns:
@@ -1474,6 +1539,9 @@ with tab_historic_data:
             if momentum_df.empty:
                 st.info("No momentum score data available.")
             else:
+                momentum_summary_highlight_symbols = _summary_ticker_accents(
+                    build_day_movers_summary(day_movers_df)
+                )
                 momentum_display_df = momentum_df.copy()
                 if {"ema20", "atr14"}.issubset(momentum_display_df.columns):
                     momentum_display_df["Entry"] = momentum_display_df.apply(_format_entry_range, axis=1)
@@ -1524,7 +1592,10 @@ with tab_historic_data:
                 momentum_display_df = momentum_display_df[
                     [column for column in momentum_display_columns if column in momentum_display_df.columns]
                 ]
-                display_momentum_label_summary(momentum_display_df)
+                display_momentum_label_summary(
+                    momentum_display_df,
+                    highlight_symbols=momentum_summary_highlight_symbols,
+                )
                 table_col, notes_col = st.columns([3, 1], vertical_alignment="top")
                 with table_col:
                     momentum_selection = st.dataframe(
@@ -1599,10 +1670,14 @@ with tab_historic_data:
                     else:
                         st.info("Select a stock row to view or add notes.")
         with tab_ladder:
+            historic_ladder_highlight_symbols = _summary_ticker_accents(
+                build_day_movers_summary(day_movers_df)
+            )
             display_day_movers_summary(day_movers_df)
             display_historic_price_ladder_frame(
                 sorted_dashboard_df,
                 max_rows=12,
+                highlight_symbols=historic_ladder_highlight_symbols,
             )
         with tab_returns:
             if st.button("Display Historical Returns", key="display_historic_returns"):
