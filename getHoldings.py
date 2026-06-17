@@ -882,19 +882,19 @@ def _format_momentum_label_summary(
     highlight_symbols: dict[str, str] | None = None,
 ) -> str:
     summary_items = [
-        ("Strong Entry", "#0F766E", "#FFFFFF", label_groups["Strong Entry"]),
-        ("Watchlist - Below EMA20", "#7DCE9B", "#111827", label_groups["Watchlist - Below EMA20"]),
-        ("Near Entry", "#FFB15C", "#111827", label_groups["Near Entry"]),
-        ("Wait", "#5EA6D1", "#111827", label_groups["Wait"]),
-        ("Avoid", "#64748B", "#FFFFFF", label_groups["Avoid"]),
+        ("Strong Entry", "#0F766E", "#FFFFFF", "rgba(15, 118, 110, 0.18)", label_groups["Strong Entry"]),
+        ("Watchlist - Below EMA20", "#7DCE9B", "#111827", "rgba(125, 206, 155, 0.16)", label_groups["Watchlist - Below EMA20"]),
+        ("Near Entry", "#FFB15C", "#111827", "rgba(255, 177, 92, 0.16)", label_groups["Near Entry"]),
+        ("Wait", "#5EA6D1", "#111827", "rgba(94, 166, 209, 0.16)", label_groups["Wait"]),
+        ("Avoid", "#64748B", "#FFFFFF", "rgba(100, 116, 139, 0.18)", label_groups["Avoid"]),
     ]
     rows = []
-    for label, background, foreground, symbols in summary_items:
+    for label, background, foreground, tint, symbols in summary_items:
         symbol_text = _format_summary_symbols(symbols, highlight_symbols)
         rows.append(
             "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:5rem;font-weight:700;color:{background};'>{label}</span>"
-            f"<span style='background:transparent;color:{background};font-weight:700;"
+            f"<span style='background:{tint};color:#FFFFFF;font-weight:700;"
             f"padding:0.2rem 0.45rem;border:1px solid {background};"
             f"border-left:3px solid {background};border-radius:0.25rem;'>"
             f"{symbol_text}</span></div>"

@@ -802,18 +802,18 @@ def _format_symbol_color_summary(
     highlight_symbols: dict[str, str] | None = None,
 ) -> str:
     summary_items = [
-        (">= 75", *MOMENTUM_PALETTE["entry"], color_groups["green"]),
-        (">= 50 and < 75", *MOMENTUM_PALETTE["near"], color_groups["light_green"]),
-        (">= 25 and < 50", *MOMENTUM_PALETTE["wait"], color_groups["orange"]),
-        ("< 25", *MOMENTUM_PALETTE["avoid"], color_groups["red"]),
+        (">= 75", *MOMENTUM_PALETTE["entry"], "rgba(15, 118, 110, 0.18)", color_groups["green"]),
+        (">= 50 and < 75", *MOMENTUM_PALETTE["near"], "rgba(125, 206, 155, 0.16)", color_groups["light_green"]),
+        (">= 25 and < 50", *MOMENTUM_PALETTE["wait"], "rgba(255, 177, 92, 0.16)", color_groups["orange"]),
+        ("< 25", *MOMENTUM_PALETTE["avoid"], "rgba(100, 116, 139, 0.18)", color_groups["red"]),
     ]
     rows = []
-    for label, background, foreground, symbols in summary_items:
+    for label, background, foreground, tint, symbols in summary_items:
         symbol_text = _format_summary_symbols(symbols, highlight_symbols)
         rows.append(
             "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:6.5rem;font-weight:700;color:{background};'>{label}</span>"
-            f"<span style='background:transparent;color:{background};font-weight:700;"
+            f"<span style='background:{tint};color:#FFFFFF;font-weight:700;"
             f"padding:0.2rem 0.45rem;border:1px solid {background};"
             f"border-left:3px solid {background};border-radius:0.25rem;'>"
             f"{symbol_text}</span></div>"
