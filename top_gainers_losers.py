@@ -177,7 +177,7 @@ def _summary_card_html(metric: str, metric_df: pd.DataFrame) -> str:
             ticker = escape(str(row.get("Ticker") or "-"))
             rank = int(row.get("Rank") or 0)
             row_items.append(
-                "<div class='tgl-card__row tgl-card__row--accent'>"
+                "<div class='tgl-card__row'>"
                 f"<span class='tgl-card__symbol'>{rank}. {ticker}</span>"
                 f"<span class='tgl-card__value'>{escape(value_text)}</span>"
                 "</div>"
@@ -208,7 +208,8 @@ def _inject_summary_card_styles() -> None:
         .tgl-card {
             background: var(--background-color);
             color: var(--text-color);
-            border: 1px solid rgba(128, 128, 128, 0.24);
+            border: 1px solid var(--tgl-accent);
+            border-left: 4px solid var(--tgl-accent);
             border-radius: 8px;
             padding: 0.65rem 0.72rem;
             box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
@@ -237,14 +238,6 @@ def _inject_summary_card_styles() -> None:
             min-height: 1.45rem;
             font-size: 0.8rem;
             line-height: 1.25;
-            border: 1px solid transparent;
-            border-radius: 6px;
-            padding: 0.16rem 0.32rem;
-            margin-bottom: 0.12rem;
-        }
-        .tgl-card__row--accent {
-            border-color: rgba(128, 128, 128, 0.28);
-            border-left: 3px solid var(--tgl-accent);
         }
         .tgl-card__symbol {
             min-width: 0;
