@@ -1,10 +1,15 @@
 from pathlib import Path
+import json
+from datetime import date
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from kite_auth import bootstrap_kite_app, clear_auth_state, is_token_error
+from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 
 
 _COMPONENT_DIR = Path(__file__).parent / "portfolio_terminal" / "dist"
@@ -203,14 +208,85 @@ def _load_calculator_option_contracts(kite) -> list[dict[str, Any]]:
     if _CALCULATORS_INSTRUMENTS_STATE_KEY in st.session_state:
         return st.session_state[_CALCULATORS_INSTRUMENTS_STATE_KEY]
 
+    try:
+        contracts = _load_calculator_option_contracts_from_supabase()
+        if not contracts:
+            raise RuntimeError("Supabase returned no calculator option contracts")
+    except Exception as exc:
+        st.session_state["calculators_terminal_instruments_source_error"] = str(exc)
+        contracts = _load_calculator_option_contracts_from_kite(kite)
+    else:
+        st.session_state.pop("calculators_terminal_instruments_source_error", None)
+
+    st.session_state[_CALCULATORS_INSTRUMENTS_STATE_KEY] = contracts
+    return contracts
+
+
+def _load_calculator_option_contracts_from_supabase() -> list[dict[str, Any]]:
+    supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
+    supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
+    table_name = get_secret_value("SUPABASE_TABLE_NAME").strip()
+
+    if not supabase_url or not supabase_key or not table_name:
+        raise ValueError("Missing Supabase instrument config")
+
+    names = ",".join(_INDEX_SPOT_INSTRUMENTS)
+    columns = ",".join(
+        [
+            "instrument_token",
+            "tradingsymbol",
+            "name",
+            "expiry",
+            "strike",
+            "tick_size",
+            "lot_size",
+            "instrument_type",
+            "exchange",
+            "segment",
+        ]
+    )
+    endpoint = (
+        f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
+        f"?select={columns}"
+        "&instrument_type=in.(CE,PE)"
+        f"&name=in.({names})"
+        f"&expiry=gte.{date.today().isoformat()}"
+        "&order=expiry.asc"
+        "&limit=20000"
+    )
+    request = Request(
+        endpoint,
+        headers={
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}",
+        },
+        method="GET",
+    )
+
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Supabase instruments lookup failed with HTTP {exc.code}: {body or exc.reason}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase instruments lookup failed: {exc.reason}") from exc
+
+    contracts: list[dict[str, Any]] = []
+    for instrument in records:
+        contract = _calculator_option_contract(instrument)
+        if contract is not None:
+            contracts.append(contract)
+    return contracts
+
+
+def _load_calculator_option_contracts_from_kite(kite) -> list[dict[str, Any]]:
     contracts: list[dict[str, Any]] = []
     for exchange in ["NFO", "BFO"]:
         for instrument in kite.instruments(exchange):
             contract = _calculator_option_contract(instrument)
             if contract is not None:
                 contracts.append(contract)
-
-    st.session_state[_CALCULATORS_INSTRUMENTS_STATE_KEY] = contracts
     return contracts
 
 

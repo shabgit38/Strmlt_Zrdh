@@ -30,7 +30,6 @@ from top_gainers_losers import (
     display_day_movers_summary,
     display_portfolio_day_movers_summary,
 )
-from getPositions import render_open_positions_tab
 from getHldgBrk import (
     HOLDINGS_BREAKDOWN_DF_STATE_KEY,
     HOLDINGS_BREAKDOWN_VIEW_STATE_KEY,
@@ -1157,12 +1156,11 @@ if "access_token" not in st.session_state:
 (
     tab_historic_data,
     tab_fetch_kite,
-    tab_open_positions,
     tab_calculators,
     tab_upload_kite,
     tab_upload_holdings_breakdown,
 ) = st.tabs(
-    ["Historic Data", "Fetch Holdings", "Open Positions", "Calculators", "Upload Holdings", "Upload Holdings Breakdown"]
+    ["Historic Data", "Fetch Holdings", "Calculators", "Upload Holdings", "Upload Holdings Breakdown"]
 )
 
 with tab_upload_kite:
@@ -1303,10 +1301,6 @@ with tab_fetch_kite:
         elif ltp_refresh_count != previous_ltp_refresh_count:
             kite_holdings_df = refresh_live_ltp_for_holdings(kite_holdings_df)
             st.session_state["kite_holdings_ltp_refresh_count"] = ltp_refresh_count
-
-
-with tab_open_positions:
-    render_open_positions_tab()
 
 
 with tab_calculators:
