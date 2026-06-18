@@ -16,6 +16,22 @@ _COMPONENT_DIR = Path(__file__).parent / "portfolio_terminal" / "dist"
 _CALCULATORS_LIVE_DATA_STATE_KEY = "calculators_terminal_live_data"
 _CALCULATORS_LAST_REQUEST_ID_STATE_KEY = "calculators_terminal_last_request_id"
 _CALCULATORS_INSTRUMENTS_STATE_KEY = "calculators_terminal_instruments"
+_SUPABASE_INSTRUMENT_COLUMNS = ",".join(
+    [
+        "instrument_token",
+        "tradingsymbol",
+        "name",
+        "expiry",
+        "strike",
+        "tick_size",
+        "lot_size",
+        "instrument_type",
+        "exchange",
+        "segment",
+    ]
+)
+_TARGET_OPTION_DISTANCES = [0.02, 0.03, 0.05]
+_TARGET_STRIKE_MARGIN = 0.005
 _INDEX_SPOT_INSTRUMENTS = {
     "NIFTY": "NSE:NIFTY 50",
     "BANKNIFTY": "NSE:NIFTY BANK",
@@ -84,7 +100,6 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
 
     try:
         kite, _, _ = bootstrap_kite_app("Zerodha Calculators")
-        option_contracts = _load_calculator_option_contracts(kite)
         symbols = sorted(
             {
                 str(symbol).upper().strip()
@@ -92,13 +107,15 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
                 if str(symbol).strip()
             }
         )
-        positions = _open_option_positions(kite, option_contracts)
+        raw_positions = _open_positions(kite)
+        position_symbols = [position["symbol"] for position in raw_positions]
+        contract_by_symbol = _option_contracts_by_symbol(kite, set(symbols + position_symbols))
+        positions = _enrich_open_option_positions(raw_positions, contract_by_symbol)
         instruments: list[str] = []
         if request.get("includeSpots"):
             instruments.extend(_INDEX_SPOT_INSTRUMENTS.values())
 
         underlying_by_symbol = {symbol: _underlying_instrument_for_option(symbol) for symbol in symbols}
-        contract_by_symbol = {contract["symbol"]: contract for contract in option_contracts}
         position_underlying_by_symbol = {
             position["symbol"]: _underlying_instrument_for_option(position["symbol"])
             for position in positions
@@ -115,7 +132,10 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
         quotes = kite.ltp(*sorted(set(instruments))) if instruments else {}
         if request.get("includeSpots"):
             live_data["spots"] = _spots_from_quotes(quotes)
-            live_data["targetOptions"] = _target_options_from_spots(option_contracts, live_data["spots"])
+            live_data["targetOptions"] = _target_options_from_spots(
+                _target_option_contracts_for_spots(kite, live_data["spots"]),
+                live_data["spots"],
+            )
         live_data["positions"] = _positions_with_spot(positions, position_underlying_by_symbol, quotes)
 
         for symbol in symbols:
@@ -150,26 +170,44 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
     return live_data
 
 
-def _open_option_positions(kite, option_contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    contract_by_symbol = {contract["symbol"]: contract for contract in option_contracts}
+def _open_positions(kite) -> list[dict[str, Any]]:
     positions = kite.positions()
     net_positions = positions.get("net", []) if isinstance(positions, dict) else []
-    enriched_positions: list[dict[str, Any]] = []
+    open_positions: list[dict[str, Any]] = []
     for position in net_positions:
         symbol = str(position.get("tradingsymbol") or "").upper().strip()
         quantity = _float_value(position.get("quantity"))
         if not symbol or not quantity:
             continue
-        contract = contract_by_symbol.get(symbol)
-        if contract is None:
-            continue
-        enriched_positions.append(
+        open_positions.append(
             {
                 "symbol": symbol,
                 "quantity": quantity,
                 "averagePrice": _float_value(position.get("average_price")) or 0,
                 "lastPrice": _float_value(position.get("last_price")) or 0,
                 "pnl": _float_value(position.get("pnl")) or 0,
+            }
+        )
+    return open_positions
+
+
+def _enrich_open_option_positions(
+    positions: list[dict[str, Any]],
+    contract_by_symbol: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    enriched_positions: list[dict[str, Any]] = []
+    for position in positions:
+        symbol = str(position.get("symbol") or "").upper().strip()
+        contract = contract_by_symbol.get(symbol)
+        if contract is None:
+            continue
+        enriched_positions.append(
+            {
+                "symbol": symbol,
+                "quantity": position.get("quantity") or 0,
+                "averagePrice": position.get("averagePrice") or 0,
+                "lastPrice": position.get("lastPrice") or 0,
+                "pnl": position.get("pnl") or 0,
                 "expiry": contract.get("expiry"),
                 "strike": contract.get("strike"),
                 "optionType": contract.get("optionType"),
@@ -204,25 +242,78 @@ def _float_value(value: Any) -> float | None:
         return None
 
 
-def _load_calculator_option_contracts(kite) -> list[dict[str, Any]]:
-    if _CALCULATORS_INSTRUMENTS_STATE_KEY in st.session_state:
-        return st.session_state[_CALCULATORS_INSTRUMENTS_STATE_KEY]
+def _option_contracts_by_symbol(kite, symbols: set[str]) -> dict[str, dict[str, Any]]:
+    if not symbols:
+        return {}
 
     try:
-        contracts = _load_calculator_option_contracts_from_supabase()
-        if not contracts:
-            raise RuntimeError("Supabase returned no calculator option contracts")
+        contracts = _option_contracts_by_symbol_from_supabase(symbols)
+        st.session_state.pop("calculators_terminal_instruments_source_error", None)
     except Exception as exc:
         st.session_state["calculators_terminal_instruments_source_error"] = str(exc)
-        contracts = _load_calculator_option_contracts_from_kite(kite)
-    else:
-        st.session_state.pop("calculators_terminal_instruments_source_error", None)
+        fallback_contracts = _load_calculator_option_contracts_from_kite(kite)
+        contracts = [contract for contract in fallback_contracts if contract["symbol"] in symbols]
+    return {contract["symbol"]: contract for contract in contracts}
 
-    st.session_state[_CALCULATORS_INSTRUMENTS_STATE_KEY] = contracts
+
+def _target_option_contracts_for_spots(kite, spots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    try:
+        contracts = _target_option_contracts_from_supabase(spots)
+        st.session_state.pop("calculators_terminal_instruments_source_error", None)
+        return contracts
+    except Exception as exc:
+        st.session_state["calculators_terminal_instruments_source_error"] = str(exc)
+        return _load_calculator_option_contracts_from_kite(kite)
+
+
+def _option_contracts_by_symbol_from_supabase(symbols: set[str]) -> list[dict[str, Any]]:
+    normalized_symbols = sorted({symbol.upper().strip() for symbol in symbols if symbol.strip()})
+    if not normalized_symbols:
+        return []
+
+    symbol_filter = ",".join(quote(symbol, safe="") for symbol in normalized_symbols)
+    return _calculator_option_contracts_from_supabase_filters(
+        [
+            f"tradingsymbol=in.({symbol_filter})",
+            "instrument_type=in.(CE,PE)",
+        ]
+    )
+
+
+def _target_option_contracts_from_supabase(spots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    contracts: list[dict[str, Any]] = []
+    for spot in spots:
+        index = str(spot.get("symbol") or "").upper().strip()
+        spot_price = _float_value(spot.get("spot"))
+        if index not in _INDEX_SPOT_INSTRUMENTS or spot_price is None:
+            continue
+
+        for option_type in ["CE", "PE"]:
+            min_target, max_target = _target_strike_bounds(spot_price, option_type)
+            contracts.extend(
+                _calculator_option_contracts_from_supabase_filters(
+                    [
+                        f"name=eq.{quote(index, safe='')}",
+                        f"instrument_type=eq.{option_type}",
+                        f"expiry=gte.{date.today().isoformat()}",
+                        f"strike=gte.{min_target:.2f}",
+                        f"strike=lte.{max_target:.2f}",
+                        "order=expiry.asc,strike.asc",
+                    ]
+                )
+            )
     return contracts
 
 
-def _load_calculator_option_contracts_from_supabase() -> list[dict[str, Any]]:
+def _target_strike_bounds(spot_price: float, option_type: str) -> tuple[float, float]:
+    if option_type == "CE":
+        targets = [spot_price * (1 + distance) for distance in _TARGET_OPTION_DISTANCES]
+    else:
+        targets = [spot_price * (1 - distance) for distance in _TARGET_OPTION_DISTANCES]
+    return min(targets) * (1 - _TARGET_STRIKE_MARGIN), max(targets) * (1 + _TARGET_STRIKE_MARGIN)
+
+
+def _calculator_option_contracts_from_supabase_filters(filters: list[str]) -> list[dict[str, Any]]:
     supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
     supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
     table_name = get_secret_value("SUPABASE_TABLE_NAME").strip()
@@ -230,47 +321,12 @@ def _load_calculator_option_contracts_from_supabase() -> list[dict[str, Any]]:
     if not supabase_url or not supabase_key or not table_name:
         raise ValueError("Missing Supabase instrument config")
 
-    names = ",".join(_INDEX_SPOT_INSTRUMENTS)
-    columns = ",".join(
-        [
-            "instrument_token",
-            "tradingsymbol",
-            "name",
-            "expiry",
-            "strike",
-            "tick_size",
-            "lot_size",
-            "instrument_type",
-            "exchange",
-            "segment",
-        ]
-    )
     endpoint = (
         f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
-        f"?select={columns}"
-        "&instrument_type=in.(CE,PE)"
-        f"&name=in.({names})"
-        f"&expiry=gte.{date.today().isoformat()}"
-        "&order=expiry.asc"
-        "&limit=20000"
+        f"?select={_SUPABASE_INSTRUMENT_COLUMNS}"
+        + "".join(f"&{filter_value}" for filter_value in filters)
     )
-    request = Request(
-        endpoint,
-        headers={
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
-        },
-        method="GET",
-    )
-
-    try:
-        with urlopen(request, timeout=60) as response:
-            records = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Supabase instruments lookup failed with HTTP {exc.code}: {body or exc.reason}") from exc
-    except URLError as exc:
-        raise RuntimeError(f"Supabase instruments lookup failed: {exc.reason}") from exc
+    records = _fetch_supabase_records(endpoint, supabase_key)
 
     contracts: list[dict[str, Any]] = []
     for instrument in records:
@@ -280,13 +336,49 @@ def _load_calculator_option_contracts_from_supabase() -> list[dict[str, Any]]:
     return contracts
 
 
+def _fetch_supabase_records(endpoint: str, supabase_key: str) -> list[dict[str, Any]]:
+    page_size = 1000
+    offset = 0
+    records: list[dict[str, Any]] = []
+    while True:
+        request = Request(
+            endpoint,
+            headers={
+                "apikey": supabase_key,
+                "Authorization": f"Bearer {supabase_key}",
+                "Range": f"{offset}-{offset + page_size - 1}",
+            },
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=60) as response:
+                page_records = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Supabase instruments lookup failed with HTTP {exc.code}: {body or exc.reason}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"Supabase instruments lookup failed: {exc.reason}") from exc
+
+        if not page_records:
+            break
+        records.extend(page_records)
+        if len(page_records) < page_size:
+            break
+        offset += page_size
+    return records
+
+
 def _load_calculator_option_contracts_from_kite(kite) -> list[dict[str, Any]]:
+    if _CALCULATORS_INSTRUMENTS_STATE_KEY in st.session_state:
+        return st.session_state[_CALCULATORS_INSTRUMENTS_STATE_KEY]
+
     contracts: list[dict[str, Any]] = []
     for exchange in ["NFO", "BFO"]:
         for instrument in kite.instruments(exchange):
             contract = _calculator_option_contract(instrument)
             if contract is not None:
                 contracts.append(contract)
+    st.session_state[_CALCULATORS_INSTRUMENTS_STATE_KEY] = contracts
     return contracts
 
 
