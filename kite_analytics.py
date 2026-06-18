@@ -679,6 +679,7 @@ def display_historic_price_ladder_frame(
     *,
     max_rows: int = 12,
     highlight_symbols: dict[str, str] | None = None,
+    show_summary: bool = True,
 ) -> None:
     """
     Display the sorted price ladder dashboard.
@@ -688,12 +689,8 @@ def display_historic_price_ladder_frame(
         st.info("No dashboard data returned for the selected inputs.")
         return
 
-    symbol_color_groups = _group_dashboard_symbols_by_range_color(dashboard_df)
-    if any(symbol_color_groups.values()):
-        st.markdown(
-            _format_symbol_color_summary(symbol_color_groups, highlight_symbols=highlight_symbols),
-            unsafe_allow_html=True,
-        )
+    if show_summary:
+        display_price_ladder_summary(dashboard_df, highlight_symbols=highlight_symbols)
 
     st.dataframe(
         dashboard_df.style.map(highlight_ltp_cells),
@@ -701,6 +698,32 @@ def display_historic_price_ladder_frame(
         height=_historic_dashboard_height(len(dashboard_df), max_rows=max_rows),
         hide_index=True,
     )
+
+
+def display_price_ladder_summary(
+    dashboard_df: pd.DataFrame,
+    *,
+    highlight_symbols: dict[str, str] | None = None,
+) -> None:
+    summary_html = format_price_ladder_summary_html(dashboard_df, highlight_symbols=highlight_symbols)
+    if summary_html:
+        st.markdown(summary_html, unsafe_allow_html=True)
+    else:
+        st.info("No price ladder summary available.")
+
+
+def format_price_ladder_summary_html(
+    dashboard_df: pd.DataFrame,
+    *,
+    highlight_symbols: dict[str, str] | None = None,
+) -> str:
+    if dashboard_df.empty:
+        return ""
+
+    symbol_color_groups = _group_dashboard_symbols_by_range_color(dashboard_df)
+    if any(symbol_color_groups.values()):
+        return _format_symbol_color_summary(symbol_color_groups, highlight_symbols=highlight_symbols)
+    return ""
 
 
 def display_historic_returns_frame(

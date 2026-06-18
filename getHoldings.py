@@ -18,6 +18,7 @@ from kite_analytics import (
     build_price_ladder_and_day_movers_frames,
     display_historic_price_ladder_frame,
     display_historic_returns_frame,
+    format_price_ladder_summary_html,
     highlight_numeric_scale_cells,
 )
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
@@ -918,6 +919,165 @@ def display_momentum_label_summary(
         )
 
 
+def _summary_panel_html(title: str, body_html: str, accent: str) -> str:
+    return (
+        f"<div style='border:1px solid {accent};border-left:4px solid {accent};"
+        "border-radius:8px;padding:0.65rem 0.75rem;margin:0.15rem 0 0.75rem 0;'>"
+        f"<div style='font-size:0.85rem;font-weight:700;margin-bottom:0.45rem;color:{accent};'>"
+        f"{escape(title)}</div>"
+        f"{body_html}"
+        "</div>"
+    )
+
+
+def _prepared_momentum_display_df(momentum_df: pd.DataFrame) -> pd.DataFrame:
+    momentum_display_df = momentum_df.copy()
+    if {"ema20", "atr14"}.issubset(momentum_display_df.columns):
+        momentum_display_df["Entry"] = momentum_display_df.apply(_format_entry_range, axis=1)
+    sort_columns = [
+        column
+        for column in ["pullback_score"]
+        if column in momentum_display_df.columns
+    ]
+    if sort_columns:
+        momentum_display_df = momentum_display_df.sort_values(
+            by=sort_columns,
+            ascending=[False] * len(sort_columns),
+            na_position="last",
+        )
+    momentum_display_df = _merge_stock_notes(momentum_display_df)
+    note_columns = [column for column in ["why", "moat", "risk"] if column in momentum_display_df.columns]
+    if note_columns:
+        note_values = momentum_display_df[note_columns].fillna("").astype(str)
+        momentum_display_df["notes_status"] = note_values.apply(
+            lambda row: "Yes" if any(value.strip() for value in row) else "No",
+            axis=1,
+        )
+    momentum_display_columns = [
+        "ticker",
+        "ltp",
+        "latest_close",
+        "pullback_score",
+        "entry_signal",
+        "Entry",
+        "notes_status",
+        "research_age_days",
+        "last_reviewed_date",
+        "ret_12_1",
+        "ret_6m",
+        "rs_vs_nifty",
+        "ema10_extension_pct",
+        "ema20_extension_pct",
+        "atr14",
+        "rsi14",
+        "volume_ratio",
+        "zscore_50",
+        "dist_52w_high",
+        "above_ema200",
+        "ema50_gt_ema200",
+        "vol_adj_mtm",
+        "data_status",
+    ]
+    return momentum_display_df[
+        [column for column in momentum_display_columns if column in momentum_display_df.columns]
+    ]
+
+
+def render_momentum_ranking_table(
+    momentum_df: pd.DataFrame,
+    day_movers_df: pd.DataFrame,
+    *,
+    key: str,
+    show_summary: bool = True,
+) -> None:
+    if momentum_df.empty:
+        st.info("No momentum score data available.")
+        return
+
+    momentum_summary_highlight_symbols = _summary_ticker_accents(
+        build_day_movers_summary(day_movers_df)
+    )
+    momentum_display_df = _prepared_momentum_display_df(momentum_df)
+    if show_summary:
+        display_momentum_label_summary(
+            momentum_display_df,
+            highlight_symbols=momentum_summary_highlight_symbols,
+        )
+    table_col, notes_col = st.columns([3, 1], vertical_alignment="top")
+    with table_col:
+        momentum_selection = st.dataframe(
+            momentum_display_df.style.format(
+                {
+                    "ltp": "{:.2f}",
+                    "latest_close": "{:.2f}",
+                    "pullback_score": "{:.1f}",
+                    "ret_6m": "{:.2%}",
+                    "ret_12_1": "{:.2%}",
+                    "rs_vs_nifty": "{:.2%}",
+                    "ema10_extension_pct": "{:.2f}%",
+                    "ema20_extension_pct": "{:.2f}%",
+                    "atr14": "{:.2f}",
+                    "rsi14": "{:.1f}",
+                    "volume_ratio": "{:.2f}",
+                    "zscore_50": "{:.2f}",
+                    "dist_52w_high": "{:.2%}",
+                    "dist_52w_score": "{:.1f}",
+                    "above_ema200_score": "{:.1f}",
+                    "ema_trend_score": "{:.1f}",
+                    "vol_adj_mtm": "{:.2f}",
+                },
+                na_rep="-",
+            ).apply(highlight_momentum_rank_cells, axis=None),
+            width="stretch",
+            height=_dataframe_height(len(momentum_display_df), max_rows=18),
+            hide_index=True,
+            column_config={
+                "ticker": st.column_config.TextColumn(
+                    "ticker",
+                    width="medium",
+                ),
+                "ltp": st.column_config.NumberColumn(
+                    "LTP",
+                    format="%.2f",
+                ),
+                "latest_close": st.column_config.NumberColumn(
+                    "Latest Close",
+                    format="%.2f",
+                ),
+                "notes_status": st.column_config.TextColumn(
+                    "Notes",
+                    width="small",
+                ),
+                "research_age_days": st.column_config.NumberColumn(
+                    "Review Age",
+                    format="%d",
+                    width="small",
+                ),
+                "last_reviewed_date": st.column_config.TextColumn(
+                    "Last Reviewed",
+                    width="small",
+                ),
+                "ema10_extension_pct": st.column_config.NumberColumn(
+                    "ema10_ext",
+                    format="%.2f%%",
+                ),
+                "ema20_extension_pct": st.column_config.NumberColumn(
+                    "ema20_ext",
+                    format="%.2f%%",
+                ),
+            },
+            key=key,
+            on_select="rerun",
+            selection_mode="single-row",
+        )
+    with notes_col:
+        selected_rows = momentum_selection.selection.rows if momentum_selection.selection else []
+        if selected_rows:
+            render_stock_memory_card(momentum_display_df.iloc[selected_rows[0]])
+        else:
+            st.info("Select a stock row to view or add notes.")
+
+
 def _summary_ticker_accents(summary_df: pd.DataFrame) -> dict[str, str]:
     if summary_df.empty or not {"Metric", "Ticker"}.issubset(summary_df.columns):
         return {}
@@ -1100,6 +1260,12 @@ def fetch_and_display_holdings():
                 buy_avg_key="average_price",
                 quantity_key="quantity",
             )
+            momentum_df, momentum_failed_symbols, momentum_error = _calculate_holdings_momentum_data(
+                kite,
+                df,
+                df.to_dict(orient="records"),
+                as_of_date,
+            )
             st.session_state["kite_holdings_df"] = df
             st.session_state["kite_holdings_dashboard_df"] = dashboard_df
             st.session_state["kite_holdings_day_movers_df"] = day_movers_df
@@ -1107,6 +1273,13 @@ def fetch_and_display_holdings():
             st.session_state["kite_holdings_token_rows"] = df.to_dict(orient="records")
             st.session_state["kite_holdings_as_of_date"] = as_of_date
             st.session_state.pop("kite_holdings_returns_df", None)
+            st.session_state["kite_holdings_momentum_df"] = momentum_df
+            st.session_state["kite_holdings_momentum_failed_symbols"] = momentum_failed_symbols
+            st.session_state["kite_holdings_momentum_benchmark_used"] = DEFAULT_MOMENTUM_BENCHMARK
+            if momentum_error:
+                st.session_state["kite_holdings_momentum_error"] = momentum_error
+            else:
+                st.session_state.pop("kite_holdings_momentum_error", None)
             st.session_state["kite_holdings_fetched_at"] = pd.Timestamp.now().isoformat()
             st.session_state["kite_holdings_ltp_refreshed_at"] = st.session_state["kite_holdings_fetched_at"]
             st.session_state.pop("kite_holdings_ltp_refresh_error", None)
@@ -1125,6 +1298,10 @@ def fetch_and_display_holdings():
         else:
             st.session_state.pop("kite_holdings_df", None)
             st.session_state.pop("kite_holdings_returns_df", None)
+            st.session_state.pop("kite_holdings_momentum_df", None)
+            st.session_state.pop("kite_holdings_momentum_failed_symbols", None)
+            st.session_state.pop("kite_holdings_momentum_error", None)
+            st.session_state.pop("kite_holdings_momentum_benchmark_used", None)
             st.session_state.pop("kite_holdings_dashboard_df", None)
             st.session_state.pop("kite_holdings_close_prices_df", None)
             st.session_state.pop("kite_holdings_day_movers_df", None)
@@ -1147,6 +1324,136 @@ def fetch_and_display_holdings():
             st.error("Your session expired. Please login again to view holdings.")
             st.rerun()
         st.error(f"Error fetching holdings. Please try again. Details: {exc}")
+
+
+def _holdings_live_ltp_by_symbol(holdings_df: pd.DataFrame) -> dict[str, float]:
+    if holdings_df.empty or not {"tradingsymbol", "last_price"}.issubset(holdings_df.columns):
+        return {}
+
+    ltp_by_symbol: dict[str, float] = {}
+    for symbol, ltp in zip(holdings_df["tradingsymbol"], holdings_df["last_price"]):
+        symbol_key = str(symbol or "").strip().upper()
+        ltp_value = pd.to_numeric(ltp, errors="coerce")
+        if symbol_key and pd.notna(ltp_value):
+            ltp_by_symbol[symbol_key] = float(ltp_value)
+    return ltp_by_symbol
+
+
+def _calculate_holdings_momentum_data(
+    kite,
+    holdings_df: pd.DataFrame,
+    token_rows: list[dict[str, Any]],
+    as_of_date: str,
+) -> tuple[pd.DataFrame, list[str], str | None]:
+    benchmark_symbol = DEFAULT_MOMENTUM_BENCHMARK
+    try:
+        benchmark_df = load_instrument_token_from_supabase([benchmark_symbol])
+        benchmark_token_map, missing_benchmark = resolve_tokens_from_tickers([benchmark_symbol], benchmark_df)
+        if missing_benchmark or benchmark_symbol not in benchmark_token_map:
+            return pd.DataFrame(), [], f"Momentum benchmark token not found: {benchmark_symbol}"
+
+        momentum_df, momentum_failed_symbols = calculate_momentum_scores_from_kite(
+            kite,
+            token_rows,
+            benchmark_token_map[benchmark_symbol],
+            as_of_date,
+            symbol_key="tradingsymbol",
+            token_key="instrument_token",
+            live_ltp_by_symbol=_holdings_live_ltp_by_symbol(holdings_df),
+        )
+        return momentum_df, momentum_failed_symbols, None
+    except Exception as exc:
+        if is_token_error(exc):
+            clear_auth_state()
+            st.error("Your session expired. Please login again to calculate momentum.")
+            st.rerun()
+        return pd.DataFrame(), [], str(exc)
+
+
+def _render_price_ladder_summary_card(
+    dashboard_df: pd.DataFrame,
+    *,
+    highlight_symbols: dict[str, str] | None = None,
+) -> None:
+    summary_html = format_price_ladder_summary_html(dashboard_df, highlight_symbols=highlight_symbols)
+    if not summary_html:
+        st.info("No price ladder summary available.")
+        return
+    st.markdown(
+        _summary_panel_html("Price Ladder Summary", summary_html, "#0F766E"),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_holdings_momentum_summary(momentum_df: pd.DataFrame, day_movers_df: pd.DataFrame) -> None:
+    if momentum_df.empty:
+        st.info("No momentum summary available.")
+        return
+
+    momentum_summary_highlight_symbols = _summary_ticker_accents(build_day_movers_summary(day_movers_df))
+    momentum_display_df = _prepared_momentum_display_df(momentum_df)
+    label_groups = _group_momentum_symbols_by_label(momentum_display_df)
+    st.markdown(
+        _summary_panel_html(
+            "Momentum Summary",
+            _format_momentum_label_summary(label_groups, highlight_symbols=momentum_summary_highlight_symbols),
+            "#7C3AED",
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> None:
+    if kite_holdings_df is None:
+        st.info("Fetch holdings to display analytics.")
+        return
+
+    sorted_dashboard_df = _sort_historic_dashboard_by_rng(
+        st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame())
+    )
+    day_movers_df = st.session_state.get("kite_holdings_day_movers_df", pd.DataFrame())
+    momentum_df = st.session_state.get("kite_holdings_momentum_df", pd.DataFrame())
+    price_ladder_highlight_symbols = _summary_ticker_accents(
+        build_portfolio_day_movers_summary(kite_holdings_df)
+    )
+
+    display_portfolio_day_movers_summary(kite_holdings_df)
+
+    momentum_error = st.session_state.get("kite_holdings_momentum_error")
+    if momentum_error:
+        st.warning(f"Momentum dashboard could not be calculated: {momentum_error}")
+    momentum_failed_symbols = st.session_state.get("kite_holdings_momentum_failed_symbols", [])
+    if momentum_failed_symbols:
+        st.warning(
+            "No momentum data returned for: "
+            + ", ".join(momentum_failed_symbols[:10])
+            + ("..." if len(momentum_failed_symbols) > 10 else "")
+        )
+
+    momentum_col, price_col = st.columns(2, vertical_alignment="top")
+    with momentum_col:
+        _render_holdings_momentum_summary(momentum_df, day_movers_df)
+    with price_col:
+        _render_price_ladder_summary_card(
+            sorted_dashboard_df,
+            highlight_symbols=price_ladder_highlight_symbols,
+        )
+
+    with st.expander("Momentum Ranking", expanded=False):
+        render_momentum_ranking_table(
+            momentum_df,
+            day_movers_df,
+            key="kite_holdings_momentum_ranking_table",
+            show_summary=False,
+        )
+
+    with st.expander("Price Ladder", expanded=False):
+        display_historic_price_ladder_frame(
+            sorted_dashboard_df,
+            max_rows=12,
+            highlight_symbols=price_ladder_highlight_symbols,
+            show_summary=False,
+        )
 
 
 if "access_token" not in st.session_state:
@@ -1193,8 +1500,8 @@ with tab_fetch_kite:
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
 
     kite_holdings_df = st.session_state.get("kite_holdings_df")
-    tab_price_ladder, tab_portfolio_react, tab_returns, tab_holdings_breakdown = st.tabs(
-        ["Price Ladder", "Portfolio", "Returns", "Holdings Breakdown"]
+    tab_analytics, tab_portfolio_react, tab_returns, tab_holdings_breakdown = st.tabs(
+        ["Analytics", "Portfolio", "Returns", "Holdings Breakdown"]
     )
 
     with tab_portfolio_react:
@@ -1226,20 +1533,8 @@ with tab_fetch_kite:
                     + ("..." if len(failed_symbols) > 10 else "")
                 )
 
-    with tab_price_ladder:
-        price_ladder_highlight_symbols: dict[str, str] = {}
-        if kite_holdings_df is not None:
-            price_ladder_highlight_symbols = _summary_ticker_accents(
-                build_portfolio_day_movers_summary(kite_holdings_df)
-            )
-            display_portfolio_day_movers_summary(kite_holdings_df)
-        display_historic_price_ladder_frame(
-            _sort_historic_dashboard_by_rng(
-                st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame())
-            ),
-            max_rows=12,
-            highlight_symbols=price_ladder_highlight_symbols,
-        )
+    with tab_analytics:
+        _render_holdings_analytics_tab(kite_holdings_df)
 
     with tab_returns:
         if st.button("Display Historical Returns", key="display_kite_holdings_returns"):
@@ -1537,153 +1832,39 @@ with tab_historic_data:
         #if benchmark_used and not momentum_df.empty:
         #    st.caption(f"Relative strength benchmark: {benchmark_used}")
 
-        tab_momentum, tab_ladder, tab_returns, tab_correlation = st.tabs(
-            ["Momentum Ranking", "Price Ladder","Returns", "Correlation"]
+        tab_analytics, tab_returns, tab_correlation = st.tabs(
+            ["Analytics", "Returns", "Correlation"]
         )
-        with tab_momentum:
-            if momentum_df.empty:
-                st.info("No momentum score data available.")
-            else:
-                momentum_summary_highlight_symbols = _summary_ticker_accents(
-                    build_day_movers_summary(day_movers_df)
-                )
-                momentum_display_df = momentum_df.copy()
-                if {"ema20", "atr14"}.issubset(momentum_display_df.columns):
-                    momentum_display_df["Entry"] = momentum_display_df.apply(_format_entry_range, axis=1)
-                sort_columns = [
-                    column
-                    for column in ["pullback_score"]
-                    if column in momentum_display_df.columns
-                ]
-                if sort_columns:
-                    momentum_display_df = momentum_display_df.sort_values(
-                        by=sort_columns,
-                        ascending=[False] * len(sort_columns),
-                        na_position="last",
-                    )
-                momentum_display_df = _merge_stock_notes(momentum_display_df)
-                note_columns = [column for column in ["why", "moat", "risk"] if column in momentum_display_df.columns]
-                if note_columns:
-                    note_values = momentum_display_df[note_columns].fillna("").astype(str)
-                    momentum_display_df["notes_status"] = note_values.apply(
-                        lambda row: "Yes" if any(value.strip() for value in row) else "No",
-                        axis=1,
-                    )
-                momentum_display_columns = [
-                    "ticker",
-                    "ltp",
-                    "latest_close",
-                    "pullback_score",
-                    "entry_signal",
-                    "Entry",
-                    "notes_status",
-                    "research_age_days",
-                    "last_reviewed_date",
-                    "ret_12_1",
-                    "ret_6m",
-                    "rs_vs_nifty",
-                    "ema10_extension_pct",
-                    "ema20_extension_pct",
-                    "atr14",
-                    "rsi14",
-                    "volume_ratio",
-                    "zscore_50",
-                    "dist_52w_high",
-                    "above_ema200",
-                    "ema50_gt_ema200",
-                    "vol_adj_mtm",
-                    "data_status",
-                ]
-                momentum_display_df = momentum_display_df[
-                    [column for column in momentum_display_columns if column in momentum_display_df.columns]
-                ]
-                display_momentum_label_summary(
-                    momentum_display_df,
-                    highlight_symbols=momentum_summary_highlight_symbols,
-                )
-                table_col, notes_col = st.columns([3, 1], vertical_alignment="top")
-                with table_col:
-                    momentum_selection = st.dataframe(
-                        momentum_display_df.style.format(
-                            {
-                                "ltp": "{:.2f}",
-                                "latest_close": "{:.2f}",
-                                "pullback_score": "{:.1f}",
-                                "ret_6m": "{:.2%}",
-                                "ret_12_1": "{:.2%}",
-                                "rs_vs_nifty": "{:.2%}",
-                                "ema10_extension_pct": "{:.2f}%",
-                                "ema20_extension_pct": "{:.2f}%",
-                                "atr14": "{:.2f}",
-                                "rsi14": "{:.1f}",
-                                "volume_ratio": "{:.2f}",
-                                "zscore_50": "{:.2f}",
-                                "dist_52w_high": "{:.2%}",
-                                "dist_52w_score": "{:.1f}",
-                                "above_ema200_score": "{:.1f}",
-                                "ema_trend_score": "{:.1f}",
-                                "vol_adj_mtm": "{:.2f}",
-                            },
-                            na_rep="-",
-                        ).apply(highlight_momentum_rank_cells, axis=None),
-                        width="stretch",
-                        height=_dataframe_height(len(momentum_display_df), max_rows=18),
-                        hide_index=True,
-                        column_config={
-                            "ticker": st.column_config.TextColumn(
-                                "ticker",
-                                width="medium",
-                            ),
-                            "ltp": st.column_config.NumberColumn(
-                                "LTP",
-                                format="%.2f",
-                            ),
-                            "latest_close": st.column_config.NumberColumn(
-                                "Latest Close",
-                                format="%.2f",
-                            ),
-                            "notes_status": st.column_config.TextColumn(
-                                "Notes",
-                                width="small",
-                            ),
-                            "research_age_days": st.column_config.NumberColumn(
-                                "Review Age",
-                                format="%d",
-                                width="small",
-                            ),
-                            "last_reviewed_date": st.column_config.TextColumn(
-                                "Last Reviewed",
-                                width="small",
-                            ),
-                            "ema10_extension_pct": st.column_config.NumberColumn(
-                                "ema10_ext",
-                                format="%.2f%%",
-                            ),
-                            "ema20_extension_pct": st.column_config.NumberColumn(
-                                "ema20_ext",
-                                format="%.2f%%",
-                            ),
-                        },
-                        key="historic_momentum_ranking_table",
-                        on_select="rerun",
-                        selection_mode="single-row",
-                    )
-                with notes_col:
-                    selected_rows = momentum_selection.selection.rows if momentum_selection.selection else []
-                    if selected_rows:
-                        render_stock_memory_card(momentum_display_df.iloc[selected_rows[0]])
-                    else:
-                        st.info("Select a stock row to view or add notes.")
-        with tab_ladder:
+        with tab_analytics:
             historic_ladder_highlight_symbols = _summary_ticker_accents(
                 build_day_movers_summary(day_movers_df)
             )
             display_day_movers_summary(day_movers_df)
-            display_historic_price_ladder_frame(
-                sorted_dashboard_df,
-                max_rows=12,
-                highlight_symbols=historic_ladder_highlight_symbols,
-            )
+
+            momentum_col, price_col = st.columns(2, vertical_alignment="top")
+            with momentum_col:
+                _render_holdings_momentum_summary(momentum_df, day_movers_df)
+            with price_col:
+                _render_price_ladder_summary_card(
+                    sorted_dashboard_df,
+                    highlight_symbols=historic_ladder_highlight_symbols,
+                )
+
+            with st.expander("Momentum Ranking", expanded=False):
+                render_momentum_ranking_table(
+                    momentum_df,
+                    day_movers_df,
+                    key="historic_momentum_ranking_table",
+                    show_summary=False,
+                )
+
+            with st.expander("Price Ladder", expanded=False):
+                display_historic_price_ladder_frame(
+                    sorted_dashboard_df,
+                    max_rows=12,
+                    highlight_symbols=historic_ladder_highlight_symbols,
+                    show_summary=False,
+                )
         with tab_returns:
             if st.button("Display Historical Returns", key="display_historic_returns"):
                 token_rows = st.session_state.get("historic_token_rows", [])
