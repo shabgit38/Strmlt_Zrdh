@@ -10,6 +10,7 @@ from kite_auth import bootstrap_kite_app, clear_auth_state, is_token_error
 _COMPONENT_DIR = Path(__file__).parent / "portfolio_terminal" / "dist"
 _CALCULATORS_LIVE_DATA_STATE_KEY = "calculators_terminal_live_data"
 _CALCULATORS_LAST_REQUEST_ID_STATE_KEY = "calculators_terminal_last_request_id"
+_CALCULATORS_INSTRUMENTS_STATE_KEY = "calculators_terminal_instruments"
 _INDEX_SPOT_INSTRUMENTS = {
     "NIFTY": "NSE:NIFTY 50",
     "BANKNIFTY": "NSE:NIFTY BANK",
@@ -36,6 +37,7 @@ def render_calculators_terminal(*, key: str | None = None) -> None:
         st.session_state[_CALCULATORS_LIVE_DATA_STATE_KEY] = {
             "spots": _missing_spots(),
             "options": {},
+            "targetOptions": {},
         }
 
     component_value = _portfolio_terminal(
@@ -71,10 +73,12 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
         "requestId": request.get("requestId"),
         "spots": previous_data.get("spots") or _missing_spots(),
         "options": dict(previous_data.get("options") or {}),
+        "targetOptions": dict(previous_data.get("targetOptions") or {}),
     }
 
     try:
         kite, _, _ = bootstrap_kite_app("Zerodha Calculators")
+        option_contracts = _load_calculator_option_contracts(kite)
         symbols = sorted(
             {
                 str(symbol).upper().strip()
@@ -87,8 +91,9 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
             instruments.extend(_INDEX_SPOT_INSTRUMENTS.values())
 
         underlying_by_symbol = {symbol: _underlying_instrument_for_option(symbol) for symbol in symbols}
+        contract_by_symbol = {contract["symbol"]: contract for contract in option_contracts}
         for symbol in symbols:
-            instruments.append(_option_quote_instrument(symbol))
+            instruments.append(_option_quote_instrument(symbol, contract_by_symbol.get(symbol)))
             underlying = underlying_by_symbol.get(symbol)
             if underlying:
                 instruments.append(underlying)
@@ -96,17 +101,27 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
         quotes = kite.ltp(*sorted(set(instruments))) if instruments else {}
         if request.get("includeSpots"):
             live_data["spots"] = _spots_from_quotes(quotes)
+            live_data["targetOptions"] = _target_options_from_spots(option_contracts, live_data["spots"])
 
         for symbol in symbols:
-            option_quote = quotes.get(_option_quote_instrument(symbol), {})
+            contract = contract_by_symbol.get(symbol)
+            option_quote = quotes.get(_option_quote_instrument(symbol, contract), {})
             underlying_quote = quotes.get(underlying_by_symbol.get(symbol, ""), {})
             quote_payload: dict[str, Any] = {"symbol": symbol}
             if isinstance(option_quote, dict) and option_quote.get("last_price") is not None:
                 quote_payload["ltp"] = float(option_quote["last_price"])
             if isinstance(underlying_quote, dict) and underlying_quote.get("last_price") is not None:
                 quote_payload["spot"] = float(underlying_quote["last_price"])
-            expiry = _expiry_from_monthly_option_symbol(symbol)
-            if expiry:
+            if contract:
+                quote_payload.update(
+                    {
+                        "expiry": contract.get("expiry"),
+                        "strike": contract.get("strike"),
+                        "optionType": contract.get("optionType"),
+                        "lotSize": contract.get("lotSize"),
+                    }
+                )
+            elif expiry := _expiry_from_monthly_option_symbol(symbol):
                 quote_payload["expiry"] = expiry
             live_data["options"][symbol] = quote_payload
 
@@ -120,6 +135,98 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
     return live_data
 
 
+def _load_calculator_option_contracts(kite) -> list[dict[str, Any]]:
+    if _CALCULATORS_INSTRUMENTS_STATE_KEY in st.session_state:
+        return st.session_state[_CALCULATORS_INSTRUMENTS_STATE_KEY]
+
+    contracts: list[dict[str, Any]] = []
+    for exchange in ["NFO", "BFO"]:
+        for instrument in kite.instruments(exchange):
+            contract = _calculator_option_contract(instrument)
+            if contract is not None:
+                contracts.append(contract)
+
+    st.session_state[_CALCULATORS_INSTRUMENTS_STATE_KEY] = contracts
+    return contracts
+
+
+def _calculator_option_contract(instrument: dict[str, Any]) -> dict[str, Any] | None:
+    from datetime import date, datetime
+
+    instrument_type = str(instrument.get("instrument_type") or "").upper()
+    if instrument_type not in {"CE", "PE"}:
+        return None
+
+    name = str(instrument.get("name") or "").upper().strip()
+    if name not in _INDEX_SPOT_INSTRUMENTS:
+        return None
+
+    expiry_value = instrument.get("expiry")
+    if isinstance(expiry_value, datetime):
+        expiry_date = expiry_value.date()
+    elif isinstance(expiry_value, date):
+        expiry_date = expiry_value
+    elif expiry_value:
+        try:
+            expiry_date = datetime.fromisoformat(str(expiry_value)).date()
+        except ValueError:
+            return None
+    else:
+        return None
+
+    if expiry_date < date.today():
+        return None
+
+    tradingsymbol = str(instrument.get("tradingsymbol") or "").upper().strip()
+    if not tradingsymbol:
+        return None
+
+    return {
+        "index": name,
+        "symbol": tradingsymbol,
+        "expiry": expiry_date.isoformat(),
+        "strike": float(instrument.get("strike") or 0),
+        "optionType": instrument_type,
+        "lotSize": int(float(instrument.get("lot_size") or 0)),
+        "exchange": str(instrument.get("exchange") or "").upper(),
+        "segment": str(instrument.get("segment") or "").upper(),
+        "instrumentToken": int(float(instrument.get("instrument_token") or 0)),
+    }
+
+
+def _target_options_from_spots(option_contracts: list[dict[str, Any]], spots: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    target_options: dict[str, list[dict[str, Any]]] = {}
+    by_index = {
+        index: [contract for contract in option_contracts if contract.get("index") == index]
+        for index in _INDEX_SPOT_INSTRUMENTS
+    }
+    for spot in spots:
+        index = str(spot.get("symbol") or "").upper()
+        spot_price = spot.get("spot")
+        if index not in _INDEX_SPOT_INSTRUMENTS or spot_price is None:
+            continue
+        target_options[index] = [
+            {
+                "index": index,
+                "distancePct": distance * 100,
+                "ce": _nearest_contract(by_index.get(index, []), "CE", float(spot_price) * (1 + distance)),
+                "pe": _nearest_contract(by_index.get(index, []), "PE", float(spot_price) * (1 - distance)),
+            }
+            for distance in [0.02, 0.03, 0.05]
+        ]
+    return target_options
+
+
+def _nearest_contract(contracts: list[dict[str, Any]], option_type: str, target_strike: float) -> dict[str, Any] | None:
+    matching_contracts = [contract for contract in contracts if contract.get("optionType") == option_type]
+    if not matching_contracts:
+        return None
+
+    earliest_expiry = min(contract["expiry"] for contract in matching_contracts)
+    expiry_contracts = [contract for contract in matching_contracts if contract["expiry"] == earliest_expiry]
+    return min(expiry_contracts, key=lambda contract: abs(float(contract.get("strike") or 0) - target_strike))
+
+
 def _spots_from_quotes(quotes: dict[str, Any]) -> list[dict[str, Any]]:
     spots: list[dict[str, Any]] = []
     for symbol, instrument in _INDEX_SPOT_INSTRUMENTS.items():
@@ -131,8 +238,8 @@ def _spots_from_quotes(quotes: dict[str, Any]) -> list[dict[str, Any]]:
     return spots
 
 
-def _option_quote_instrument(symbol: str) -> str:
-    exchange = "BFO" if symbol.startswith("SENSEX") else "NFO"
+def _option_quote_instrument(symbol: str, contract: dict[str, Any] | None = None) -> str:
+    exchange = str((contract or {}).get("exchange") or ("BFO" if symbol.startswith("SENSEX") else "NFO")).upper()
     return f"{exchange}:{symbol}"
 
 

@@ -12,12 +12,9 @@ import {
   dateToInputValue,
   daysBetween,
   formatManualSpotDistance,
-  intrinsicValue,
-  moneyness,
   normalizeSymbol,
   optionBreakeven,
   parseOptionSymbol,
-  timeValue,
 } from "./optionMetrics";
 import { generateExitAlert } from "./alertEngine";
 
@@ -26,7 +23,18 @@ export function newId(prefix: string): string {
 }
 
 export function emptyOptionRow(): OptionCalculatorRow {
-  return { id: newId("option"), symbol: "", openQty: "", avgPrice: "", ltp: "", spot: "", expiry: "", exitPrice: "" };
+  return {
+    id: newId("option"),
+    symbol: "",
+    openQty: "",
+    avgPrice: "",
+    ltp: "",
+    spot: "",
+    expiry: "",
+    strike: "",
+    optionType: "",
+    exitPrice: "",
+  };
 }
 
 export function emptyTradeRow(): TradeCalculatorRow {
@@ -52,34 +60,41 @@ export function calculateOptionRows(rows: OptionCalculatorRow[]): CalculatedOpti
     const ltp = toNumber(row.ltp);
     const spot = toNumber(row.spot);
     const exitPrice = toNumber(row.exitPrice);
+    const strike = toNumber(row.strike);
+    const optionType = row.optionType === "CE" || row.optionType === "PE" ? row.optionType : null;
     const parsed = parseOptionSymbol(symbol);
     const expiry = row.expiry ? new Date(row.expiry) : parsed?.expiry;
     const valuationPrice = exitPrice ?? ltp;
     const invested = openQty !== null && avgPrice !== null ? Math.abs(openQty) * avgPrice : null;
     const current = openQty !== null && valuationPrice !== null ? openQty * valuationPrice : null;
     const pnl = openQty !== null && valuationPrice !== null && avgPrice !== null ? openQty * (valuationPrice - avgPrice) : null;
-    const breakeven = optionBreakeven(symbol, avgPrice);
-    const intrinsic = intrinsicValue(spot, parsed?.strike ?? null, parsed?.type ?? null);
-    const currentTimeValue = timeValue(valuationPrice, intrinsic);
-    const currentMoneyness = moneyness(spot, parsed?.strike ?? null, parsed?.type ?? null);
+    const breakeven =
+      avgPrice !== null && strike !== null && optionType !== null
+        ? optionType === "PE"
+          ? strike - avgPrice
+          : strike + avgPrice
+        : optionBreakeven(symbol, avgPrice);
+    const isOtm =
+      spot !== null &&
+      ((optionType !== null && strike !== null && ((optionType === "CE" && spot < strike) || (optionType === "PE" && spot > strike))) ||
+        (parsed !== null && ((parsed.type === "CE" && spot < parsed.strike) || (parsed.type === "PE" && spot > parsed.strike))));
     const daysExpiry = expiry && Number.isFinite(expiry.getTime()) ? daysBetween(today, expiry) : null;
     const alert = generateExitAlert({
       entryPrice: avgPrice,
       currentLtp: valuationPrice,
       dte: daysExpiry,
-      isOtm: currentMoneyness === "OTM",
+      isOtm,
     });
 
     return {
       ...row,
       symbol,
+      optionType: row.optionType || parsed?.type || "",
+      strike: row.strike || (parsed?.strike === undefined ? "" : String(parsed.strike)),
       expiry: row.expiry || dateToInputValue(parsed?.expiry ?? null),
       daysExpiry,
       breakeven,
       distSpot: formatManualSpotDistance(breakeven, spot),
-      intrinsic,
-      timeValue: currentTimeValue,
-      moneyness: currentMoneyness,
       alert: alert.label,
       alertTone: alert.tone,
       invested,

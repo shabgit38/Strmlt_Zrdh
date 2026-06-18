@@ -14,21 +14,20 @@ import {
   summarizeAverage,
   summarizeTrades,
 } from "../calculators/logic";
-import { calculateTargetStrikes, type IndexSymbol } from "../calculators/optionSelector";
-import { parseOptionSymbol } from "../calculators/optionMetrics";
 import type {
   AvgCalculatorRow,
   CalculatorsLiveData,
   CalculatorsLiveRequest,
   IndexSpot,
+  OptionContract,
   OptionCalculatorRow,
+  TargetOptionContracts,
   TradeCalculatorRow,
 } from "../calculators/types";
 
 type OptionField = keyof OptionCalculatorRow;
 type TradeField = keyof TradeCalculatorRow;
 type AvgField = keyof AvgCalculatorRow;
-const INDEX_CONFIG_KEYS: Record<string, true> = { NIFTY: true, BANKNIFTY: true, SENSEX: true };
 
 export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData | null }) {
   const [optionRows, setOptionRows] = useState<OptionCalculatorRow[]>(() => [emptyOptionRow()]);
@@ -37,6 +36,9 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
   const [avgEnabled, setAvgEnabled] = useState(false);
   const [spots, setSpots] = useState<IndexSpot[]>([]);
+  const [targetOptions, setTargetOptions] = useState<Record<string, TargetOptionContracts[]>>({});
+  const [checkedGeneratedSymbols, setCheckedGeneratedSymbols] = useState<Set<string>>(() => new Set());
+  const generatedRowIdsRef = useRef(new Map<string, string>());
   const fetchedSymbolsRef = useRef(new Set<string>());
   const lastLiveRequestIdRef = useRef<string | null>(null);
 
@@ -45,21 +47,14 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
   const tradeSummaryRows = useMemo(() => summarizeTrades(tradeRows), [tradeRows]);
   const calculatedAvgRows = useMemo(() => calculateAvgRows(avgRows), [avgRows]);
   const avgSummaryRows = useMemo(() => summarizeAverage(avgRows), [avgRows]);
-  const targetStrikeRows = useMemo(() => {
-    return spots.flatMap((spot) => {
-      if (spot.spot === null || !(spot.symbol in INDEX_CONFIG_KEYS)) return [];
-      return calculateTargetStrikes(spot.symbol as IndexSymbol, spot.spot).map((strike) => ({
-        index: spot.symbol,
-        spot: spot.spot,
-        ...strike,
-      }));
-    });
-  }, [spots]);
 
   useEffect(() => {
     if (!liveData) return;
     if (liveData.spots) {
       setSpots(liveData.spots);
+    }
+    if (liveData.targetOptions) {
+      setTargetOptions(liveData.targetOptions);
     }
     if (liveData.options) {
       const incomingOptions = liveData.options;
@@ -74,6 +69,9 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
             ltp: row.ltp || (quote.ltp === undefined ? "" : String(quote.ltp)),
             spot: row.spot || (quote.spot === undefined ? "" : String(quote.spot)),
             expiry: row.expiry || quote.expiry || "",
+            strike: row.strike || (quote.strike === undefined ? "" : String(quote.strike)),
+            optionType: row.optionType || quote.optionType || "",
+            openQty: row.openQty || (quote.lotSize === undefined ? "" : String(quote.lotSize)),
           };
         }),
       );
@@ -83,10 +81,10 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
   useEffect(() => {
     const symbols = optionRows
       .map((row) => row.symbol.trim().toUpperCase())
-      .filter((symbol) => symbol && parseOptionSymbol(symbol) && !fetchedSymbolsRef.current.has(symbol));
+      .filter((symbol) => symbol && !fetchedSymbolsRef.current.has(symbol));
 
     const uniqueSymbols = Array.from(new Set(symbols));
-    const shouldFetchSpots = spots.length === 0;
+    const shouldFetchSpots = displaySpots(spots).some((spot) => spot.spot === null || spot.status !== "Live");
     if (uniqueSymbols.length === 0 && !shouldFetchSpots) return;
 
     const requestId = `${Date.now()}-${uniqueSymbols.join(",") || "spots"}`;
@@ -103,10 +101,55 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
     }, 750);
 
     return () => window.clearTimeout(timeout);
-  }, [optionRows, spots.length]);
+  }, [optionRows, spots]);
 
   function updateOptionRow(id: string, field: OptionField, value: string) {
     setOptionRows((rows) => rows.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
+  }
+
+  function handleGeneratedOptionToggle({
+    checked,
+    spot,
+    contract,
+  }: {
+    checked: boolean;
+    spot: number;
+    contract: OptionContract;
+  }) {
+    const symbol = contract.symbol;
+    setCheckedGeneratedSymbols((previous) => {
+      const next = new Set(previous);
+      if (checked) next.add(symbol);
+      else next.delete(symbol);
+      return next;
+    });
+
+    if (checked) {
+      setOptionRows((rows) => {
+        if (rows.some((row) => row.symbol.trim().toUpperCase() === symbol)) return rows;
+        const generatedRow = emptyOptionRow();
+        generatedRowIdsRef.current.set(symbol, generatedRow.id);
+        return [
+          ...rows,
+          {
+            ...generatedRow,
+            symbol,
+            openQty: String(contract.lotSize),
+            spot: String(spot),
+            expiry: contract.expiry,
+            strike: String(contract.strike),
+            optionType: contract.optionType,
+          },
+        ];
+      });
+      return;
+    }
+
+    const generatedRowId = generatedRowIdsRef.current.get(symbol);
+    generatedRowIdsRef.current.delete(symbol);
+    setOptionRows((rows) =>
+      generatedRowId ? rows.filter((row) => row.id !== generatedRowId) : rows,
+    );
   }
 
   function updateTradeRow(id: string, field: TradeField, value: string) {
@@ -118,7 +161,20 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
   }
 
   function removeOptionRow(id: string) {
-    setOptionRows((rows) => rows.filter((row) => row.id !== id));
+    setOptionRows((rows) => {
+      const removedRow = rows.find((row) => row.id === id);
+      const removedSymbol = removedRow?.symbol.trim().toUpperCase();
+      if (removedSymbol) {
+        setCheckedGeneratedSymbols((previous) => {
+          if (!previous.has(removedSymbol)) return previous;
+          const next = new Set(previous);
+          next.delete(removedSymbol);
+          return next;
+        });
+        generatedRowIdsRef.current.delete(removedSymbol);
+      }
+      return rows.filter((row) => row.id !== id);
+    });
   }
 
   function removeTradeRow(id: string) {
@@ -164,50 +220,20 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
 
         <section className="grid gap-3 md:grid-cols-3">
           {displaySpots(spots).map((spot) => (
-            <div key={spot.symbol} className="rounded-lg border border-terminal-line bg-terminal-panel p-4 shadow-sm">
-              <div className="text-xs font-semibold uppercase tracking-wide text-terminal-muted">{spot.symbol}</div>
-              <div className="mt-1 text-2xl font-bold tabular-nums text-terminal-ink">
-                {spot.spot === null ? "-" : formatPrice(spot.spot)}
-              </div>
-              <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-terminal-muted">{spot.status}</div>
-            </div>
+            <IndexSpotCard
+              key={spot.symbol}
+              checkedSymbols={checkedGeneratedSymbols}
+              onToggle={handleGeneratedOptionToggle}
+              spot={spot}
+              targetOptions={targetOptions[spot.symbol] ?? []}
+            />
           ))}
         </section>
-
-        {targetStrikeRows.length > 0 ? (
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-terminal-muted">Target Strikes</h2>
-            <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
-              <table className="w-full border-collapse text-left text-sm">
-                <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
-                  <tr>
-                    <HeaderCell>Index</HeaderCell>
-                    <HeaderCell align="right">Spot</HeaderCell>
-                    <HeaderCell align="right">Dist %</HeaderCell>
-                    <HeaderCell align="right">CE Strike</HeaderCell>
-                    <HeaderCell align="right">PE Strike</HeaderCell>
-                  </tr>
-                </thead>
-                <tbody>
-                  {targetStrikeRows.map((row) => (
-                    <tr key={`${row.index}-${row.distancePct}`} className="border-t border-terminal-line">
-                      <ValueCell value={row.index} />
-                      <ValueCell align="right" value={formatPrice(row.spot ?? 0)} />
-                      <ValueCell align="right" value={`${row.distancePct.toFixed(0)}%`} />
-                      <ValueCell align="right" value={formatPrice(row.ceStrike)} />
-                      <ValueCell align="right" value={formatPrice(row.peStrike)} />
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        ) : null}
 
         <section className="space-y-3">
           <SectionHeader title="Option Calculator" onAdd={() => setOptionRows((rows) => [...rows, emptyOptionRow()])} />
           <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
-            <table className="w-full min-w-[1480px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[1280px] border-collapse text-left text-sm">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
                   <HeaderCell>Symbol</HeaderCell>
@@ -216,13 +242,12 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
                   <HeaderCell align="right">LTP</HeaderCell>
                   <HeaderCell align="right">Spot</HeaderCell>
                   <HeaderCell>Expiry</HeaderCell>
+                  <HeaderCell>Type</HeaderCell>
+                  <HeaderCell align="right">Strike</HeaderCell>
                   <HeaderCell align="right">Exit</HeaderCell>
                   <HeaderCell align="right">Days</HeaderCell>
                   <HeaderCell align="right">Breakeven</HeaderCell>
                   <HeaderCell align="right">Dist Spot</HeaderCell>
-                  <HeaderCell align="right">Intrinsic</HeaderCell>
-                  <HeaderCell align="right">Time Value</HeaderCell>
-                  <HeaderCell>Moneyness</HeaderCell>
                   <HeaderCell>Alert</HeaderCell>
                   <HeaderCell align="right">Invested</HeaderCell>
                   <HeaderCell align="right">Current</HeaderCell>
@@ -240,13 +265,12 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
                     <InputCell align="right" value={row.ltp} onChange={(value) => updateOptionRow(row.id, "ltp", value)} />
                     <InputCell align="right" value={row.spot} onChange={(value) => updateOptionRow(row.id, "spot", value)} />
                     <InputCell type="date" value={row.expiry} onChange={(value) => updateOptionRow(row.id, "expiry", value)} />
+                    <ValueCell value={row.optionType || "-"} />
+                    <ValueCell align="right" value={row.strike || "-"} />
                     <InputCell align="right" value={row.exitPrice} onChange={(value) => updateOptionRow(row.id, "exitPrice", value)} />
                     <ValueCell align="right" value={formatInteger(row.daysExpiry)} />
                     <ValueCell align="right" value={formatNullablePrice(row.breakeven)} />
                     <ValueCell align="right" value={row.distSpot || "-"} />
-                    <ValueCell align="right" value={formatNullablePrice(row.intrinsic)} />
-                    <ValueCell align="right" value={formatNullablePrice(row.timeValue)} />
-                    <ValueCell value={row.moneyness || "-"} />
                     <td className={`px-3 py-2 text-sm font-semibold ${alertClass(row.alertTone)}`}>{row.alert}</td>
                     <ValueCell align="right" value={formatNullableMoney(row.invested)} />
                     <ValueCell align="right" value={formatNullableMoney(row.current)} />
@@ -391,6 +415,104 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
         ) : null}
       </div>
     </main>
+  );
+}
+
+function IndexSpotCard({
+  checkedSymbols,
+  onToggle,
+  spot,
+  targetOptions,
+}: {
+  checkedSymbols: Set<string>;
+  onToggle: (payload: { checked: boolean; contract: OptionContract; spot: number }) => void;
+  spot: IndexSpot;
+  targetOptions: TargetOptionContracts[];
+}) {
+  return (
+    <div className="rounded-lg border border-terminal-line bg-terminal-panel p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-terminal-muted">{spot.symbol}</div>
+          <div className="mt-1 text-2xl font-bold tabular-nums text-terminal-ink">
+            {spot.spot === null ? "-" : formatPrice(spot.spot)}
+          </div>
+        </div>
+        <div className="text-right text-xs font-semibold uppercase tracking-wide text-terminal-muted">{spot.status}</div>
+      </div>
+
+      <div className="mt-3 overflow-hidden rounded-md border border-terminal-line">
+        <table className="w-full border-collapse text-sm">
+          <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
+            <tr>
+              <HeaderCell>Dist</HeaderCell>
+              <HeaderCell align="right">CE</HeaderCell>
+              <HeaderCell align="right">PE</HeaderCell>
+            </tr>
+          </thead>
+          <tbody>
+            {targetOptions.length > 0 && spot.spot !== null ? (
+              targetOptions.map((strike) => {
+                return (
+                  <tr key={`${spot.symbol}-${strike.distancePct}`} className="border-t border-terminal-line">
+                    <ValueCell value={`${strike.distancePct.toFixed(0)}%`} />
+                    <StrikeCheckbox
+                      checked={strike.ce ? checkedSymbols.has(strike.ce.symbol) : false}
+                      disabled={!strike.ce}
+                      label={strike.ce ? contractLabel(strike.ce) : "-"}
+                      onChange={(checked) =>
+                        strike.ce && onToggle({ checked, contract: strike.ce, spot: spot.spot ?? 0 })
+                      }
+                    />
+                    <StrikeCheckbox
+                      checked={strike.pe ? checkedSymbols.has(strike.pe.symbol) : false}
+                      disabled={!strike.pe}
+                      label={strike.pe ? contractLabel(strike.pe) : "-"}
+                      onChange={(checked) =>
+                        strike.pe && onToggle({ checked, contract: strike.pe, spot: spot.spot ?? 0 })
+                      }
+                    />
+                  </tr>
+                );
+              })
+            ) : (
+              <tr className="border-t border-terminal-line">
+                <td className="px-3 py-3 text-sm text-terminal-muted" colSpan={3}>
+                  Waiting for live spot
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function StrikeCheckbox({
+  checked,
+  disabled = false,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  label: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <td className="px-3 py-2 text-right tabular-nums">
+      <label className="inline-flex items-center justify-end gap-2">
+        <span>{label}</span>
+        <input
+          className="h-4 w-4 accent-terminal-watch"
+          checked={checked}
+          disabled={disabled}
+          type="checkbox"
+          onChange={(event) => onChange(event.target.checked)}
+        />
+      </label>
+    </td>
   );
 }
 
@@ -553,4 +675,8 @@ function alertClass(tone: "normal" | "review" | "warning" | "exit" | "hardExit")
   if (tone === "warning") return "text-orange-600";
   if (tone === "review") return "text-terminal-near";
   return "text-terminal-muted";
+}
+
+function contractLabel(contract: OptionContract): string {
+  return `${formatPrice(contract.strike)} ${contract.expiry} L${contract.lotSize}`;
 }

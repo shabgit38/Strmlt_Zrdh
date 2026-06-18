@@ -65,23 +65,6 @@ export function dateToInputValue(date: Date | null): string {
   return date.toISOString().slice(0, 10);
 }
 
-export function intrinsicValue(spot: number | null, strike: number | null, optionType: "CE" | "PE" | null): number | null {
-  if (spot === null || strike === null || optionType === null) return null;
-  return optionType === "CE" ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0);
-}
-
-export function timeValue(ltp: number | null, intrinsic: number | null): number | null {
-  if (ltp === null || intrinsic === null) return null;
-  return Math.max(ltp - intrinsic, 0);
-}
-
-export function moneyness(spot: number | null, strike: number | null, optionType: "CE" | "PE" | null): "ITM" | "OTM" | "ATM" | "" {
-  if (spot === null || strike === null || optionType === null) return "";
-  if (Math.abs(spot - strike) <= strike * 0.0025) return "ATM";
-  if (optionType === "CE") return spot > strike ? "ITM" : "OTM";
-  return spot < strike ? "ITM" : "OTM";
-}
-
 export function formatManualSpotDistance(breakeven: number | null, spot: number | null): string {
   if (breakeven === null || spot === null || spot === 0) return "";
   const distance = Math.abs(breakeven - spot);

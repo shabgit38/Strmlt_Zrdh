@@ -6,6 +6,8 @@ export type OptionCalculatorRow = {
   ltp: string;
   spot: string;
   expiry: string;
+  strike: string;
+  optionType: string;
   exitPrice: string;
 };
 
@@ -13,9 +15,6 @@ export type CalculatedOptionRow = OptionCalculatorRow & {
   daysExpiry: number | null;
   breakeven: number | null;
   distSpot: string;
-  intrinsic: number | null;
-  timeValue: number | null;
-  moneyness: "ITM" | "OTM" | "ATM" | "";
   alert: string;
   alertTone: "normal" | "review" | "warning" | "exit" | "hardExit";
   invested: number | null;
@@ -86,6 +85,27 @@ export type LiveOptionQuote = {
   ltp?: number;
   spot?: number;
   expiry?: string;
+  strike?: number;
+  optionType?: "CE" | "PE";
+  lotSize?: number;
+};
+
+export type OptionContract = {
+  symbol: string;
+  expiry: string;
+  strike: number;
+  optionType: "CE" | "PE";
+  lotSize: number;
+  exchange: string;
+  segment: string;
+  instrumentToken: number;
+};
+
+export type TargetOptionContracts = {
+  index: string;
+  distancePct: number;
+  ce?: OptionContract;
+  pe?: OptionContract;
 };
 
 export type CalculatorsLiveData = {
@@ -93,6 +113,7 @@ export type CalculatorsLiveData = {
   fetchedAt?: string;
   spots?: IndexSpot[];
   options?: Record<string, LiveOptionQuote>;
+  targetOptions?: Record<string, TargetOptionContracts[]>;
   error?: string;
 };
 
