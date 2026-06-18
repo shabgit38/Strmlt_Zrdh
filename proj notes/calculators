@@ -1,0 +1,371 @@
+# OPTION CALCULATOR
+# Codex Build Guide: Options / Trade / MTF Calculator
+
+## Goal
+
+Build a calculator that loads:
+
+1. **Spot prices**
+
+   * NIFTY
+   * BANKNIFTY
+   * SENSEX
+
+2. **Option candidates**
+
+   * Current month expiry
+   * Next quarter expiry
+   * Year-end expiry
+   * Strikes **2%, 3%, 5% away from spot**
+   * Both **CE and PE**
+
+3. **Risk alerts**
+
+   * Premium decay
+   * Time decay
+   * Thesis invalidation
+   * Exit zones
+   * DTE warning
+
+---
+
+# 1. Suggested File Structure
+
+```txt
+app/
+│
+├── main.py
+├── config.py
+├── broker_api.py
+├── option_selector.py
+├── option_metrics.py
+├── alert_engine.py
+├── ui_components.py
+└── utils.py
+```
+
+---
+
+# 2. Data Flow
+
+```txt
+App Load
+  ↓
+Fetch Index Spot
+  ↓
+Calculate 2%, 3%, 5% away strikes
+  ↓
+Find current month / next quarter / year-end expiries
+  ↓
+Fetch option LTPs from broker API
+  ↓
+Calculate decay + risk metrics
+  ↓
+Display option table + alerts
+```
+
+---
+
+# 3. Spot Fetch Logic
+
+### `broker_api.py`
+
+```python
+def fetch_index_spots():
+    return {
+        "NIFTY": get_ltp("NSE:NIFTY 50"),
+        "BANKNIFTY": get_ltp("NSE:NIFTY BANK"),
+        "SENSEX": get_ltp("BSE:SENSEX")
+    }
+```
+
+Display as top cards:
+
+| Index     |  Spot | Status |
+| --------- | ----: | ------ |
+| NIFTY     | 24090 | Live   |
+| BANKNIFTY | 52500 | Live   |
+| SENSEX    | 81000 | Live   |
+
+---
+
+# 4. Strike Selection Logic
+
+For each index:
+
+```python
+def calculate_target_strikes(spot, step_size):
+    distances = [0.02, 0.03, 0.05]
+
+    strikes = []
+
+    for pct in distances:
+        ce_strike = round_to_step(spot * (1 + pct), step_size)
+        pe_strike = round_to_step(spot * (1 - pct), step_size)
+
+        strikes.append({
+            "distance_pct": pct,
+            "CE": ce_strike,
+            "PE": pe_strike
+        })
+
+    return strikes
+```
+
+### Step sizes
+
+| Index     | Strike Step |
+| --------- | ----------: |
+| NIFTY     |          50 |
+| BANKNIFTY |         100 |
+| SENSEX    |         100 |
+
+---
+
+# 5. Expiry Buckets
+
+```python
+def classify_expiries(expiry_list, today):
+    return {
+        "current_month": nearest_monthly_expiry(expiry_list, today),
+        "next_quarter": nearest_quarter_expiry(expiry_list, today),
+        "year_end": december_expiry(expiry_list, today)
+    }
+```
+
+### Display Buckets
+
+| Bucket        | Meaning                           |
+| ------------- | --------------------------------- |
+| Current Month | Active monthly expiry             |
+| Next Quarter  | Next Mar / Jun / Sep / Dec expiry |
+| Year End      | December expiry                   |
+
+---
+
+# 6. Option Table Schema
+
+Each row should represent one option contract.
+
+```python
+option_row = {
+    "index": "NIFTY",
+    "spot": 24090,
+    "expiry_bucket": "current_month",
+    "expiry": "2026-06-25",
+    "option_type": "PE",
+    "strike": 23600,
+    "distance_pct": -2,
+    "ltp": 120,
+    "dte": 8,
+    "intrinsic": 0,
+    "time_value": 120,
+    "decay_status": "High Risk",
+    "exit_alert": "DTE Risk"
+}
+```
+
+---
+
+# 7. Decay Calculations
+
+## Intrinsic Value
+
+```python
+def intrinsic_value(spot, strike, option_type):
+    if option_type == "CE":
+        return max(spot - strike, 0)
+    elif option_type == "PE":
+        return max(strike - spot, 0)
+```
+
+## Time Value
+
+```python
+def time_value(ltp, intrinsic):
+    return max(ltp - intrinsic, 0)
+```
+
+## Approx Daily Decay
+
+```python
+def approx_daily_decay(time_value, dte):
+    if dte <= 0:
+        return time_value
+    return time_value / dte
+```
+
+---
+
+# 8. Exit Alert Logic
+
+### `alert_engine.py`
+
+```python
+def generate_exit_alert(entry_price, current_ltp, dte, is_otm, thesis_valid):
+    loss_pct = ((entry_price - current_ltp) / entry_price) * 100
+
+    alerts = []
+
+    if loss_pct >= 25:
+        alerts.append("Review: Premium down 25%")
+
+    if loss_pct >= 35:
+        alerts.append("Warning: Premium down 35%")
+
+    if loss_pct >= 50:
+        alerts.append("Exit: Premium down 50%")
+
+    if dte <= 15 and is_otm:
+        alerts.append("Exit Risk: OTM with <15 DTE")
+
+    if dte <= 10 and is_otm:
+        alerts.append("Hard Exit: OTM with <10 DTE")
+
+    if not thesis_valid:
+        alerts.append("Exit: Thesis invalidated")
+
+    return alerts
+```
+
+---
+
+# 9. Trade-Level Inputs
+
+User should enter:
+
+| Field        |      Example |
+| ------------ | -----------: |
+| Index        |        NIFTY |
+| Option Type  |           PE |
+| Strike       |        23000 |
+| Expiry       |     Jun 2026 |
+| Entry Price  |          385 |
+| Entry Date   |   2026-04-08 |
+| Entry Spot   |        24000 |
+| Current LTP  | Auto fetched |
+| Current Spot | Auto fetched |
+
+---
+
+# 10. Trade Risk Output
+
+Display:
+
+| Metric         | Formula                   |
+| -------------- | ------------------------- |
+| Premium P&L    | Current LTP - Entry Price |
+| Premium Loss % | Loss / Entry Price        |
+| Break-even     | Strike ± Premium          |
+| DTE            | Expiry - Today            |
+| Moneyness      | Spot vs Strike            |
+| Time Value     | LTP - Intrinsic           |
+| Alert          | Rule-based output         |
+
+---
+
+# 11. UI Layout
+
+## Top Section
+
+```txt
+[ NIFTY Spot ] [ BANKNIFTY Spot ] [ SENSEX Spot ]
+```
+
+## Middle Section
+
+```txt
+Expiry Bucket Filter:
+[ Current Month ] [ Next Quarter ] [ Year End ]
+
+Distance Filter:
+[ 2% ] [ 3% ] [ 5% ]
+
+Option Type:
+[ CE ] [ PE ] [ Both ]
+```
+
+## Main Table
+
+| Index | Expiry | Type | Strike | Dist % | LTP | DTE | Time Value | Alert |
+| ----- | ------ | ---- | -----: | -----: | --: | --: | ---------: | ----- |
+
+## Bottom Section
+
+```txt
+Trade Calculator
+Entry Price → Current LTP → Loss % → Exit Alert
+```
+
+---
+
+# 12. Alert Color Rules
+
+| Alert     | Color    |
+| --------- | -------- |
+| Normal    | Grey     |
+| Review    | Amber    |
+| Warning   | Orange   |
+| Exit      | Red      |
+| Hard Exit | Dark Red |
+
+---
+
+# 13. MVP Build Order
+
+## Phase 1: Foundation
+
+* Fetch spot for NIFTY, BANKNIFTY, SENSEX.
+* Display top cards.
+* Add strike rounding logic.
+* Generate 2%, 3%, 5% CE/PE strikes.
+
+## Phase 2: Option Chain
+
+* Fetch option LTPs from broker API.
+* Build current month / next quarter / year-end option list.
+* Display table.
+
+## Phase 3: Calculator
+
+* Add trade input form.
+* Calculate:
+
+  * P&L
+  * Loss %
+  * DTE
+  * intrinsic value
+  * time value
+  * break-even
+
+## Phase 4: Exit Alerts
+
+* Add premium loss alerts.
+* Add DTE alerts.
+* Add OTM alerts.
+* Add thesis invalidation input.
+
+## Phase 5: Polish
+
+* Add filters.
+* Add alert colors.
+* Add refresh button.
+* Add auto-refresh every 1–2 minutes for LTP only.
+
+---
+
+# 14. Important Rule
+
+Do **not** treat options like stock holdings.
+
+Calculator should always show:
+
+```txt
+Long options need:
+1. Direction
+2. Speed
+3. Volatility support
+4. Time discipline
+```
+
+**Confidence: High**

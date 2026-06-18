@@ -1,25 +1,33 @@
 import { useEffect, useState } from "react";
 import { PieChart } from "lucide-react";
 import { loadPortfolioSnapshot } from "./api/portfolioApi";
+import { CalculatorsScreen } from "./components/CalculatorsScreen";
 import { GroupedHoldings, sectorAnchorId } from "./components/GroupedHoldings";
 import { MtfHoldingsTable } from "./components/MtfHoldingsTable";
 import { SectorPieChart } from "./components/SectorPieChart";
 import { SectorSummaryTable } from "./components/SectorSummaryTable";
 import { formatMoney, formatPct, signedClass } from "./format";
+import type { CalculatorsLiveData } from "./calculators/types";
 import type { Holding, PortfolioSnapshot } from "./types";
 
 type AppProps = {
   streamlitSnapshot?: PortfolioSnapshot | null;
   streamlitMode?: boolean;
+  screen?: "portfolio" | "calculators";
+  liveData?: CalculatorsLiveData | null;
 };
 
-export function App({ streamlitSnapshot, streamlitMode = false }: AppProps) {
+export function App({ streamlitSnapshot, streamlitMode = false, screen = "portfolio", liveData = null }: AppProps) {
   const [snapshot, setSnapshot] = useState<PortfolioSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedSector, setSelectedSector] = useState<string | null>(null);
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
 
   useEffect(() => {
+    if (screen === "calculators") {
+      return;
+    }
+
     if (streamlitMode) {
       setError(null);
       setSnapshot(streamlitSnapshot ?? null);
@@ -39,7 +47,11 @@ export function App({ streamlitSnapshot, streamlitMode = false }: AppProps) {
       .catch((caught: unknown) => {
         setError(caught instanceof Error ? caught.message : "Failed to load portfolio snapshot");
       });
-  }, [streamlitMode, streamlitSnapshot]);
+  }, [screen, streamlitMode, streamlitSnapshot]);
+
+  if (screen === "calculators") {
+    return <CalculatorsScreen liveData={liveData} />;
+  }
 
   function handleSelectHolding(sector: string, holding: Holding) {
     setSelectedSector(sector);

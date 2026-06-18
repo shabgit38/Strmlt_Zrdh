@@ -8,13 +8,20 @@ import {
   subscribeToStreamlitRender,
 } from "./streamlitBridge";
 import type { PortfolioSnapshot } from "./types";
+import type { CalculatorsLiveData } from "./calculators/types";
 
 const root = ReactDOM.createRoot(document.getElementById("root")!);
+type Screen = "portfolio" | "calculators";
 
-function renderApp(snapshot?: PortfolioSnapshot | null, streamlitMode = false) {
+function renderApp(
+  snapshot?: PortfolioSnapshot | null,
+  streamlitMode = false,
+  screen: Screen = "portfolio",
+  liveData?: CalculatorsLiveData | null,
+) {
   root.render(
     <React.StrictMode>
-      <App streamlitSnapshot={snapshot ?? null} streamlitMode={streamlitMode} />
+      <App streamlitSnapshot={snapshot ?? null} streamlitMode={streamlitMode} screen={screen} liveData={liveData ?? null} />
     </React.StrictMode>,
   );
   window.setTimeout(() => setStreamlitFrameHeight(), 50);
@@ -22,7 +29,12 @@ function renderApp(snapshot?: PortfolioSnapshot | null, streamlitMode = false) {
 
 if (isStreamlitComponent()) {
   subscribeToStreamlitRender((args) => {
-    renderApp(args.snapshot as PortfolioSnapshot, true);
+    renderApp(
+      args.snapshot as PortfolioSnapshot,
+      true,
+      args.screen === "calculators" ? "calculators" : "portfolio",
+      args.liveData as CalculatorsLiveData,
+    );
   });
 } else {
   renderApp(null, false);

@@ -22,7 +22,7 @@ from kite_analytics import (
 )
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 from momentum_score import calculate_momentum_scores_from_kite
-from portfolio_terminal_component import render_portfolio_terminal
+from portfolio_terminal_component import render_calculators_terminal, render_portfolio_terminal
 from stock_memory_cards import _merge_stock_notes, render_stock_memory_card
 from top_gainers_losers import (
     build_day_movers_summary,
@@ -1154,8 +1154,15 @@ if "access_token" not in st.session_state:
     bootstrap_kite_app("Zerodha Holdings")
 
 
-tab_historic_data, tab_fetch_kite, tab_open_positions, tab_upload_kite,  tab_upload_holdings_breakdown = st.tabs(
-    ["Historic Data", "Fetch Holdings", "Open Positions", "Upload Holdings", "Upload Holdings Breakdown"]
+(
+    tab_historic_data,
+    tab_fetch_kite,
+    tab_open_positions,
+    tab_calculators,
+    tab_upload_kite,
+    tab_upload_holdings_breakdown,
+) = st.tabs(
+    ["Historic Data", "Fetch Holdings", "Open Positions", "Calculators", "Upload Holdings", "Upload Holdings Breakdown"]
 )
 
 with tab_upload_kite:
@@ -1300,6 +1307,10 @@ with tab_fetch_kite:
 
 with tab_open_positions:
     render_open_positions_tab()
+
+
+with tab_calculators:
+    render_calculators_terminal(key="calculators_terminal_component")
 
 
 with tab_upload_holdings_breakdown:
