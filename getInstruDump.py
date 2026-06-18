@@ -16,7 +16,9 @@ from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is
 
 SUPABASE_BATCH_SIZE = 500
 REQUIRED_INSTRUMENT_COLUMNS = {"instrument_token", "tradingsymbol", "name"}
-EQUITY_INSTRUMENT_TYPE = "EQ"
+MIN_COMPLETE_DUMP_ROWS = 10000
+COMPLETE_DUMP_REQUIRED_EXCHANGES = {"NSE", "BSE", "NFO", "BFO"}
+COMPLETE_DUMP_REQUIRED_TYPES = {"EQ", "CE", "PE"}
 
 
 def find_instruments_file_from_upload():
@@ -45,6 +47,7 @@ def find_instruments_file_from_upload():
         st.stop()
 
     # Drop completely empty rows before any validation
+    total_rows = len(df)
     before = len(df)
     print(f"Initial row count: {before}")
     df = df.dropna(how="all")
@@ -82,48 +85,26 @@ def find_instruments_file_from_upload():
     if total_skipped:
         st.info(f"Skipped {total_skipped:,} row(s) with missing data ({empty_dropped:,} blank, {key_dropped:,} missing instrument_token, {noname_dropped:,} missing name).")
 
-    # Filter to EQ instruments on NSE/BSE only
-    before = len(df)
-    print(f"Row count before filtering EQ instruments on NSE/BSE: {before}")
-    df = df[
-        (df["instrument_type"].str.upper() == EQUITY_INSTRUMENT_TYPE) &
-        (df["exchange"].str.upper().isin({"NSE", "BSE"}))
-    ]
-    filtered_out = before - len(df)
-    print(f"Filtered out {filtered_out} non-EQ or non-NSE/BSE row(s). Keeping {len(df)} EQ rows.")
-    if filtered_out:
-        st.info(f"Filtered out {filtered_out:,} non-EQ or non-NSE/BSE row(s). Keeping {len(df):,} EQ rows.")
-    
-     
-    ######
-        normalized_df = clean_dataframe_for_supabase(df)
-        print(normalized_df.head(5))
-        records = normalized_df.to_dict(orient="records")
-        print(f"Converted dataframe to {len(records)} record(s) for Supabase upload.")
-        if not records:
-            return
-
-        # Guarantee instrument_token is a Python int in every record regardless of
-        # how pandas serialised the column dtype (float64 → "500002.0" breaks bigint).
-        for record in records:
-            v = record.get("instrument_token")
-            if v is not None:
-                try:
-                    record["instrument_token"] = int(float(v))
-                except (TypeError, ValueError):
-                    pass
+    normalized_df = clean_dataframe_for_supabase(df)
+    print(normalized_df.head(5))
+    ready_count = len(normalized_df)
+    print(f"Prepared {ready_count} record(s) for Supabase upload.")
+    if ready_count == 0:
+        return
 
 
-        issues = _scan_dataframe_for_bad_values(normalized_df)
-        print(f"Scanned dataframe for JSON serialization issues, found {len(issues)} issue(s).")
-        if issues:
-            message = "Found non-JSON-safe values in the CSV: " + "; ".join(issues[:20])
-            print(message)
-            st.error(message)
-        #####
+    issues = _scan_dataframe_for_bad_values(normalized_df)
+    print(f"Scanned dataframe for JSON serialization issues, found {len(issues)} issue(s).")
+    if issues:
+        message = "Found non-JSON-safe values in the CSV: " + "; ".join(issues[:20])
+        print(message)
+        st.error(message)
 
 
-    st.success(f"File loaded successfully with {len(normalized_df):,} rows.")
+    st.info(
+        f"File validated: {total_rows:,} total rows, {total_skipped:,} skipped, "
+        f"{ready_count:,} ready for Supabase upload."
+    )
     return normalized_df
 
 
@@ -133,11 +114,13 @@ def fetch_instruments_dump(kite: KiteConnect) -> pd.DataFrame:
 
 def _json_safe_value(value: Any) -> Any:
     """Convert pandas/numpy values into JSON-safe primitives for Supabase."""
-    if pd.isna(value):
+    if value is None:
         return None
     if isinstance(value, str) and not value.strip():
         return None
     if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return None
         return value.isoformat()
     if isinstance(value, date):
         return value.isoformat()
@@ -145,6 +128,12 @@ def _json_safe_value(value: Any) -> Any:
         return value.isoformat()
     if hasattr(value, "item"):
         value = value.item()
+    try:
+        missing = pd.isna(value)
+        if isinstance(missing, bool) and missing:
+            return None
+    except (TypeError, ValueError):
+        pass
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
@@ -171,6 +160,13 @@ def _find_json_serialization_issues(records: list[tuple[Any, dict[str, Any]]]) -
     issues: list[str] = []
     for row_index, record in records:
         for column_name, value in record.items():
+            try:
+                missing = pd.isna(value)
+                if isinstance(missing, bool) and missing:
+                    issues.append(f"row={row_index}, column={column_name}, value={value!r}")
+                    continue
+            except (TypeError, ValueError):
+                pass
             if isinstance(value, float) and not math.isfinite(value):
                 issues.append(f"row={row_index}, column={column_name}, value={value!r}")
             elif isinstance(value, complex):
@@ -182,6 +178,40 @@ def _find_json_serialization_issues(records: list[tuple[Any, dict[str, Any]]]) -
 
 def _chunk_records(records: list[dict[str, Any]], chunk_size: int) -> list[list[dict[str, Any]]]:
     return [records[i : i + chunk_size] for i in range(0, len(records), chunk_size)]
+
+
+def _supabase_record_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    record = {key: _json_safe_value(value) for key, value in row.items()}
+    value = record.get("instrument_token")
+    if value is not None:
+        record["instrument_token"] = int(float(value))
+    return record
+
+
+def _supabase_indexed_records(df: pd.DataFrame) -> list[tuple[Any, dict[str, Any]]]:
+    records = df.to_dict(orient="records")
+    return [
+        (row_index, _supabase_record_from_row(record))
+        for row_index, record in zip(df.index.tolist(), records)
+    ]
+
+
+def _build_supabase_payloads(indexed_records: list[tuple[Any, dict[str, Any]]]) -> list[tuple[int, bytes]]:
+    payloads: list[tuple[int, bytes]] = []
+    for chunk in _chunk_records(indexed_records, SUPABASE_BATCH_SIZE):
+        chunk_rows = [record for _, record in chunk]
+        try:
+            payload = json.dumps(chunk_rows, allow_nan=False).encode("utf-8")
+        except (ValueError, TypeError) as exc:
+            issues = _find_json_serialization_issues(chunk)
+            details = "; ".join(issues[:20]) if issues else "no specific cell identified"
+            raise RuntimeError(
+                f"Supabase payload contains non-JSON-safe values before upload in chunk starting at row "
+                f"{chunk[0][0]}: {details}"
+            ) from exc
+        if payload and payload != b"[]":
+            payloads.append((len(chunk_rows), payload))
+    return payloads
 
 def clean_dataframe_for_supabase(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -226,6 +256,14 @@ def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
             "Missing Supabase config. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
             "in .streamlit/secrets.toml or environment variables."
         )
+
+    _validate_complete_instrument_dump(df)
+    indexed_records = _supabase_indexed_records(df)
+    payloads = _build_supabase_payloads(indexed_records)
+    prepared_count = sum(row_count for row_count, _ in payloads)
+    if prepared_count == 0:
+        raise ValueError("No rows were prepared for Supabase upload.")
+    st.info(f"Upload preflight passed: {prepared_count:,} rows JSON-safe, 0 payload errors.")
    
     # Clear existing records before inserting fresh data
     delete_endpoint = f"{supabase_url}/rest/v1/{table_name}?instrument_token=gte.0"
@@ -255,46 +293,59 @@ def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
         "Prefer": "resolution=merge-duplicates,return=minimal",
     }
 
-    records = df.to_dict(orient="records")
-    indexed_records = list(zip(df.index.tolist(), records))
-
-    INT_RECORD_COLUMNS = ("instrument_token",)
-
-    for chunk in _chunk_records(indexed_records, SUPABASE_BATCH_SIZE):
-        chunk_rows = [record for _, record in chunk]
-        for row in chunk_rows:
-            for col in INT_RECORD_COLUMNS:
-                v = row.get(col)
-                if v is not None:
-                    try:
-                        row[col] = int(float(v))
-                    except (TypeError, ValueError):
-                        pass
-        try:
-            payload = json.dumps(chunk_rows, allow_nan=False).encode("utf-8")
-        except (ValueError, TypeError) as exc:
-            issues = _find_json_serialization_issues(chunk)
-            details = "; ".join(issues[:20]) if issues else "no specific cell identified"
-            print(
-                f"Supabase payload contains non-JSON-safe values in chunk starting at row {chunk[0][0]}: {details}"
-            )
-            raise RuntimeError(
-                f"Supabase payload contains non-JSON-safe values in chunk starting at row {chunk[0][0]}: {details}"
-            ) from exc
-        if not payload or payload == b"[]":
-            continue
+    uploaded_count = 0
+    for row_count, payload in payloads:
         request = Request(endpoint, data=payload, headers=headers, method="POST")
 
         try:
             with urlopen(request, timeout=60) as response:
                 response.read()
+            uploaded_count += row_count
         except HTTPError as exc:
             body = exc.read().decode("utf-8", errors="ignore")
+            failed_count = prepared_count - uploaded_count
             raise RuntimeError(
-                f"Supabase write failed with HTTP {exc.code}: {body or exc.reason}"
+                f"Supabase upload failed after {uploaded_count:,} uploaded rows; "
+                f"{failed_count:,} rows were not uploaded. HTTP {exc.code}: {body or exc.reason}"
             ) from exc
         except URLError as exc:
-            raise RuntimeError(f"Supabase write failed: {exc.reason}") from exc
+            failed_count = prepared_count - uploaded_count
+            raise RuntimeError(
+                f"Supabase upload failed after {uploaded_count:,} uploaded rows; "
+                f"{failed_count:,} rows were not uploaded. {exc.reason}"
+            ) from exc
+
+    st.success(
+        f"Supabase upload complete: {prepared_count:,} prepared, {uploaded_count:,} uploaded, 0 failed."
+    )
+
+
+def _validate_complete_instrument_dump(df: pd.DataFrame) -> None:
+    """
+    Guard clear-and-replace syncs from partial instrument uploads.
+    """
+    if len(df) < MIN_COMPLETE_DUMP_ROWS:
+        raise ValueError(
+            f"Upload has only {len(df):,} rows. Clear-and-replace requires a complete Kite dump "
+            f"with at least {MIN_COMPLETE_DUMP_ROWS:,} rows."
+        )
+
+    missing_columns = {"exchange", "instrument_type"} - set(df.columns)
+    if missing_columns:
+        raise ValueError(f"Complete dump validation failed. Missing columns: {', '.join(sorted(missing_columns))}")
+
+    exchanges = {str(value).upper().strip() for value in df["exchange"].dropna().tolist()}
+    instrument_types = {str(value).upper().strip() for value in df["instrument_type"].dropna().tolist()}
+    missing_exchanges = COMPLETE_DUMP_REQUIRED_EXCHANGES - exchanges
+    missing_types = COMPLETE_DUMP_REQUIRED_TYPES - instrument_types
+
+    if missing_exchanges or missing_types:
+        details = []
+        if missing_exchanges:
+            details.append(f"missing exchanges: {', '.join(sorted(missing_exchanges))}")
+        if missing_types:
+            details.append(f"missing instrument types: {', '.join(sorted(missing_types))}")
+        raise ValueError("Upload does not look like a complete Kite dump (" + "; ".join(details) + ").")
 
 
 st.title("Instrument Dump")
@@ -332,9 +383,8 @@ with tab_upload:
         instruments_df = find_instruments_file_from_upload()
         try:
             upsert_instruments_to_supabase(instruments_df)
-            st.success("Instrument dump synced to Supabase.")
         except Exception as supabase_exc:
-            st.warning(f"Loaded instruments, but Supabase sync failed: {supabase_exc}")
+            st.error(f"Supabase upload failed: {supabase_exc}")
     except Exception as exc:
         if is_token_error(exc):
             clear_auth_state()
