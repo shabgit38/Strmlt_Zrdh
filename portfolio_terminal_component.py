@@ -74,6 +74,7 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
         "spots": previous_data.get("spots") or _missing_spots(),
         "options": dict(previous_data.get("options") or {}),
         "targetOptions": dict(previous_data.get("targetOptions") or {}),
+        "positions": previous_data.get("positions") or [],
     }
 
     try:
@@ -86,15 +87,23 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
                 if str(symbol).strip()
             }
         )
+        positions = _open_option_positions(kite, option_contracts)
         instruments: list[str] = []
         if request.get("includeSpots"):
             instruments.extend(_INDEX_SPOT_INSTRUMENTS.values())
 
         underlying_by_symbol = {symbol: _underlying_instrument_for_option(symbol) for symbol in symbols}
         contract_by_symbol = {contract["symbol"]: contract for contract in option_contracts}
+        position_underlying_by_symbol = {
+            position["symbol"]: _underlying_instrument_for_option(position["symbol"])
+            for position in positions
+        }
         for symbol in symbols:
             instruments.append(_option_quote_instrument(symbol, contract_by_symbol.get(symbol)))
             underlying = underlying_by_symbol.get(symbol)
+            if underlying:
+                instruments.append(underlying)
+        for underlying in position_underlying_by_symbol.values():
             if underlying:
                 instruments.append(underlying)
 
@@ -102,6 +111,7 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
         if request.get("includeSpots"):
             live_data["spots"] = _spots_from_quotes(quotes)
             live_data["targetOptions"] = _target_options_from_spots(option_contracts, live_data["spots"])
+        live_data["positions"] = _positions_with_spot(positions, position_underlying_by_symbol, quotes)
 
         for symbol in symbols:
             contract = contract_by_symbol.get(symbol)
@@ -133,6 +143,60 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
         live_data["error"] = str(exc)
 
     return live_data
+
+
+def _open_option_positions(kite, option_contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    contract_by_symbol = {contract["symbol"]: contract for contract in option_contracts}
+    positions = kite.positions()
+    net_positions = positions.get("net", []) if isinstance(positions, dict) else []
+    enriched_positions: list[dict[str, Any]] = []
+    for position in net_positions:
+        symbol = str(position.get("tradingsymbol") or "").upper().strip()
+        quantity = _float_value(position.get("quantity"))
+        if not symbol or not quantity:
+            continue
+        contract = contract_by_symbol.get(symbol)
+        if contract is None:
+            continue
+        enriched_positions.append(
+            {
+                "symbol": symbol,
+                "quantity": quantity,
+                "averagePrice": _float_value(position.get("average_price")) or 0,
+                "lastPrice": _float_value(position.get("last_price")) or 0,
+                "pnl": _float_value(position.get("pnl")) or 0,
+                "expiry": contract.get("expiry"),
+                "strike": contract.get("strike"),
+                "optionType": contract.get("optionType"),
+                "lotSize": contract.get("lotSize"),
+            }
+        )
+    return enriched_positions
+
+
+def _positions_with_spot(
+    positions: list[dict[str, Any]],
+    underlying_by_symbol: dict[str, str | None],
+    quotes: dict[str, Any],
+) -> list[dict[str, Any]]:
+    next_positions: list[dict[str, Any]] = []
+    for position in positions:
+        next_position = dict(position)
+        underlying = underlying_by_symbol.get(str(position.get("symbol") or ""))
+        quote = quotes.get(underlying or "", {})
+        if isinstance(quote, dict) and quote.get("last_price") is not None:
+            next_position["spot"] = float(quote["last_price"])
+        next_positions.append(next_position)
+    return next_positions
+
+
+def _float_value(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _load_calculator_option_contracts(kite) -> list[dict[str, Any]]:
@@ -211,10 +275,28 @@ def _target_options_from_spots(option_contracts: list[dict[str, Any]], spots: li
                 "distancePct": distance * 100,
                 "ce": _nearest_contract(by_index.get(index, []), "CE", float(spot_price) * (1 + distance)),
                 "pe": _nearest_contract(by_index.get(index, []), "PE", float(spot_price) * (1 - distance)),
+                "ceContracts": _nearest_contracts_by_expiry(
+                    by_index.get(index, []), "CE", float(spot_price) * (1 + distance)
+                ),
+                "peContracts": _nearest_contracts_by_expiry(
+                    by_index.get(index, []), "PE", float(spot_price) * (1 - distance)
+                ),
             }
             for distance in [0.02, 0.03, 0.05]
         ]
     return target_options
+
+
+def _nearest_contracts_by_expiry(contracts: list[dict[str, Any]], option_type: str, target_strike: float) -> list[dict[str, Any]]:
+    matching_contracts = [contract for contract in contracts if contract.get("optionType") == option_type]
+    contracts_by_expiry: dict[str, list[dict[str, Any]]] = {}
+    for contract in matching_contracts:
+        contracts_by_expiry.setdefault(str(contract.get("expiry")), []).append(contract)
+
+    return [
+        min(expiry_contracts, key=lambda contract: abs(float(contract.get("strike") or 0) - target_strike))
+        for _, expiry_contracts in sorted(contracts_by_expiry.items())
+    ]
 
 
 def _nearest_contract(contracts: list[dict[str, Any]], option_type: str, target_strike: float) -> dict[str, Any] | None:

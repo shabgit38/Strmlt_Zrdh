@@ -106,6 +106,21 @@ export type TargetOptionContracts = {
   distancePct: number;
   ce?: OptionContract;
   pe?: OptionContract;
+  ceContracts?: OptionContract[];
+  peContracts?: OptionContract[];
+};
+
+export type ExistingOptionPosition = {
+  symbol: string;
+  quantity: number;
+  averagePrice: number;
+  lastPrice: number;
+  pnl: number;
+  spot?: number;
+  expiry?: string;
+  strike?: number;
+  optionType?: "CE" | "PE";
+  lotSize?: number;
 };
 
 export type CalculatorsLiveData = {
@@ -114,6 +129,7 @@ export type CalculatorsLiveData = {
   spots?: IndexSpot[];
   options?: Record<string, LiveOptionQuote>;
   targetOptions?: Record<string, TargetOptionContracts[]>;
+  positions?: ExistingOptionPosition[];
   error?: string;
 };
 

@@ -1,5 +1,5 @@
 import { Calculator, Plus, Trash2 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatMoney, formatPct, formatPrice, signedClass } from "../format";
 import { setStreamlitComponentValue } from "../streamlitBridge";
@@ -14,10 +14,13 @@ import {
   summarizeAverage,
   summarizeTrades,
 } from "../calculators/logic";
+import { generateExitAlert } from "../calculators/alertEngine";
+import { formatManualSpotDistance } from "../calculators/optionMetrics";
 import type {
   AvgCalculatorRow,
   CalculatorsLiveData,
   CalculatorsLiveRequest,
+  ExistingOptionPosition,
   IndexSpot,
   OptionContract,
   OptionCalculatorRow,
@@ -37,7 +40,9 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
   const [avgEnabled, setAvgEnabled] = useState(false);
   const [spots, setSpots] = useState<IndexSpot[]>([]);
   const [targetOptions, setTargetOptions] = useState<Record<string, TargetOptionContracts[]>>({});
+  const [existingPositions, setExistingPositions] = useState<ExistingOptionPosition[]>([]);
   const [checkedGeneratedSymbols, setCheckedGeneratedSymbols] = useState<Set<string>>(() => new Set());
+  const [selectedCardContracts, setSelectedCardContracts] = useState<Record<string, string>>({});
   const generatedRowIdsRef = useRef(new Map<string, string>());
   const fetchedSymbolsRef = useRef(new Set<string>());
   const lastLiveRequestIdRef = useRef<string | null>(null);
@@ -56,6 +61,9 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
     if (liveData.targetOptions) {
       setTargetOptions(liveData.targetOptions);
     }
+    if (liveData.positions) {
+      setExistingPositions(liveData.positions);
+    }
     if (liveData.options) {
       const incomingOptions = liveData.options;
       Object.keys(incomingOptions).forEach((symbol) => fetchedSymbolsRef.current.add(symbol));
@@ -67,6 +75,7 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
           return {
             ...row,
             ltp: row.ltp || (quote.ltp === undefined ? "" : String(quote.ltp)),
+            avgPrice: row.avgPrice || (quote.ltp === undefined ? "" : String(quote.ltp)),
             spot: row.spot || (quote.spot === undefined ? "" : String(quote.spot)),
             expiry: row.expiry || quote.expiry || "",
             strike: row.strike || (quote.strike === undefined ? "" : String(quote.strike)),
@@ -107,6 +116,23 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
     setOptionRows((rows) => rows.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
   }
 
+  function addOptionRow(row: OptionCalculatorRow, generatedSymbol?: string) {
+    setOptionRows((rows) => {
+      if (rows.some((existingRow) => existingRow.symbol.trim().toUpperCase() === row.symbol.trim().toUpperCase())) return rows;
+      const blankRowIndex = rows.findIndex(isBlankOptionRow);
+      if (blankRowIndex >= 0) {
+        if (generatedSymbol) {
+          generatedRowIdsRef.current.set(generatedSymbol, rows[blankRowIndex].id);
+        }
+        return rows.map((existingRow, index) => (index === blankRowIndex ? { ...row, id: existingRow.id } : existingRow));
+      }
+      if (generatedSymbol) {
+        generatedRowIdsRef.current.set(generatedSymbol, row.id);
+      }
+      return [...rows, row];
+    });
+  }
+
   function handleGeneratedOptionToggle({
     checked,
     spot,
@@ -125,23 +151,18 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
     });
 
     if (checked) {
-      setOptionRows((rows) => {
-        if (rows.some((row) => row.symbol.trim().toUpperCase() === symbol)) return rows;
-        const generatedRow = emptyOptionRow();
-        generatedRowIdsRef.current.set(symbol, generatedRow.id);
-        return [
-          ...rows,
-          {
-            ...generatedRow,
-            symbol,
-            openQty: String(contract.lotSize),
-            spot: String(spot),
-            expiry: contract.expiry,
-            strike: String(contract.strike),
-            optionType: contract.optionType,
-          },
-        ];
-      });
+      addOptionRow(
+        {
+          ...emptyOptionRow(),
+          symbol,
+          openQty: String(contract.lotSize),
+          spot: String(spot),
+          expiry: contract.expiry,
+          strike: String(contract.strike),
+          optionType: contract.optionType,
+        },
+        symbol,
+      );
       return;
     }
 
@@ -150,6 +171,20 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
     setOptionRows((rows) =>
       generatedRowId ? rows.filter((row) => row.id !== generatedRowId) : rows,
     );
+  }
+
+  function addExistingPosition(position: ExistingOptionPosition) {
+    addOptionRow({
+      ...emptyOptionRow(),
+      symbol: position.symbol,
+      openQty: String(position.quantity),
+      avgPrice: position.averagePrice ? String(position.averagePrice) : "",
+      ltp: position.lastPrice ? String(position.lastPrice) : "",
+      spot: position.spot === undefined ? "" : String(position.spot),
+      expiry: position.expiry ?? "",
+      strike: position.strike === undefined ? "" : String(position.strike),
+      optionType: position.optionType ?? "",
+    });
   }
 
   function updateTradeRow(id: string, field: TradeField, value: string) {
@@ -224,16 +259,26 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
               key={spot.symbol}
               checkedSymbols={checkedGeneratedSymbols}
               onToggle={handleGeneratedOptionToggle}
+              selectedContracts={selectedCardContracts}
+              setSelectedContracts={setSelectedCardContracts}
               spot={spot}
               targetOptions={targetOptions[spot.symbol] ?? []}
             />
           ))}
         </section>
 
+        {existingPositions.length > 0 ? (
+          <ExistingPositionsSection
+            existingSymbols={new Set(optionRows.map((row) => row.symbol.trim().toUpperCase()).filter(Boolean))}
+            onAdd={addExistingPosition}
+            positions={existingPositions}
+          />
+        ) : null}
+
         <section className="space-y-3">
           <SectionHeader title="Option Calculator" onAdd={() => setOptionRows((rows) => [...rows, emptyOptionRow()])} />
           <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
-            <table className="w-full min-w-[1280px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[1160px] border-collapse text-left text-sm">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
                   <HeaderCell>Symbol</HeaderCell>
@@ -241,15 +286,12 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
                   <HeaderCell align="right">Avg Price</HeaderCell>
                   <HeaderCell align="right">LTP</HeaderCell>
                   <HeaderCell align="right">Spot</HeaderCell>
-                  <HeaderCell>Expiry</HeaderCell>
-                  <HeaderCell>Type</HeaderCell>
-                  <HeaderCell align="right">Strike</HeaderCell>
-                  <HeaderCell align="right">Exit</HeaderCell>
-                  <HeaderCell align="right">Days</HeaderCell>
+                  <HeaderCell align="right">DTE</HeaderCell>
                   <HeaderCell align="right">Breakeven</HeaderCell>
                   <HeaderCell align="right">Dist Spot</HeaderCell>
                   <HeaderCell>Alert</HeaderCell>
                   <HeaderCell align="right">Invested</HeaderCell>
+                  <HeaderCell align="right">Exit</HeaderCell>
                   <HeaderCell align="right">Current</HeaderCell>
                   <HeaderCell align="right">P&L</HeaderCell>
                   <HeaderCell align="right">P&L %</HeaderCell>
@@ -259,20 +301,17 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
               <tbody>
                 {calculatedOptionRows.map((row) => (
                   <tr key={row.id} className="border-t border-terminal-line">
-                    <InputCell value={row.symbol} onChange={(value) => updateOptionRow(row.id, "symbol", value)} />
-                    <InputCell align="right" value={row.openQty} onChange={(value) => updateOptionRow(row.id, "openQty", value)} />
-                    <InputCell align="right" value={row.avgPrice} onChange={(value) => updateOptionRow(row.id, "avgPrice", value)} />
-                    <InputCell align="right" value={row.ltp} onChange={(value) => updateOptionRow(row.id, "ltp", value)} />
-                    <InputCell align="right" value={row.spot} onChange={(value) => updateOptionRow(row.id, "spot", value)} />
-                    <InputCell type="date" value={row.expiry} onChange={(value) => updateOptionRow(row.id, "expiry", value)} />
-                    <ValueCell value={row.optionType || "-"} />
-                    <ValueCell align="right" value={row.strike || "-"} />
-                    <InputCell align="right" value={row.exitPrice} onChange={(value) => updateOptionRow(row.id, "exitPrice", value)} />
+                    <InputCell widthClass="min-w-44" value={row.symbol} onChange={(value) => updateOptionRow(row.id, "symbol", value)} />
+                    <InputCell align="right" widthClass="w-16" value={row.openQty} onChange={(value) => updateOptionRow(row.id, "openQty", value)} />
+                    <InputCell align="right" widthClass="w-20" value={row.avgPrice} onChange={(value) => updateOptionRow(row.id, "avgPrice", value)} />
+                    <ValueCell align="right" value={row.ltp || "-"} />
+                    <InputCell align="right" widthClass="w-20" value={row.spot} onChange={(value) => updateOptionRow(row.id, "spot", value)} />
                     <ValueCell align="right" value={formatInteger(row.daysExpiry)} />
                     <ValueCell align="right" value={formatNullablePrice(row.breakeven)} />
                     <ValueCell align="right" value={row.distSpot || "-"} />
                     <td className={`px-3 py-2 text-sm font-semibold ${alertClass(row.alertTone)}`}>{row.alert}</td>
                     <ValueCell align="right" value={formatNullableMoney(row.invested)} />
+                    <InputCell align="right" widthClass="w-20" value={row.exitPrice} onChange={(value) => updateOptionRow(row.id, "exitPrice", value)} />
                     <ValueCell align="right" value={formatNullableMoney(row.current)} />
                     <ValueCell align="right" value={formatNullableMoney(row.pnl)} tone={row.pnl} />
                     <ValueCell align="right" value={formatNullablePct(row.pnlPct)} tone={row.pnlPct} />
@@ -418,17 +457,95 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
   );
 }
 
+function ExistingPositionsSection({
+  existingSymbols,
+  onAdd,
+  positions,
+}: {
+  existingSymbols: Set<string>;
+  onAdd: (position: ExistingOptionPosition) => void;
+  positions: ExistingOptionPosition[];
+}) {
+  return (
+    <section className="space-y-3">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-terminal-muted">Existing Positions</h2>
+      <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
+        <table className="w-full min-w-[920px] border-collapse text-left text-sm">
+          <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
+            <tr>
+              <HeaderCell>Symbol</HeaderCell>
+              <HeaderCell align="right">Qty</HeaderCell>
+              <HeaderCell align="right">Avg</HeaderCell>
+              <HeaderCell align="right">LTP</HeaderCell>
+              <HeaderCell align="right">Spot</HeaderCell>
+              <HeaderCell align="right">Strike</HeaderCell>
+              <HeaderCell align="right">Breakeven</HeaderCell>
+              <HeaderCell align="right">Dist Spot</HeaderCell>
+              <HeaderCell>DTE</HeaderCell>
+              <HeaderCell align="right">P&L</HeaderCell>
+              <HeaderCell align="right">P&L %</HeaderCell>
+              <HeaderCell>Alert</HeaderCell>
+              <HeaderCell align="right"></HeaderCell>
+            </tr>
+          </thead>
+          <tbody>
+            {positions.map((position) => {
+              const symbol = position.symbol.trim().toUpperCase();
+              const alreadyAdded = existingSymbols.has(symbol);
+              const metrics = existingPositionMetrics(position);
+              return (
+                <tr key={symbol} className="border-t border-terminal-line">
+                  <ValueCell value={symbol} />
+                  <ValueCell align="right" value={position.quantity.toString()} />
+                  <ValueCell align="right" value={formatPrice(position.averagePrice)} />
+                  <ValueCell align="right" value={formatPrice(position.lastPrice)} />
+                  <ValueCell align="right" value={position.spot === undefined ? "-" : formatPrice(position.spot)} />
+                  <ValueCell align="right" value={position.strike === undefined ? "-" : formatPrice(position.strike)} />
+                  <ValueCell align="right" value={formatNullablePrice(metrics.breakeven)} />
+                  <ValueCell align="right" value={metrics.distSpot || "-"} />
+                  <ValueCell align="right" value={metrics.dte === null ? "-" : String(metrics.dte)} />
+                  <ValueCell align="right" value={formatMoney(position.pnl)} tone={position.pnl} />
+                  <ValueCell align="right" value={formatNullablePct(metrics.pnlPct)} tone={metrics.pnlPct} />
+                  <td className={`px-3 py-2 text-sm font-semibold ${alertClass(metrics.alert.tone)}`}>
+                    {metrics.alert.label}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      className="rounded-md border border-terminal-line px-3 py-1 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover disabled:cursor-default disabled:opacity-40"
+                      disabled={alreadyAdded}
+                      type="button"
+                      onClick={() => onAdd(position)}
+                    >
+                      {alreadyAdded ? "Added" : "Add"}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function IndexSpotCard({
   checkedSymbols,
   onToggle,
+  selectedContracts,
+  setSelectedContracts,
   spot,
   targetOptions,
 }: {
   checkedSymbols: Set<string>;
   onToggle: (payload: { checked: boolean; contract: OptionContract; spot: number }) => void;
+  selectedContracts: Record<string, string>;
+  setSelectedContracts: Dispatch<SetStateAction<Record<string, string>>>;
   spot: IndexSpot;
   targetOptions: TargetOptionContracts[];
 }) {
+  const lotSize = firstLotSize(targetOptions);
+
   return (
     <div className="rounded-lg border border-terminal-line bg-terminal-panel p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
@@ -438,7 +555,9 @@ function IndexSpotCard({
             {spot.spot === null ? "-" : formatPrice(spot.spot)}
           </div>
         </div>
-        <div className="text-right text-xs font-semibold uppercase tracking-wide text-terminal-muted">{spot.status}</div>
+        <div className="text-right text-xs font-semibold uppercase tracking-wide text-terminal-muted">
+          Lot {lotSize === null ? "-" : lotSize}
+        </div>
       </div>
 
       <div className="mt-3 overflow-hidden rounded-md border border-terminal-line">
@@ -456,20 +575,46 @@ function IndexSpotCard({
                 return (
                   <tr key={`${spot.symbol}-${strike.distancePct}`} className="border-t border-terminal-line">
                     <ValueCell value={`${strike.distancePct.toFixed(0)}%`} />
-                    <StrikeCheckbox
-                      checked={strike.ce ? checkedSymbols.has(strike.ce.symbol) : false}
-                      disabled={!strike.ce}
-                      label={strike.ce ? contractLabel(strike.ce) : "-"}
+                    <ContractPicker
+                      checkedSymbols={checkedSymbols}
+                      contracts={strike.ceContracts ?? (strike.ce ? [strike.ce] : [])}
+                      pickerKey={`${spot.symbol}-${strike.distancePct}-CE`}
+                      selectedContracts={selectedContracts}
+                      setSelectedContracts={setSelectedContracts}
                       onChange={(checked) =>
-                        strike.ce && onToggle({ checked, contract: strike.ce, spot: spot.spot ?? 0 })
+                        selectedContractForKey(
+                          strike.ceContracts ?? (strike.ce ? [strike.ce] : []),
+                          selectedContracts[`${spot.symbol}-${strike.distancePct}-CE`],
+                        ) &&
+                        onToggle({
+                          checked,
+                          contract: selectedContractForKey(
+                            strike.ceContracts ?? (strike.ce ? [strike.ce] : []),
+                            selectedContracts[`${spot.symbol}-${strike.distancePct}-CE`],
+                          )!,
+                          spot: spot.spot ?? 0,
+                        })
                       }
                     />
-                    <StrikeCheckbox
-                      checked={strike.pe ? checkedSymbols.has(strike.pe.symbol) : false}
-                      disabled={!strike.pe}
-                      label={strike.pe ? contractLabel(strike.pe) : "-"}
+                    <ContractPicker
+                      checkedSymbols={checkedSymbols}
+                      contracts={strike.peContracts ?? (strike.pe ? [strike.pe] : [])}
+                      pickerKey={`${spot.symbol}-${strike.distancePct}-PE`}
+                      selectedContracts={selectedContracts}
+                      setSelectedContracts={setSelectedContracts}
                       onChange={(checked) =>
-                        strike.pe && onToggle({ checked, contract: strike.pe, spot: spot.spot ?? 0 })
+                        selectedContractForKey(
+                          strike.peContracts ?? (strike.pe ? [strike.pe] : []),
+                          selectedContracts[`${spot.symbol}-${strike.distancePct}-PE`],
+                        ) &&
+                        onToggle({
+                          checked,
+                          contract: selectedContractForKey(
+                            strike.peContracts ?? (strike.pe ? [strike.pe] : []),
+                            selectedContracts[`${spot.symbol}-${strike.distancePct}-PE`],
+                          )!,
+                          spot: spot.spot ?? 0,
+                        })
                       }
                     />
                   </tr>
@@ -489,25 +634,55 @@ function IndexSpotCard({
   );
 }
 
-function StrikeCheckbox({
-  checked,
-  disabled = false,
-  label,
+function ContractPicker({
+  checkedSymbols,
+  contracts,
   onChange,
+  pickerKey,
+  selectedContracts,
+  setSelectedContracts,
 }: {
-  checked: boolean;
-  disabled?: boolean;
-  label: string;
+  checkedSymbols: Set<string>;
+  contracts: OptionContract[];
   onChange: (checked: boolean) => void;
+  pickerKey: string;
+  selectedContracts: Record<string, string>;
+  setSelectedContracts: Dispatch<SetStateAction<Record<string, string>>>;
 }) {
+  const selectedContract = selectedContractForKey(contracts, selectedContracts[pickerKey]);
+  const checked = selectedContract ? checkedSymbols.has(selectedContract.symbol) : false;
+
   return (
-    <td className="px-3 py-2 text-right tabular-nums">
-      <label className="inline-flex items-center justify-end gap-2">
-        <span>{label}</span>
+    <td className="px-3 py-2 text-right">
+      <label className="inline-flex w-full items-start justify-end gap-2">
+        <span className="flex flex-col items-end gap-1">
+          <span className="tabular-nums">{selectedContract ? formatPrice(selectedContract.strike) : "-"}</span>
+          <select
+            className="max-w-28 rounded-md border border-terminal-line bg-terminal-panel-alt px-1 py-1 text-xs text-terminal-ink outline-none"
+            disabled={contracts.length === 0}
+            value={selectedContract?.symbol ?? ""}
+            onChange={(event) => {
+              if (checked) {
+                onChange(false);
+              }
+              setSelectedContracts((previous) => ({ ...previous, [pickerKey]: event.target.value }));
+            }}
+          >
+            {contracts.length === 0 ? (
+              <option value="">-</option>
+            ) : (
+              contracts.map((contract) => (
+                <option key={contract.symbol} value={contract.symbol}>
+                  {contract.expiry}
+                </option>
+              ))
+            )}
+          </select>
+        </span>
         <input
-          className="h-4 w-4 accent-terminal-watch"
+          className="mt-0.5 h-4 w-4 accent-terminal-watch"
           checked={checked}
-          disabled={disabled}
+          disabled={!selectedContract}
           type="checkbox"
           onChange={(event) => onChange(event.target.checked)}
         />
@@ -533,7 +708,7 @@ function SectionHeader({ title, onAdd }: { title: string; onAdd: () => void }) {
 }
 
 function HeaderCell({ children = null, align = "left" }: { children?: ReactNode; align?: "left" | "right" }) {
-  return <th className={`px-3 py-2 ${align === "right" ? "text-right" : "text-left"}`}>{children}</th>;
+  return <th className={`whitespace-nowrap px-3 py-2 ${align === "right" ? "text-right" : "text-left"}`}>{children}</th>;
 }
 
 function InputCell({
@@ -541,16 +716,18 @@ function InputCell({
   onChange,
   align = "left",
   type = "text",
+  widthClass = "w-24",
 }: {
   value: string;
   onChange: (value: string) => void;
   align?: "left" | "right";
   type?: "text" | "date";
+  widthClass?: string;
 }) {
   return (
     <td className="px-2 py-1">
       <input
-        className={`w-full rounded-md border border-terminal-line bg-terminal-panel-alt px-2 py-1 text-sm text-terminal-ink outline-none focus:border-terminal-watch ${
+        className={`${widthClass} rounded-md border border-terminal-line bg-terminal-panel-alt px-2 py-1 text-sm text-terminal-ink outline-none focus:border-terminal-watch ${
           align === "right" ? "text-right tabular-nums" : ""
         }`}
         type={type}
@@ -573,7 +750,7 @@ function ValueCell({
 }) {
   return (
     <td
-      className={`px-3 py-2 tabular-nums ${align === "right" ? "text-right" : "text-left"} ${
+      className={`whitespace-nowrap px-3 py-2 tabular-nums ${align === "right" ? "text-right" : "text-left"} ${
         tone === undefined || tone === null ? "text-terminal-ink" : signedClass(tone)
       }`}
     >
@@ -677,6 +854,61 @@ function alertClass(tone: "normal" | "review" | "warning" | "exit" | "hardExit")
   return "text-terminal-muted";
 }
 
-function contractLabel(contract: OptionContract): string {
-  return `${formatPrice(contract.strike)} ${contract.expiry} L${contract.lotSize}`;
+function selectedContractForKey(contracts: OptionContract[], selectedSymbol: string | undefined): OptionContract | null {
+  if (contracts.length === 0) return null;
+  return contracts.find((contract) => contract.symbol === selectedSymbol) ?? contracts[0];
+}
+
+function firstLotSize(targetOptions: TargetOptionContracts[]): number | null {
+  for (const target of targetOptions) {
+    const contract = target.ce ?? target.pe ?? target.ceContracts?.[0] ?? target.peContracts?.[0];
+    if (contract) return contract.lotSize;
+  }
+  return null;
+}
+
+function isBlankOptionRow(row: OptionCalculatorRow): boolean {
+  return !row.symbol && !row.openQty && !row.avgPrice && !row.ltp && !row.spot && !row.expiry && !row.exitPrice;
+}
+
+function daysToExpiryText(expiry?: string): string {
+  if (!expiry) return "-";
+  const expiryDate = new Date(expiry);
+  if (!Number.isFinite(expiryDate.getTime())) return "-";
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const expiryUtc = Date.UTC(expiryDate.getFullYear(), expiryDate.getMonth(), expiryDate.getDate());
+  return String(Math.round((expiryUtc - todayUtc) / 86400000));
+}
+
+function existingPositionMetrics(position: ExistingOptionPosition) {
+  const breakeven =
+    position.strike === undefined || position.optionType === undefined
+      ? null
+      : position.optionType === "PE"
+        ? position.strike - position.averagePrice
+        : position.strike + position.averagePrice;
+  const dteText = daysToExpiryText(position.expiry);
+  const dte = dteText === "-" ? null : Number(dteText);
+  const invested = Math.abs(position.quantity) * position.averagePrice;
+  const pnlPct = invested === 0 ? null : (position.pnl / invested) * 100;
+  const isOtm =
+    position.spot !== undefined &&
+    position.strike !== undefined &&
+    position.optionType !== undefined &&
+    ((position.optionType === "CE" && position.spot < position.strike) ||
+      (position.optionType === "PE" && position.spot > position.strike));
+
+  return {
+    breakeven,
+    distSpot: formatManualSpotDistance(breakeven, position.spot ?? null),
+    dte,
+    pnlPct,
+    alert: generateExitAlert({
+      entryPrice: position.averagePrice,
+      currentLtp: position.lastPrice,
+      dte,
+      isOtm,
+    }),
+  };
 }
