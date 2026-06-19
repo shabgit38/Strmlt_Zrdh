@@ -35,6 +35,7 @@ export type MtfHolding = {
   mtfQty: number;
   mtfAvgPrice: number;
   mtfValue: number;
+  initialMargin: number;
   ltp: number;
   pnl: number;
   dayChangePct: number;

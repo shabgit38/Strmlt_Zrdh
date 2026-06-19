@@ -103,7 +103,7 @@ export function App({ streamlitSnapshot, streamlitMode = false, screen = "portfo
           />
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(24rem,0.9fr)_minmax(0,1.6fr)]">
+        <section className="grid gap-4 lg:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.7fr)]">
           <SectorPieChart sectors={snapshot.sectors} />
           <SectorSummaryTable
             sectors={snapshot.sectors}

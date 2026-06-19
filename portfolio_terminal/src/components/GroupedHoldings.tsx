@@ -87,7 +87,7 @@ export function GroupedHoldings({
                 <span className="font-bold text-terminal-ink">{formatPct(sector.weightPct)}</span>
               </div>
             </summary>
-            <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,3fr)_minmax(22rem,1fr)]">
+            <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,3fr)_minmax(18rem,0.9fr)]">
               <div className="overflow-hidden rounded-md border border-terminal-line">
                 <table className="w-full border-collapse text-left text-sm">
                   <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">

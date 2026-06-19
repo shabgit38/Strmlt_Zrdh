@@ -45,7 +45,6 @@ from getHldgBrk import (
     _set_holdings_breakdown_state,
     clean_holdings_breakdown_for_supabase,
     display_holdings_breakdown_df,
-    display_selected_holding_batches,
     enrich_holdings_breakdown_with_ltp,
     load_holdings_breakdown_for_holdings,
     upsert_holdings_breakdown_in_supabase,
@@ -98,6 +97,14 @@ def _apply_button_palette() -> None:
         div[data-testid="stDataEditor"] div[role="gridcell"],
         div[data-testid="stDataEditor"] div[role="cell"] {{
             font-size: 0.8rem;
+        }}
+        section[data-testid="stSidebar"] div.stButton > button {{
+            white-space: normal !important;
+            word-break: break-word !important;
+            line-height: 1.15;
+            min-height: 2.5rem;
+            text-align: left;
+            justify-content: flex-start;
         }}
         </style>
         """,
@@ -312,244 +319,6 @@ def _rng_color_by_symbol(dashboard_df: pd.DataFrame) -> dict[str, str]:
         if color:
             colors[str(symbol).strip().upper()] = color
     return colors
-
-
-def _style_kite_holdings(display_df: pd.DataFrame, rng_colors: dict[str, str]):
-    styler = _style_pnl_columns(display_df)
-    if "Symbol" not in display_df.columns or not rng_colors:
-        return styler
-
-    def symbol_style(value: Any) -> str:
-        return rng_colors.get(str(value).strip().upper(), "")
-
-    return styler.map(symbol_style, subset=["Symbol"])
-
-
-def _sector_maps_from_breakdown(holdings_breakdown_df: pd.DataFrame) -> tuple[dict[str, str], dict[str, str]]:
-    if holdings_breakdown_df.empty or not {"symbol", "sector"}.issubset(holdings_breakdown_df.columns):
-        return {}, {}
-
-    breakdown_df = holdings_breakdown_df.copy()
-    if "row_type" in breakdown_df.columns:
-        summary_rows = breakdown_df["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY")
-        if summary_rows.any():
-            breakdown_df = breakdown_df[summary_rows]
-
-    sector_df = (
-        breakdown_df.assign(symbol_key=breakdown_df["symbol"].astype(str).str.upper().str.strip())
-        .dropna(subset=["symbol_key", "sector"])
-        .drop_duplicates("symbol_key")
-    )
-    sector_by_symbol = sector_df.set_index("symbol_key")["sector"].astype(str).str.strip().to_dict()
-    sector_by_isin: dict[str, str] = {}
-    if "isin" in breakdown_df.columns:
-        sector_by_isin = (
-            breakdown_df.assign(isin_key=breakdown_df["isin"].astype(str).str.upper().str.strip())
-            .dropna(subset=["isin_key", "sector"])
-            .drop_duplicates("isin_key")
-            .set_index("isin_key")["sector"]
-            .astype(str)
-            .str.strip()
-            .to_dict()
-        )
-        sector_by_isin.pop("", None)
-    return sector_by_symbol, sector_by_isin
-
-
-def _add_sector_to_holdings_display(display_df: pd.DataFrame, holdings_breakdown_df: pd.DataFrame) -> pd.DataFrame:
-    if display_df.empty or "Symbol" not in display_df.columns:
-        return display_df
-
-    sector_by_symbol, sector_by_isin = _sector_maps_from_breakdown(holdings_breakdown_df)
-    if not sector_by_symbol and not sector_by_isin:
-        return display_df
-
-    display_df = display_df.copy()
-    symbol_key = display_df["Symbol"].astype(str).str.upper().str.strip()
-    sector = symbol_key.map(sector_by_symbol)
-    if "ISIN" in display_df.columns and sector_by_isin:
-        isin_key = display_df["ISIN"].astype(str).str.upper().str.strip()
-        sector = sector.fillna(isin_key.map(sector_by_isin))
-    display_df["Sector"] = sector.replace("", pd.NA).fillna("Unmapped")
-    ordered_columns = ["Sector"] + [column for column in display_df.columns if column != "Sector"]
-    return display_df[ordered_columns].sort_values(["Sector", "Symbol"], kind="stable")
-
-
-def _sector_holdings_summary_df(display_df: pd.DataFrame) -> pd.DataFrame:
-    if display_df.empty or "Sector" not in display_df.columns:
-        return pd.DataFrame()
-
-    summary_df = (
-        display_df.assign(
-            Invested=pd.to_numeric(display_df.get("Invested"), errors="coerce"),
-            Current=pd.to_numeric(display_df.get("Current"), errors="coerce"),
-            **{"P&L": pd.to_numeric(display_df.get("P&L"), errors="coerce")},
-        )
-        .groupby("Sector", dropna=False)
-        .agg(
-            Holdings=("Symbol", "count"),
-            Invested=("Invested", "sum"),
-            Current=("Current", "sum"),
-            **{"P&L": ("P&L", "sum")},
-        )
-        .reset_index()
-    )
-    summary_df["P&L %"] = summary_df["P&L"].where(summary_df["Invested"].ne(0)) / summary_df["Invested"] * 100
-    total_invested = pd.to_numeric(summary_df["Invested"], errors="coerce").sum()
-    if total_invested:
-        summary_df["Weight %"] = summary_df["Invested"] / total_invested * 100
-    else:
-        summary_df["Weight %"] = pd.NA
-    summary_df = summary_df[["Sector", "Holdings", "Invested", "Weight %", "Current", "P&L", "P&L %"]]
-    return summary_df.sort_values("Current", ascending=False, kind="stable")
-
-
-def _kite_holdings_column_config() -> dict[str, Any]:
-    return {
-        "Sector": st.column_config.TextColumn("Sector", width="medium"),
-        "Symbol": st.column_config.TextColumn("Symbol", width="small"),
-        "ISIN": None,
-        "Quantity": st.column_config.NumberColumn("Quantity", width="small", format="%d"),
-        "Avg Price": st.column_config.NumberColumn("Avg Price", width="small", format="%.2f"),
-        "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
-        "Current": st.column_config.NumberColumn("Current", width="small", format="%.2f"),
-        "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
-        "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
-        "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
-        "Weight %": st.column_config.NumberColumn("Weight %", width="small", format="%.2f%%"),
-        "DayChg %": st.column_config.NumberColumn("DayChg %", width="small", format="%.2f%%"),
-    }
-
-
-def _sector_summary_column_config() -> dict[str, Any]:
-    return {
-        "Sector": st.column_config.TextColumn("Sector", width="medium"),
-        "Holdings": st.column_config.NumberColumn("Holdings", width="small", format="%d"),
-        "Invested": st.column_config.NumberColumn("Invested", width="small", format="%.2f"),
-        "Current": st.column_config.NumberColumn("Current", width="small", format="%.2f"),
-        "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
-        "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
-        "Weight %": st.column_config.NumberColumn("Weight %", width="small", format="%.2f%%"),
-    }
-
-
-def _mtf_holdings_display_df(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty or "mtf" not in df.columns:
-        return pd.DataFrame()
-
-    mtf_df = pd.json_normalize(_mtf_rows(df)).add_prefix("mtf_")
-    display_df = pd.DataFrame(
-        {
-            "Symbol": df.get("tradingsymbol", pd.Series(index=df.index, dtype=object)).reset_index(drop=True),
-            "MTF Qty": mtf_df.get("mtf_quantity", pd.Series(index=mtf_df.index, dtype=float)),
-            "MTF Avg Price": mtf_df.get("mtf_average_price", pd.Series(index=mtf_df.index, dtype=float)),
-            "MTF Value": mtf_df.get("mtf_value", pd.Series(index=mtf_df.index, dtype=float)),
-            "LTP": df.get("last_price", pd.Series(index=df.index, dtype=float)).reset_index(drop=True),
-            "P&L": df.get("pnl", pd.Series(index=df.index, dtype=float)).reset_index(drop=True),
-            "Daychg%": df.get("day_change_percentage", pd.Series(index=df.index, dtype=float)).reset_index(drop=True),
-        }
-    )
-    display_df["MTF Qty"] = pd.to_numeric(display_df["MTF Qty"], errors="coerce").fillna(0)
-    return display_df[display_df["MTF Qty"].gt(0)].copy()
-
-
-def _mtf_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
-    if "mtf" not in df.columns:
-        return []
-    return [
-        value if isinstance(value, dict) else {}
-        for value in df["mtf"].tolist()
-    ]
-
-
-def _mtf_quantity_series(df: pd.DataFrame) -> pd.Series:
-    if df.empty or "mtf" not in df.columns:
-        return pd.Series(0, index=df.index, dtype=float)
-    mtf_df = pd.json_normalize(_mtf_rows(df))
-    return pd.to_numeric(
-        mtf_df.get("quantity", pd.Series(0, index=range(len(df)), dtype=float)),
-        errors="coerce",
-    ).fillna(0).set_axis(df.index)
-
-
-def _non_mtf_holdings_df(df: pd.DataFrame) -> pd.DataFrame:
-    return df[_mtf_quantity_series(df).le(0)].copy()
-
-
-def _display_mtf_holdings_df(df: pd.DataFrame) -> None:
-    mtf_display_df = _mtf_holdings_display_df(df)
-    if mtf_display_df.empty:
-        return
-
-    st.subheader("MTF Holdings")
-    st.dataframe(
-        _style_pnl_columns(mtf_display_df),
-        width="stretch",
-        height=_dataframe_height(len(mtf_display_df), max_rows=8),
-        hide_index=True,
-        column_config={
-            "Symbol": st.column_config.TextColumn("Symbol", width="small"),
-            "MTF Qty": st.column_config.NumberColumn("MTF Qty", width="small", format="%d"),
-            "MTF Avg Price": st.column_config.NumberColumn("MTF Avg Price", width="small", format="%.2f"),
-            "MTF Value": st.column_config.NumberColumn("MTF Value", width="small", format="%.2f"),
-            "LTP": st.column_config.NumberColumn("LTP", width="small", format="%.2f"),
-            "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
-            "Daychg%": st.column_config.NumberColumn("Daychg%", width="small", format="%.2f%%"),
-        },
-    )
-
-
-def _display_sector_weight_pie_chart(sector_summary_df: pd.DataFrame) -> None:
-    if sector_summary_df.empty or not {"Sector", "Invested"}.issubset(sector_summary_df.columns):
-        return
-
-    chart_df = sector_summary_df.copy()
-    chart_df["Invested"] = pd.to_numeric(chart_df["Invested"], errors="coerce")
-    chart_df = chart_df.dropna(subset=["Invested"])
-    chart_df = chart_df[chart_df["Invested"].gt(0)]
-    if chart_df.empty:
-        return
-
-    try:
-        import matplotlib.pyplot as plt
-    except ImportError:
-        st.info("Install matplotlib to display the sector weightage chart.")
-        return
-
-    colors = [
-        "#0F766E",
-        "#2563EB",
-        "#D97706",
-        "#64748B",
-        "#BE123C",
-        "#7C3AED",
-        "#0891B2",
-        "#4D7C0F",
-    ]
-    fig, ax = plt.subplots(figsize=(5.6, 3.4), dpi=120)
-    wedges, _, _ = ax.pie(
-        chart_df["Invested"],
-        labels=None,
-        autopct=lambda pct: f"{pct:.1f}%" if pct >= 3 else "",
-        startangle=90,
-        counterclock=False,
-        colors=colors[: len(chart_df)] if len(chart_df) <= len(colors) else None,
-        wedgeprops={"linewidth": 1, "edgecolor": "white"},
-        textprops={"fontsize": 8, "color": "#111827", "fontweight": "bold"},
-    )
-    ax.legend(
-        wedges,
-        chart_df["Sector"].astype(str),
-        loc="center left",
-        bbox_to_anchor=(1, 0.5),
-        frameon=False,
-        fontsize=8,
-    )
-    ax.set_title("Sector Weightage", fontsize=11, fontweight="bold", color="#111827")
-    ax.axis("equal")
-    fig.tight_layout()
-    st.pyplot(fig, clear_figure=True)
-    plt.close(fig)
 
 
 def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None = None) -> int:
@@ -1460,18 +1229,29 @@ if "access_token" not in st.session_state:
     bootstrap_kite_app("Zerodha Holdings")
 
 
-MAIN_NAV_OPTIONS = [
-    "Historic Data",
-    "Holdings",
-    "Calculators",
-    "Upload Holdings",
-    "Upload Holdings Breakdown",
-]
-selected_main_tab = st.sidebar.radio(
-    "Navigation",
-    MAIN_NAV_OPTIONS,
-    key="main_navigation",
-)
+MAIN_NAV_OPTIONS = {
+    "Historic Data": "Historic Data",
+    "Holdings": "Holdings",
+    "Calculators": "Calculators",
+    "Upload Holdings": "Upload Holdings",
+    "Upload Holdings Breakdown": "Upload Holdings Breakdown",
+}
+if st.session_state.get("main_navigation") not in MAIN_NAV_OPTIONS:
+    st.session_state["main_navigation"] = "Historic Data"
+
+st.sidebar.markdown("**Navigation**")
+for main_nav_label in MAIN_NAV_OPTIONS:
+    active_prefix = "> " if st.session_state["main_navigation"] == main_nav_label else ""
+    if st.sidebar.button(
+        f"{active_prefix}{main_nav_label}",
+        key=f"main_nav_{main_nav_label}",
+        use_container_width=True,
+    ):
+        st.session_state["main_navigation"] = main_nav_label
+        st.rerun()
+
+selected_main_label = st.session_state["main_navigation"]
+selected_main_tab = MAIN_NAV_OPTIONS[selected_main_label]
 
 if selected_main_tab == "Upload Holdings":
     uploaded_kite_holdings_file = st.file_uploader(
@@ -1483,7 +1263,14 @@ if selected_main_tab == "Upload Holdings":
     if uploaded_kite_holdings_file is not None:
         try:
             kite_holdings_df = _read_uploaded_file(uploaded_kite_holdings_file)
-            portfolio_streamlit.display_kite_holdings(kite_holdings_df)
+            _cache_ltp_by_symbol(kite_holdings_df)
+            as_of = pd.Timestamp.now().isoformat()
+            snapshot = portfolio_streamlit.build_portfolio_terminal_snapshot(
+                kite_holdings_df,
+                _holdings_breakdown_state_df(),
+                as_of=as_of,
+            )
+            render_portfolio_terminal(snapshot, key="uploaded_portfolio_terminal_component")
             if st.checkbox("Show holdings breakdown", key="show_upload_kite_holdings_breakdown"):
                 if _holdings_breakdown_state_df().empty:
                     _load_holdings_breakdown_state()

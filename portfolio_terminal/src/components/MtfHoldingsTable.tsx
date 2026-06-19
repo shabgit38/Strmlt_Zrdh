@@ -24,6 +24,7 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
               <th className="px-3 py-2 text-right">MTF Qty</th>
               <th className="px-3 py-2 text-right">MTF Avg</th>
               <th className="px-3 py-2 text-right">MTF Value</th>
+              <th className="px-3 py-2 text-right">Initial Margin</th>
               <th className="px-3 py-2 text-right">LTP</th>
               <th className="px-3 py-2 text-right">P&L</th>
               <th className="px-3 py-2 text-right">Day</th>
@@ -36,6 +37,7 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
                 <td className="px-3 py-2 text-right tabular-nums">{holding.mtfQty}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatPrice(holding.mtfAvgPrice)}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatMoney(holding.mtfValue)}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{formatMoney(holding.initialMargin)}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatPrice(holding.ltp)}</td>
                 <td className={`px-3 py-2 text-right tabular-nums ${signedClass(holding.pnl)}`}>
                   {formatMoney(holding.pnl)}

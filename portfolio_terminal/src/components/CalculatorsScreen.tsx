@@ -47,7 +47,15 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
   const fetchedSymbolsRef = useRef(new Set<string>());
   const lastLiveRequestIdRef = useRef<string | null>(null);
 
-  const calculatedOptionRows = useMemo(() => calculateOptionRows(optionRows), [optionRows]);
+  const effectiveOptionRows = useMemo(
+    () =>
+      optionRows.map((row) => ({
+        ...row,
+        spot: spotForSymbol(row.symbol, spots) ?? row.spot,
+      })),
+    [optionRows, spots],
+  );
+  const calculatedOptionRows = useMemo(() => calculateOptionRows(effectiveOptionRows), [effectiveOptionRows]);
   const calculatedTradeRows = useMemo(() => calculateTradeRows(tradeRows), [tradeRows]);
   const tradeSummaryRows = useMemo(() => summarizeTrades(tradeRows), [tradeRows]);
   const calculatedAvgRows = useMemo(() => calculateAvgRows(avgRows), [avgRows]);
@@ -276,7 +284,11 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
         </section>
 
         <section className="space-y-3">
-          <SectionHeader title="Option Calculator" onAdd={() => setOptionRows((rows) => [...rows, emptyOptionRow()])} />
+          <SectionHeader
+            meta={spotSummary(spots)}
+            title="Option Calculator"
+            onAdd={() => setOptionRows((rows) => [...rows, emptyOptionRow()])}
+          />
           <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
             <table className="w-full min-w-[1160px] border-collapse text-left text-sm">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
@@ -285,7 +297,6 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
                   <HeaderCell align="right">Open Qty</HeaderCell>
                   <HeaderCell align="right">Avg Price</HeaderCell>
                   <HeaderCell align="right">LTP</HeaderCell>
-                  <HeaderCell align="right">Spot</HeaderCell>
                   <HeaderCell align="right">DTE</HeaderCell>
                   <HeaderCell align="right">Breakeven</HeaderCell>
                   <HeaderCell align="right">Dist Spot</HeaderCell>
@@ -305,7 +316,6 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
                     <InputCell align="right" widthClass="w-16" value={row.openQty} onChange={(value) => updateOptionRow(row.id, "openQty", value)} />
                     <InputCell align="right" widthClass="w-20" value={row.avgPrice} onChange={(value) => updateOptionRow(row.id, "avgPrice", value)} />
                     <ValueCell align="right" value={row.ltp || "-"} />
-                    <InputCell align="right" widthClass="w-20" value={row.spot} onChange={(value) => updateOptionRow(row.id, "spot", value)} />
                     <ValueCell align="right" value={formatInteger(row.daysExpiry)} />
                     <ValueCell align="right" value={formatNullablePrice(row.breakeven)} />
                     <ValueCell align="right" value={row.distSpot || "-"} />
@@ -700,10 +710,13 @@ function ContractPicker({
   );
 }
 
-function SectionHeader({ title, onAdd }: { title: string; onAdd: () => void }) {
+function SectionHeader({ title, meta = "", onAdd }: { title: string; meta?: string; onAdd: () => void }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-terminal-muted">{title}</h2>
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-terminal-muted">{title}</h2>
+        {meta ? <span className="text-sm font-semibold tabular-nums text-terminal-ink">{meta}</span> : null}
+      </div>
       <button
         className="inline-flex items-center gap-1 rounded-md border border-terminal-line px-3 py-2 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover"
         type="button"
@@ -853,6 +866,19 @@ function displaySpots(spots: IndexSpot[]): IndexSpot[] {
   return ["NIFTY", "BANKNIFTY", "SENSEX"].map(
     (symbol) => bySymbol.get(symbol) ?? { symbol, spot: null, status: "Missing" },
   );
+}
+
+function spotSummary(spots: IndexSpot[]): string {
+  return displaySpots(spots)
+    .filter((spot) => spot.spot !== null)
+    .map((spot) => `${spot.symbol} ${formatPrice(spot.spot ?? 0)}`)
+    .join(" | ");
+}
+
+function spotForSymbol(symbol: string, spots: IndexSpot[]): string | null {
+  const normalizedSymbol = symbol.trim().toUpperCase();
+  const spot = displaySpots(spots).find((item) => normalizedSymbol.startsWith(item.symbol));
+  return spot?.spot === null || spot?.spot === undefined ? null : String(spot.spot);
 }
 
 function alertClass(tone: "normal" | "review" | "warning" | "exit" | "hardExit"): string {
