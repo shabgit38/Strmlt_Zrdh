@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import math
 from datetime import date
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -32,6 +33,7 @@ _SUPABASE_INSTRUMENT_COLUMNS = ",".join(
 )
 _TARGET_OPTION_DISTANCES = [0.02, 0.03, 0.05]
 _TARGET_STRIKE_MARGIN = 0.005
+_TARGET_STRIKE_STEP = 500
 _INDEX_SPOT_INSTRUMENTS = {
     "NIFTY": "NSE:NIFTY 50",
     "BANKNIFTY": "NSE:NIFTY BANK",
@@ -306,11 +308,16 @@ def _target_option_contracts_from_supabase(spots: list[dict[str, Any]]) -> list[
 
 
 def _target_strike_bounds(spot_price: float, option_type: str) -> tuple[float, float]:
-    if option_type == "CE":
-        targets = [spot_price * (1 + distance) for distance in _TARGET_OPTION_DISTANCES]
-    else:
-        targets = [spot_price * (1 - distance) for distance in _TARGET_OPTION_DISTANCES]
+    targets = [
+        _rounded_target_strike(spot_price, option_type, distance)
+        for distance in _TARGET_OPTION_DISTANCES
+    ]
     return min(targets) * (1 - _TARGET_STRIKE_MARGIN), max(targets) * (1 + _TARGET_STRIKE_MARGIN)
+
+
+def _rounded_target_strike(spot_price: float, option_type: str, distance: float) -> float:
+    raw_target = spot_price * (1 + distance) if option_type == "CE" else spot_price * (1 - distance)
+    return float(math.floor((raw_target / _TARGET_STRIKE_STEP) + 0.5) * _TARGET_STRIKE_STEP)
 
 
 def _calculator_option_contracts_from_supabase_filters(filters: list[str]) -> list[dict[str, Any]]:
@@ -441,13 +448,25 @@ def _target_options_from_spots(option_contracts: list[dict[str, Any]], spots: li
             {
                 "index": index,
                 "distancePct": distance * 100,
-                "ce": _nearest_contract(by_index.get(index, []), "CE", float(spot_price) * (1 + distance)),
-                "pe": _nearest_contract(by_index.get(index, []), "PE", float(spot_price) * (1 - distance)),
+                "ce": _nearest_contract(
+                    by_index.get(index, []),
+                    "CE",
+                    _rounded_target_strike(float(spot_price), "CE", distance),
+                ),
+                "pe": _nearest_contract(
+                    by_index.get(index, []),
+                    "PE",
+                    _rounded_target_strike(float(spot_price), "PE", distance),
+                ),
                 "ceContracts": _nearest_contracts_by_expiry(
-                    by_index.get(index, []), "CE", float(spot_price) * (1 + distance)
+                    by_index.get(index, []),
+                    "CE",
+                    _rounded_target_strike(float(spot_price), "CE", distance),
                 ),
                 "peContracts": _nearest_contracts_by_expiry(
-                    by_index.get(index, []), "PE", float(spot_price) * (1 - distance)
+                    by_index.get(index, []),
+                    "PE",
+                    _rounded_target_strike(float(spot_price), "PE", distance),
                 ),
             }
             for distance in [0.02, 0.03, 0.05]

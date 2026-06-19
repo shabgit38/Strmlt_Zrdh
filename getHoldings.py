@@ -1460,17 +1460,20 @@ if "access_token" not in st.session_state:
     bootstrap_kite_app("Zerodha Holdings")
 
 
-(
-    tab_historic_data,
-    tab_fetch_kite,
-    tab_calculators,
-    tab_upload_kite,
-    tab_upload_holdings_breakdown,
-) = st.tabs(
-    ["Historic Data", "Fetch Holdings", "Calculators", "Upload Holdings", "Upload Holdings Breakdown"]
+MAIN_NAV_OPTIONS = [
+    "Historic Data",
+    "Holdings",
+    "Calculators",
+    "Upload Holdings",
+    "Upload Holdings Breakdown",
+]
+selected_main_tab = st.sidebar.radio(
+    "Navigation",
+    MAIN_NAV_OPTIONS,
+    key="main_navigation",
 )
 
-with tab_upload_kite:
+if selected_main_tab == "Upload Holdings":
     uploaded_kite_holdings_file = st.file_uploader(
         "Upload holdings CSV or XLSX",
         type=["csv", "xlsx"],
@@ -1490,7 +1493,7 @@ with tab_upload_kite:
         except Exception as exc:
             st.error(f"Failed to upload Kite holdings: {exc}")
 
-with tab_fetch_kite:
+if selected_main_tab == "Holdings":
     fetch_holdings_col, holdings_ltp_col = st.columns([1, 3], vertical_alignment="center")
     with fetch_holdings_col:
         if st.button("Fetch Holdings", type="primary"):
@@ -1598,11 +1601,11 @@ with tab_fetch_kite:
             st.session_state["kite_holdings_ltp_refresh_count"] = ltp_refresh_count
 
 
-with tab_calculators:
+if selected_main_tab == "Calculators":
     render_calculators_terminal(key="calculators_terminal_component")
 
 
-with tab_upload_holdings_breakdown:
+if selected_main_tab == "Upload Holdings Breakdown":
 
     affected_symbols_to_refresh: list[str] = []
 
@@ -1648,7 +1651,7 @@ with tab_upload_holdings_breakdown:
             st.warning(f"Could not refresh holdings breakdown from Supabase: {exc}")
 
 
-with tab_historic_data:
+if selected_main_tab == "Historic Data":
     if "historic_tickers_input" not in st.session_state:
         st.session_state["historic_tickers_input"] = ""
 
@@ -1660,6 +1663,9 @@ with tab_historic_data:
 
     if indices:
         index_names = ["Custom"] + list(indices.keys())
+        default_index = next((name for name in index_names if name.lower() == "main indices"), "Custom")
+        if st.session_state.get("historic_selected_index") not in index_names:
+            st.session_state["historic_selected_index"] = default_index
         index_column, benchmark_column = st.columns([2, 1])
         with index_column:
             selected_index = st.selectbox("Select index", index_names, key="historic_selected_index")
@@ -1783,15 +1789,15 @@ with tab_historic_data:
                         st.session_state.pop("historic_momentum_failed_symbols", None)
                         st.session_state.pop("historic_momentum_error", None)
 
-                    st.session_state.pop("historic_pending_tickers", None)
-                    st.session_state.pop("historic_pending_benchmark", None)
-
         except Exception as exc:
             if is_token_error(exc):
                 clear_auth_state()
                 st.error("Your session expired. Please login again to load dashboard data.")
                 st.rerun()
             st.error(f"Error fetching dashboard data: {exc}")
+        finally:
+            st.session_state.pop("historic_pending_tickers", None)
+            st.session_state.pop("historic_pending_benchmark", None)
 
     missing_tickers = st.session_state.get("historic_missing_tickers", [])
     if missing_tickers:

@@ -253,6 +253,14 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
           </div>
         ) : null}
 
+        {existingPositions.length > 0 ? (
+          <ExistingPositionsSection
+            existingSymbols={new Set(optionRows.map((row) => row.symbol.trim().toUpperCase()).filter(Boolean))}
+            onAdd={addExistingPosition}
+            positions={existingPositions}
+          />
+        ) : null}
+
         <section className="grid gap-3 md:grid-cols-3">
           {displaySpots(spots).map((spot) => (
             <IndexSpotCard
@@ -266,14 +274,6 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
             />
           ))}
         </section>
-
-        {existingPositions.length > 0 ? (
-          <ExistingPositionsSection
-            existingSymbols={new Set(optionRows.map((row) => row.symbol.trim().toUpperCase()).filter(Boolean))}
-            onAdd={addExistingPosition}
-            positions={existingPositions}
-          />
-        ) : null}
 
         <section className="space-y-3">
           <SectionHeader title="Option Calculator" onAdd={() => setOptionRows((rows) => [...rows, emptyOptionRow()])} />
@@ -466,9 +466,16 @@ function ExistingPositionsSection({
   onAdd: (position: ExistingOptionPosition) => void;
   positions: ExistingOptionPosition[];
 }) {
+  const spotSummary = existingPositionsSpotSummary(positions);
+
   return (
     <section className="space-y-3">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-terminal-muted">Existing Positions</h2>
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-terminal-muted">Existing Positions</h2>
+        {spotSummary ? (
+          <span className="text-sm font-semibold tabular-nums text-terminal-ink">{spotSummary}</span>
+        ) : null}
+      </div>
       <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
         <table className="w-full min-w-[920px] border-collapse text-left text-sm">
           <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
@@ -477,13 +484,14 @@ function ExistingPositionsSection({
               <HeaderCell align="right">Qty</HeaderCell>
               <HeaderCell align="right">Avg</HeaderCell>
               <HeaderCell align="right">LTP</HeaderCell>
-              <HeaderCell align="right">Spot</HeaderCell>
               <HeaderCell align="right">Strike</HeaderCell>
               <HeaderCell align="right">Breakeven</HeaderCell>
               <HeaderCell align="right">Dist Spot</HeaderCell>
               <HeaderCell>DTE</HeaderCell>
+              <HeaderCell align="right">Invested</HeaderCell>
               <HeaderCell align="right">P&L</HeaderCell>
               <HeaderCell align="right">P&L %</HeaderCell>
+              <HeaderCell align="right">Balance</HeaderCell>
               <HeaderCell>Alert</HeaderCell>
               <HeaderCell align="right"></HeaderCell>
             </tr>
@@ -499,13 +507,14 @@ function ExistingPositionsSection({
                   <ValueCell align="right" value={position.quantity.toString()} />
                   <ValueCell align="right" value={formatPrice(position.averagePrice)} />
                   <ValueCell align="right" value={formatPrice(position.lastPrice)} />
-                  <ValueCell align="right" value={position.spot === undefined ? "-" : formatPrice(position.spot)} />
                   <ValueCell align="right" value={position.strike === undefined ? "-" : formatPrice(position.strike)} />
                   <ValueCell align="right" value={formatNullablePrice(metrics.breakeven)} />
                   <ValueCell align="right" value={metrics.distSpot || "-"} />
                   <ValueCell align="right" value={metrics.dte === null ? "-" : String(metrics.dte)} />
+                  <ValueCell align="right" value={formatMoney(metrics.invested)} />
                   <ValueCell align="right" value={formatMoney(position.pnl)} tone={position.pnl} />
                   <ValueCell align="right" value={formatNullablePct(metrics.pnlPct)} tone={metrics.pnlPct} />
+                  <ValueCell align="right" value={formatMoney(metrics.balance)} tone={metrics.balance} />
                   <td className={`px-3 py-2 text-sm font-semibold ${alertClass(metrics.alert.tone)}`}>
                     {metrics.alert.label}
                   </td>
@@ -881,6 +890,25 @@ function daysToExpiryText(expiry?: string): string {
   return String(Math.round((expiryUtc - todayUtc) / 86400000));
 }
 
+function existingPositionsSpotSummary(positions: ExistingOptionPosition[]): string {
+  const spotByPrefix = new Map<string, number>();
+  for (const position of positions) {
+    if (position.spot === undefined) continue;
+    const prefix = position.symbol.startsWith("BANKNIFTY")
+      ? "BANKNIFTY"
+      : position.symbol.startsWith("SENSEX")
+        ? "SENSEX"
+        : position.symbol.startsWith("NIFTY")
+          ? "NIFTY"
+          : "";
+    if (prefix && !spotByPrefix.has(prefix)) {
+      spotByPrefix.set(prefix, position.spot);
+    }
+  }
+
+  return Array.from(spotByPrefix, ([symbol, spot]) => `${symbol} ${formatPrice(spot)}`).join(" | ");
+}
+
 function existingPositionMetrics(position: ExistingOptionPosition) {
   const breakeven =
     position.strike === undefined || position.optionType === undefined
@@ -892,6 +920,7 @@ function existingPositionMetrics(position: ExistingOptionPosition) {
   const dte = dteText === "-" ? null : Number(dteText);
   const invested = Math.abs(position.quantity) * position.averagePrice;
   const pnlPct = invested === 0 ? null : (position.pnl / invested) * 100;
+  const balance = invested + position.pnl;
   const isOtm =
     position.spot !== undefined &&
     position.strike !== undefined &&
@@ -903,7 +932,9 @@ function existingPositionMetrics(position: ExistingOptionPosition) {
     breakeven,
     distSpot: formatManualSpotDistance(breakeven, position.spot ?? null),
     dte,
+    invested,
     pnlPct,
+    balance,
     alert: generateExitAlert({
       entryPrice: position.averagePrice,
       currentLtp: position.lastPrice,

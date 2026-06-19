@@ -236,3 +236,29 @@ live trading signals
 very fast LTP updates
 
 For portfolio review, 2-minute polling is enough.
+
+
+### For momentum and trade-position work, the useful next focus is probably:
+
+1. Tighten the momentum signal:
+   - validate ranking logic
+   - inspect weak/strong labels
+   - compare against benchmark behavior
+   - make the score explainable per symbol
+
+2. Connect momentum to action:
+   - classify holdings as add / hold / trim / exit-watch
+   - flag strengthening vs weakening positions
+   - surface entry candidates from selected indices
+
+3. Position sizing / trade plan:
+   - define max risk per trade
+   - calculate quantity from stop distance
+   - add target, stop, invalidation, and review date
+
+4. Options position decisions:
+   - use existing open positions
+   - calculate breakeven, DTE, spot distance, P&L
+   - generate exit/adjust/hold alerts
+
+Pick one concrete target, for example: “review current momentum scoring logic” or “build a trade-position recommendation from momentum ranking,” and I’ll start from the code/data path instead of the UI.
