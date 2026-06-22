@@ -1233,9 +1233,13 @@ MAIN_NAV_OPTIONS = {
     "Historic Data": "Historic Data",
     "Holdings": "Holdings",
     "Calculators": "Calculators",
-    "Upload Holdings": "Upload Holdings",
-    "Upload Holdings Breakdown": "Upload Holdings Breakdown",
+    "Upload": "Upload",
 }
+if st.session_state.get("main_navigation") in {
+    "Upload Holdings",
+    "Upload Holdings Breakdown",
+}:
+    st.session_state["main_navigation"] = "Upload"
 if st.session_state.get("main_navigation") not in MAIN_NAV_OPTIONS:
     st.session_state["main_navigation"] = "Historic Data"
 
@@ -1253,32 +1257,82 @@ for main_nav_label in MAIN_NAV_OPTIONS:
 selected_main_label = st.session_state["main_navigation"]
 selected_main_tab = MAIN_NAV_OPTIONS[selected_main_label]
 
-if selected_main_tab == "Upload Holdings":
-    uploaded_kite_holdings_file = st.file_uploader(
-        "Upload holdings CSV or XLSX",
-        type=["csv", "xlsx"],
-        key="kite_holdings_upload",
+if selected_main_tab == "Upload":
+    tab_upload_holdings, tab_upload_breakdown = st.tabs(
+        ["Holdings", "Breakdown / Add Entries"]
     )
 
-    if uploaded_kite_holdings_file is not None:
+    with tab_upload_holdings:
+        uploaded_kite_holdings_file = st.file_uploader(
+            "Upload holdings CSV or XLSX",
+            type=["csv", "xlsx"],
+            key="kite_holdings_upload",
+        )
+
+        if uploaded_kite_holdings_file is not None:
+            try:
+                kite_holdings_df = _read_uploaded_file(uploaded_kite_holdings_file)
+                _cache_ltp_by_symbol(kite_holdings_df)
+                as_of = pd.Timestamp.now().isoformat()
+                snapshot = portfolio_streamlit.build_portfolio_terminal_snapshot(
+                    kite_holdings_df,
+                    _holdings_breakdown_state_df(),
+                    as_of=as_of,
+                )
+                render_portfolio_terminal(snapshot, key="uploaded_portfolio_terminal_component")
+                if st.checkbox("Show holdings breakdown", key="show_upload_kite_holdings_breakdown"):
+                    if _holdings_breakdown_state_df().empty:
+                        _load_holdings_breakdown_state()
+                    display_holdings_breakdown_df(_holdings_breakdown_state_df())
+            except ImportError as exc:
+                st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
+            except Exception as exc:
+                st.error(f"Failed to upload Kite holdings: {exc}")
+
+    with tab_upload_breakdown:
+        affected_symbols_to_refresh: list[str] = []
+
+        uploaded_brkholdings_file = st.file_uploader(
+            "Upload holdings breakdown CSV or XLSX",
+            type=["csv", "xlsx"],
+            key="holdings_breakdown_upload",
+        )
+
+        if uploaded_brkholdings_file is not None:
+            try:
+                brkdown_df = _read_uploaded_file(uploaded_brkholdings_file)
+                upload_columns = _mapped_holdings_upload_columns(brkdown_df)
+                #print("holdings breakdown upload columns:\n", upload_columns)
+                #print("holdings breakdown before cleaning:\n", brkdown_df.head())
+                holdings_breakdown_df = clean_holdings_breakdown_for_supabase(brkdown_df)
+
+                #print("holdings breakdown after cleaning:\n", holdings_breakdown_df.head())
+
+                upsert_holdings_breakdown_in_supabase(holdings_breakdown_df, upload_columns)
+                if "symbol" in holdings_breakdown_df.columns:
+                    affected_symbols_to_refresh.extend(
+                        holdings_breakdown_df["symbol"].dropna().astype(str).str.upper().str.strip().unique().tolist()
+                    )
+
+            except ImportError as exc:
+                st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
+            except Exception as exc:
+                st.error(f"Failed to upload holdings breakdown: {exc}")
+
         try:
-            kite_holdings_df = _read_uploaded_file(uploaded_kite_holdings_file)
-            _cache_ltp_by_symbol(kite_holdings_df)
-            as_of = pd.Timestamp.now().isoformat()
-            snapshot = portfolio_streamlit.build_portfolio_terminal_snapshot(
-                kite_holdings_df,
-                _holdings_breakdown_state_df(),
-                as_of=as_of,
+            added_symbols = _render_add_holdings_breakdown_entries_form(
+                st.session_state.get("ltp_by_symbol", {})
             )
-            render_portfolio_terminal(snapshot, key="uploaded_portfolio_terminal_component")
-            if st.checkbox("Show holdings breakdown", key="show_upload_kite_holdings_breakdown"):
-                if _holdings_breakdown_state_df().empty:
-                    _load_holdings_breakdown_state()
-                display_holdings_breakdown_df(_holdings_breakdown_state_df())
-        except ImportError as exc:
-            st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
+            affected_symbols_to_refresh.extend(added_symbols)
         except Exception as exc:
-            st.error(f"Failed to upload Kite holdings: {exc}")
+            st.error(f"Failed to add holdings breakdown entries: {exc}")
+
+        if affected_symbols_to_refresh:
+            try:
+                _refresh_holdings_breakdown_state_for_symbols(affected_symbols_to_refresh)
+                st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
+            except Exception as exc:
+                st.warning(f"Could not refresh holdings breakdown from Supabase: {exc}")
 
 if selected_main_tab == "Holdings":
     fetch_holdings_col, holdings_ltp_col = st.columns([1, 3], vertical_alignment="center")
@@ -1390,52 +1444,6 @@ if selected_main_tab == "Holdings":
 
 if selected_main_tab == "Calculators":
     render_calculators_terminal(key="calculators_terminal_component")
-
-
-if selected_main_tab == "Upload Holdings Breakdown":
-
-    affected_symbols_to_refresh: list[str] = []
-
-    uploaded_brkholdings_file = st.file_uploader(
-        "Upload holdings breakdown CSV or XLSX",
-        type=["csv", "xlsx"],
-    )
-
-    if uploaded_brkholdings_file is not None:
-        try:
-            brkdown_df = _read_uploaded_file(uploaded_brkholdings_file)
-            upload_columns = _mapped_holdings_upload_columns(brkdown_df)
-            #print("holdings breakdown upload columns:\n", upload_columns)
-            #print("holdings breakdown before cleaning:\n", brkdown_df.head())
-            holdings_breakdown_df = clean_holdings_breakdown_for_supabase(brkdown_df)
-
-            #print("holdings breakdown after cleaning:\n", holdings_breakdown_df.head())
-
-            upsert_holdings_breakdown_in_supabase(holdings_breakdown_df, upload_columns)
-            if "symbol" in holdings_breakdown_df.columns:
-                affected_symbols_to_refresh.extend(
-                    holdings_breakdown_df["symbol"].dropna().astype(str).str.upper().str.strip().unique().tolist()
-                )
-
-        except ImportError as exc:
-            st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
-        except Exception as exc:
-            st.error(f"Failed to upload holdings breakdown: {exc}")
-
-    try:
-        added_symbols = _render_add_holdings_breakdown_entries_form(
-            st.session_state.get("ltp_by_symbol", {})
-        )
-        affected_symbols_to_refresh.extend(added_symbols)
-    except Exception as exc:
-        st.error(f"Failed to add holdings breakdown entries: {exc}")
-
-    if affected_symbols_to_refresh:
-        try:
-            _refresh_holdings_breakdown_state_for_symbols(affected_symbols_to_refresh)
-            st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
-        except Exception as exc:
-            st.warning(f"Could not refresh holdings breakdown from Supabase: {exc}")
 
 
 if selected_main_tab == "Historic Data":
