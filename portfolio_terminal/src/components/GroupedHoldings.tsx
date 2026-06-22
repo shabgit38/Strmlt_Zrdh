@@ -85,6 +85,12 @@ export function GroupedHoldings({
                 <span className="font-bold text-terminal-ink">{formatMoney(sector.invested)}</span>
                 <span> | Weight </span>
                 <span className="font-bold text-terminal-ink">{formatPct(sector.weightPct)}</span>
+                <span> | P&L </span>
+                <span className={`font-bold ${signedClass(sector.pnl)}`}>{formatMoney(sector.pnl)}</span>
+                <span> | P&L % </span>
+                <span className={`font-bold ${signedClass(sector.pnlPct)}`}>
+                  {formatPct(sector.pnlPct)}
+                </span>
               </div>
             </summary>
             <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,3fr)_minmax(18rem,0.9fr)]">

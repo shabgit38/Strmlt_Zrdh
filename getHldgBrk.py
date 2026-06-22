@@ -249,7 +249,7 @@ def _holding_present_age(trade_date: Any) -> str | None:
 
     today = date.today()
     if parsed_trade_date > today:
-        return "0 Years, 0 Months, 0 Days"
+        return "0 Yr 0 M 0 D"
 
     years = today.year - parsed_trade_date.year
     months = today.month - parsed_trade_date.month
@@ -265,7 +265,7 @@ def _holding_present_age(trade_date: Any) -> str | None:
         years -= 1
         months += 12
 
-    return f"{years} Years, {months} Months, {days} Days"
+    return f"{years} Yr {months} M {days} D"
 
 
 def clean_holdings_breakdown_for_supabase(df: pd.DataFrame) -> pd.DataFrame:

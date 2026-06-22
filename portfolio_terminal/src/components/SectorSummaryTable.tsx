@@ -1,4 +1,5 @@
 import { Clock3 } from "lucide-react";
+import { useState } from "react";
 import type { SectorGroup } from "../types";
 import { formatMoney, formatPct, signedClass } from "../format";
 
@@ -9,12 +10,37 @@ type SectorSummaryTableProps = {
   asOf: string;
 };
 
+type SortKey = "sector" | "holdingsCount" | "invested" | "weightPct" | "pnl" | "pnlPct";
+type SortDirection = "asc" | "desc";
+
+const SORT_COLUMNS: Array<{ key: SortKey; label: string; align?: "right" }> = [
+  { key: "sector", label: "Sector" },
+  { key: "holdingsCount", label: "Count", align: "right" },
+  { key: "invested", label: "Invested", align: "right" },
+  { key: "weightPct", label: "Weight", align: "right" },
+  { key: "pnl", label: "P&L", align: "right" },
+  { key: "pnlPct", label: "P&L %", align: "right" },
+];
+
 export function SectorSummaryTable({
   sectors,
   selectedSector,
   onSelectSector,
   asOf,
 }: SectorSummaryTableProps) {
+  const [sortKey, setSortKey] = useState<SortKey>("invested");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const sortedSectors = sortSectors(sectors, sortKey, sortDirection);
+
+  function handleSort(nextKey: SortKey) {
+    if (nextKey === sortKey) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(nextKey);
+    setSortDirection(nextKey === "sector" ? "asc" : "desc");
+  }
+
   return (
     <section className="h-full rounded-lg border border-terminal-line bg-terminal-panel p-4 shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -31,16 +57,29 @@ export function SectorSummaryTable({
         <table className="w-full border-collapse text-left text-sm">
           <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
             <tr>
-              <th className="px-3 py-2">Sector</th>
-              <th className="px-3 py-2 text-right">Count</th>
-              <th className="px-3 py-2 text-right">Invested</th>
-              <th className="px-3 py-2 text-right">Weight</th>
-              <th className="px-3 py-2 text-right">P&L</th>
-              <th className="px-3 py-2 text-right">P&L %</th>
+              {SORT_COLUMNS.map((column) => (
+                <th
+                  key={column.key}
+                  className={`px-3 py-2 ${column.align === "right" ? "text-right" : ""}`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleSort(column.key)}
+                    className={`inline-flex w-full items-center gap-1 text-xs font-semibold uppercase tracking-wide text-terminal-muted hover:text-terminal-ink ${
+                      column.align === "right" ? "justify-end" : "justify-start"
+                    }`}
+                  >
+                    <span>{column.label}</span>
+                    {sortKey === column.key ? (
+                      <span aria-hidden="true">{sortDirection === "asc" ? "^" : "v"}</span>
+                    ) : null}
+                  </button>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {sectors.map((sector) => (
+            {sortedSectors.map((sector) => (
               <tr
                 key={sector.sector}
                 className={`cursor-pointer border-t border-terminal-line transition hover:bg-terminal-hover ${
@@ -65,4 +104,25 @@ export function SectorSummaryTable({
       </div>
     </section>
   );
+}
+
+function sortSectors(
+  sectors: SectorGroup[],
+  sortKey: SortKey,
+  direction: SortDirection,
+): SectorGroup[] {
+  const multiplier = direction === "asc" ? 1 : -1;
+  return [...sectors].sort((a, b) => {
+    const left = a[sortKey];
+    const right = b[sortKey];
+    if (sortKey === "sector") {
+      return String(left).localeCompare(String(right)) * multiplier;
+    }
+    const leftNumber = Number(left);
+    const rightNumber = Number(right);
+    if (Number.isNaN(leftNumber) && Number.isNaN(rightNumber)) return 0;
+    if (Number.isNaN(leftNumber)) return 1;
+    if (Number.isNaN(rightNumber)) return -1;
+    return (leftNumber - rightNumber) * multiplier;
+  });
 }
