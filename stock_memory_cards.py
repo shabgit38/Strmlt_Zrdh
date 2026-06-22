@@ -404,6 +404,12 @@ def _merge_stock_notes(momentum_df: pd.DataFrame) -> pd.DataFrame:
     cards_df["symbol"] = cards_df["ticker"].astype(str).str.upper().str.strip()
     if not notes_df.empty:
         cards_df = cards_df.merge(notes_df, on="symbol", how="left")
+        for column in ["id", "why", "moat", "risk", "last_reviewed_date", "research_age_days"]:
+            left_column = f"{column}_x"
+            right_column = f"{column}_y"
+            if left_column in cards_df.columns and right_column in cards_df.columns:
+                cards_df[column] = cards_df[right_column].combine_first(cards_df[left_column])
+                cards_df = cards_df.drop(columns=[left_column, right_column])
     return cards_df
 
 
