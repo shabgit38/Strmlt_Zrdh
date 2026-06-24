@@ -5,6 +5,7 @@ import pandas as pd
 from kiteconnect import KiteConnect
 import streamlit as st
 
+from kite_analytics import load_analytics_history
 from quant_calcs import (
     calculate_12_1_momentum,
     calculate_annualized_volatility,
@@ -103,6 +104,9 @@ def load_momentum_history(
     *,
     years: int = 2,
 ) -> pd.DataFrame:
+    if years == 2:
+        return load_analytics_history(kite, instrument_token, to_date)
+
     if isinstance(to_date, datetime):
         end_date = to_date.date()
     else:

@@ -14,8 +14,12 @@ from portfolio_terminal_component import render_alerts_terminal
 
 ALERTS_STATE_KEY = "kite_alerts_data"
 ALERTS_LAST_REQUEST_ID_KEY = "kite_alerts_last_request_id"
+ALERTS_LOG_STATE_KEY = "kite_alerts_fetch_log"
 ALERTS_DEFAULT_STATUS = "all"
 KITE_ALERTS_ENDPOINT = "https://api.kite.trade/alerts"
+ALERTS_HTTP_TIMEOUT_SECONDS = 10
+ALERTS_PAGE_SIZE = 100
+ALERTS_MAX_PAGES = 5
 ALERT_FIELD_NAMES = [
     "name",
     "type",
@@ -35,16 +39,25 @@ def render_alerts_tab(*, key: str = "alerts_terminal_component") -> None:
     if ALERTS_STATE_KEY not in st.session_state:
         st.session_state[ALERTS_STATE_KEY] = _initial_alerts_data()
 
+    _render_alerts_log()
     component_value = render_alerts_terminal(st.session_state[ALERTS_STATE_KEY], key=key)
     if not _is_alerts_request(component_value):
+        _log_alerts_step_once("Waiting for alerts request from React.")
         return
 
     request_id = str(component_value.get("requestId") or "")
+    _log_alerts_step(
+        f"Received React request: action={component_value.get('action') or 'fetch'}, "
+        f"filter={component_value.get('statusFilter') or ALERTS_DEFAULT_STATUS}, request_id={request_id or '-'}"
+    )
     if request_id and st.session_state.get(ALERTS_LAST_REQUEST_ID_KEY) == request_id:
+        _log_alerts_step(f"Ignored duplicate request_id={request_id}.")
         return
 
     st.session_state[ALERTS_LAST_REQUEST_ID_KEY] = request_id
-    st.session_state[ALERTS_STATE_KEY] = _handle_alerts_request(component_value)
+    with st.spinner("Fetching alerts..."):
+        st.session_state[ALERTS_STATE_KEY] = _handle_alerts_request(component_value)
+    _log_alerts_step("Stored alerts data in session state; rerunning Streamlit.")
     st.rerun()
 
 
@@ -72,31 +85,39 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
     }
 
     try:
+        _log_alerts_step("Bootstrapping Kite client for alerts.")
         kite, api_key, _ = bootstrap_kite_app("Zerodha Alerts")
+        _log_alerts_step("Kite client ready.")
         payload = request.get("payload") if isinstance(request.get("payload"), dict) else {}
 
         if action == "create":
+            _log_alerts_step("Creating alert through Kite Alerts API.")
             create_alert(api_key, st.session_state.access_token, payload)
             next_data["message"] = "Alert created."
         elif action == "modify":
             uuid = str(payload.get("uuid") or "")
             if not uuid:
                 raise ValueError("Missing alert uuid for modify.")
+            _log_alerts_step(f"Modifying alert uuid={uuid}.")
             modify_alert(api_key, st.session_state.access_token, uuid, payload)
             next_data["message"] = "Alert modified."
         elif action == "delete":
             uuid = str(payload.get("uuid") or "")
             if not uuid:
                 raise ValueError("Missing alert uuid for delete.")
+            _log_alerts_step(f"Deleting alert uuid={uuid}.")
             delete_alert(api_key, st.session_state.access_token, uuid)
             next_data["message"] = "Alert deleted."
 
+        _log_alerts_step(f"Fetching alerts list with status_filter={next_data['statusFilter']}.")
         alerts, fetch_meta = get_alerts(
             api_key,
             st.session_state.access_token,
             None if next_data["statusFilter"] == "all" else next_data["statusFilter"],
         )
+        _log_alerts_step(f"Parsed {len(alerts)} alert row(s) from Kite response.")
         next_data["alerts"] = enrich_alerts_with_ltp(kite, alerts)
+        _log_alerts_step(f"Prepared {len(next_data['alerts'])} alert row(s) for React table.")
         next_data["fetchMeta"] = fetch_meta
         next_data["debug"] = (
             f"{action} handled; Kite returned {len(alerts)} alert(s); "
@@ -109,27 +130,39 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
             clear_auth_state()
         next_data["error"] = str(exc)
         next_data["debug"] = f"{action} failed before table refresh."
+        _log_alerts_step(f"Alerts request failed: {exc}")
     return next_data
 
 
 def get_alerts(api_key: str, access_token: str, status: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    page_size = 100
     page = 1
     alerts: list[dict[str, Any]] = []
-    meta: dict[str, Any] = {"pages": [], "responseShapes": []}
-    while True:
-        query: dict[str, Any] = {"page": page, "page_size": page_size}
+    meta: dict[str, Any] = {"pages": [], "responseShapes": [], "stopReason": ""}
+    while page <= ALERTS_MAX_PAGES:
+        query: dict[str, Any] = {"page": page, "page_size": ALERTS_PAGE_SIZE}
         if status:
             query["status"] = status
         endpoint = f"{KITE_ALERTS_ENDPOINT}?{urlencode(query)}"
+        _log_alerts_step(
+            f"Calling Kite Alerts API page={page}, page_size={ALERTS_PAGE_SIZE}, "
+            f"status={status or 'all'}, timeout={ALERTS_HTTP_TIMEOUT_SECONDS}s."
+        )
         response = _kite_alerts_request(api_key, access_token, endpoint)
         page_alerts = _extract_alert_rows(response)
         meta["pages"].append({"page": page, "count": len(page_alerts)})
         meta["responseShapes"].append(_response_shape(response))
+        _log_alerts_step(
+            f"Kite page {page} response shape={meta['responseShapes'][-1]}; parsed_count={len(page_alerts)}."
+        )
         alerts.extend(page_alerts)
-        if len(page_alerts) < page_size:
+        if len(page_alerts) < ALERTS_PAGE_SIZE:
+            meta["stopReason"] = f"page {page} returned fewer than {ALERTS_PAGE_SIZE} rows"
+            _log_alerts_step(f"Stopping alerts pagination: {meta['stopReason']}.")
             break
         page += 1
+    if page > ALERTS_MAX_PAGES:
+        meta["stopReason"] = f"max pages reached ({ALERTS_MAX_PAGES})"
+        _log_alerts_step(f"Stopping alerts pagination: {meta['stopReason']}.")
     return alerts, meta
 
 
@@ -187,9 +220,12 @@ def enrich_alerts_with_ltp(kite: Any, alerts: list[dict[str, Any]]) -> list[dict
         }
     )
     try:
+        _log_alerts_step(f"Fetching LTP for {len(instruments)} alert instrument(s).")
         quotes = kite.ltp(*instruments) if instruments else {}
+        _log_alerts_step(f"Received LTP quotes for {len(quotes) if isinstance(quotes, dict) else 0} instrument(s).")
     except Exception as exc:
         st.session_state["kite_alerts_ltp_error"] = str(exc)
+        _log_alerts_step(f"LTP enrichment failed; continuing without LTP: {exc}")
         quotes = {}
 
     enriched_alerts: list[dict[str, Any]] = []
@@ -264,10 +300,38 @@ def _kite_alerts_request(
 
     request = Request(endpoint, data=body, headers=headers, method=method)
     try:
-        with urlopen(request, timeout=60) as response:
-            return json.loads(response.read().decode("utf-8"))
+        with urlopen(request, timeout=ALERTS_HTTP_TIMEOUT_SECONDS) as response:
+            body_text = response.read().decode("utf-8")
+            _log_alerts_step(f"Kite Alerts API HTTP {response.status}; response_bytes={len(body_text)}.")
+            return json.loads(body_text)
     except HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="ignore")
         raise RuntimeError(f"Kite alerts API failed with HTTP {exc.code}: {error_body or exc.reason}") from exc
     except URLError as exc:
         raise RuntimeError(f"Kite alerts API failed: {exc.reason}") from exc
+
+
+def _log_alerts_step(message: str) -> None:
+    logs = list(st.session_state.get(ALERTS_LOG_STATE_KEY, []))
+    logs.append(message)
+    st.session_state[ALERTS_LOG_STATE_KEY] = logs[-80:]
+
+
+def _log_alerts_step_once(message: str) -> None:
+    logs = list(st.session_state.get(ALERTS_LOG_STATE_KEY, []))
+    if logs and logs[-1] == message:
+        return
+    _log_alerts_step(message)
+
+
+def _render_alerts_log() -> None:
+    logs = st.session_state.get(ALERTS_LOG_STATE_KEY, [])
+    with st.expander("Alerts fetch log", expanded=True):
+        if st.button("Clear alerts log", key="clear_alerts_fetch_log"):
+            st.session_state[ALERTS_LOG_STATE_KEY] = []
+            st.rerun()
+        if not logs:
+            st.caption("No alerts fetch steps logged yet.")
+        else:
+            for index, message in enumerate(logs[-40:], start=max(1, len(logs) - 39)):
+                st.caption(f"{index}. {message}")

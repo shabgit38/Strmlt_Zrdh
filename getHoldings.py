@@ -1234,6 +1234,7 @@ MAIN_NAV_OPTIONS = {
     "Historic Data": "Historic Data",
     "Holdings": "Holdings",
     "Calculators": "Calculators",
+    "Alerts": "Alerts",
     "Upload": "Upload",
 }
 if st.session_state.get("main_navigation") in {
@@ -1272,18 +1273,20 @@ if selected_main_tab == "Upload":
 
         if uploaded_kite_holdings_file is not None:
             try:
-                kite_holdings_df = _read_uploaded_file(uploaded_kite_holdings_file)
-                _cache_ltp_by_symbol(kite_holdings_df)
-                as_of = pd.Timestamp.now().isoformat()
-                snapshot = portfolio_streamlit.build_portfolio_terminal_snapshot(
-                    kite_holdings_df,
-                    _holdings_breakdown_state_df(),
-                    as_of=as_of,
-                )
+                with st.spinner("Processing uploaded holdings..."):
+                    kite_holdings_df = _read_uploaded_file(uploaded_kite_holdings_file)
+                    _cache_ltp_by_symbol(kite_holdings_df)
+                    as_of = pd.Timestamp.now().isoformat()
+                    snapshot = portfolio_streamlit.build_portfolio_terminal_snapshot(
+                        kite_holdings_df,
+                        _holdings_breakdown_state_df(),
+                        as_of=as_of,
+                    )
                 render_portfolio_terminal(snapshot, key="uploaded_portfolio_terminal_component")
                 if st.checkbox("Show holdings breakdown", key="show_upload_kite_holdings_breakdown"):
                     if _holdings_breakdown_state_df().empty:
-                        _load_holdings_breakdown_state()
+                        with st.spinner("Loading holdings breakdown..."):
+                            _load_holdings_breakdown_state()
                     display_holdings_breakdown_df(_holdings_breakdown_state_df())
             except ImportError as exc:
                 st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
@@ -1301,15 +1304,16 @@ if selected_main_tab == "Upload":
 
         if uploaded_brkholdings_file is not None:
             try:
-                brkdown_df = _read_uploaded_file(uploaded_brkholdings_file)
-                upload_columns = _mapped_holdings_upload_columns(brkdown_df)
-                #print("holdings breakdown upload columns:\n", upload_columns)
-                #print("holdings breakdown before cleaning:\n", brkdown_df.head())
-                holdings_breakdown_df = clean_holdings_breakdown_for_supabase(brkdown_df)
+                with st.spinner("Processing uploaded breakdown..."):
+                    brkdown_df = _read_uploaded_file(uploaded_brkholdings_file)
+                    upload_columns = _mapped_holdings_upload_columns(brkdown_df)
+                    #print("holdings breakdown upload columns:\n", upload_columns)
+                    #print("holdings breakdown before cleaning:\n", brkdown_df.head())
+                    holdings_breakdown_df = clean_holdings_breakdown_for_supabase(brkdown_df)
 
-                #print("holdings breakdown after cleaning:\n", holdings_breakdown_df.head())
+                    #print("holdings breakdown after cleaning:\n", holdings_breakdown_df.head())
 
-                upsert_holdings_breakdown_in_supabase(holdings_breakdown_df, upload_columns)
+                    upsert_holdings_breakdown_in_supabase(holdings_breakdown_df, upload_columns)
                 if "symbol" in holdings_breakdown_df.columns:
                     affected_symbols_to_refresh.extend(
                         holdings_breakdown_df["symbol"].dropna().astype(str).str.upper().str.strip().unique().tolist()
@@ -1330,7 +1334,8 @@ if selected_main_tab == "Upload":
 
         if affected_symbols_to_refresh:
             try:
-                _refresh_holdings_breakdown_state_for_symbols(affected_symbols_to_refresh)
+                with st.spinner("Refreshing holdings breakdown..."):
+                    _refresh_holdings_breakdown_state_for_symbols(affected_symbols_to_refresh)
                 st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
             except Exception as exc:
                 st.warning(f"Could not refresh holdings breakdown from Supabase: {exc}")
@@ -1339,7 +1344,8 @@ if selected_main_tab == "Holdings":
     fetch_holdings_col, holdings_ltp_col = st.columns([1, 3], vertical_alignment="center")
     with fetch_holdings_col:
         if st.button("Fetch Holdings", type="primary"):
-            fetch_and_display_holdings()#get holdings from kite,
+            with st.spinner("Fetching holdings and analytics..."):
+                fetch_and_display_holdings()#get holdings from kite,
     with holdings_ltp_col:
         _live_ltp_refreshed_caption("kite_holdings_ltp_refreshed_at")
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
@@ -1388,17 +1394,18 @@ if selected_main_tab == "Holdings":
                 st.warning("Fetch holdings before loading returns.")
             else:
                 try:
-                    returns_kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
-                    returns_df, _, returns_failed_symbols, _ = build_historic_dashboard_frames(
-                        returns_kite,
-                        token_rows,
-                        st.session_state.get("kite_holdings_as_of_date") or datetime.now().date().isoformat(),
-                        symbol_key="tradingsymbol",
-                        token_key="instrument_token",
-                        ltp_key="last_price",
-                        include_close_prices=False,
-                        include_ladders=False,
-                    )
+                    with st.spinner("Loading holdings returns..."):
+                        returns_kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
+                        returns_df, _, returns_failed_symbols, _ = build_historic_dashboard_frames(
+                            returns_kite,
+                            token_rows,
+                            st.session_state.get("kite_holdings_as_of_date") or datetime.now().date().isoformat(),
+                            symbol_key="tradingsymbol",
+                            token_key="instrument_token",
+                            ltp_key="last_price",
+                            include_close_prices=False,
+                            include_ladders=False,
+                        )
                     st.session_state["kite_holdings_returns_df"] = returns_df
                     if returns_failed_symbols:
                         st.warning(
@@ -1447,6 +1454,10 @@ if selected_main_tab == "Calculators":
     render_calculators_terminal(key="calculators_terminal_component")
 
 
+if selected_main_tab == "Alerts":
+    render_alerts_tab()
+
+
 if selected_main_tab == "Historic Data":
     if "historic_tickers_input" not in st.session_state:
         st.session_state["historic_tickers_input"] = ""
@@ -1472,11 +1483,19 @@ if selected_main_tab == "Historic Data":
                 key="historic_momentum_benchmark",
                 help="Used for relative strength in the Quant Momentum score.",
             )
-        if selected_index != "Custom":
+        previous_selected_index = st.session_state.get("historic_previous_selected_index")
+        if selected_index == "Custom":
+            if previous_selected_index != "Custom":
+                st.session_state["historic_tickers_input"] = ""
+                st.session_state["historic_previous_selected_index"] = selected_index
+                st.rerun()
+        else:
             selected_constituents = indices[selected_index]
             if st.session_state["historic_tickers_input"] != selected_constituents:
                 st.session_state["historic_tickers_input"] = selected_constituents
+                st.session_state["historic_previous_selected_index"] = selected_index
                 st.rerun()
+        st.session_state["historic_previous_selected_index"] = selected_index
     else:
         benchmark_symbol = st.text_input(
             "Momentum benchmark",
@@ -1634,8 +1653,8 @@ if selected_main_tab == "Historic Data":
         #if benchmark_used and not momentum_df.empty:
         #    st.caption(f"Relative strength benchmark: {benchmark_used}")
 
-        tab_analytics, tab_returns, tab_correlation, tab_alerts = st.tabs(
-            ["Analytics", "Returns", "Correlation", "Alerts"]
+        tab_analytics, tab_returns, tab_correlation = st.tabs(
+            ["Analytics", "Returns", "Correlation"]
         )
         with tab_analytics:
             historic_ladder_highlight_symbols = _summary_ticker_accents(
@@ -1674,15 +1693,16 @@ if selected_main_tab == "Historic Data":
                     st.warning("Fetch a historic dashboard before loading returns.")
                 else:
                     try:
-                        returns_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
-                        returns_df, _, returns_failed_symbols, _ = build_historic_dashboard_frames(
-                            returns_kite,
-                            token_rows,
-                            st.session_state.get("historic_as_of_date") or datetime.now().date().isoformat(),
-                            live_ltp_by_symbol=st.session_state.get("historic_live_ltp_by_symbol", {}),
-                            include_close_prices=False,
-                            include_ladders=False,
-                        )
+                        with st.spinner("Loading historical returns..."):
+                            returns_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
+                            returns_df, _, returns_failed_symbols, _ = build_historic_dashboard_frames(
+                                returns_kite,
+                                token_rows,
+                                st.session_state.get("historic_as_of_date") or datetime.now().date().isoformat(),
+                                live_ltp_by_symbol=st.session_state.get("historic_live_ltp_by_symbol", {}),
+                                include_close_prices=False,
+                                include_ladders=False,
+                            )
                         st.session_state["historic_returns_df"] = returns_df
                         if returns_failed_symbols:
                             st.warning(
@@ -1708,14 +1728,15 @@ if selected_main_tab == "Historic Data":
                     st.warning("Fetch a historic dashboard before loading correlation.")
                 else:
                     try:
-                        correlation_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
-                        _, _, correlation_failed_symbols, close_prices_df = build_historic_dashboard_frames(
-                            correlation_kite,
-                            token_rows,
-                            st.session_state.get("historic_as_of_date") or datetime.now().date().isoformat(),
-                            include_returns=False,
-                            include_ladders=False,
-                        )
+                        with st.spinner("Loading correlation data..."):
+                            correlation_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
+                            _, _, correlation_failed_symbols, close_prices_df = build_historic_dashboard_frames(
+                                correlation_kite,
+                                token_rows,
+                                st.session_state.get("historic_as_of_date") or datetime.now().date().isoformat(),
+                                include_returns=False,
+                                include_ladders=False,
+                            )
                         st.session_state["historic_close_prices_df"] = close_prices_df
                         if correlation_failed_symbols:
                             st.warning(
@@ -1733,12 +1754,6 @@ if selected_main_tab == "Historic Data":
                 display_correlation_matrix(
                     st.session_state.get("historic_close_prices_df", pd.DataFrame())
                 )
-        with tab_alerts:
-            render_alerts_tab()
-    else:
-        (tab_alerts,) = st.tabs(["Alerts"])
-        with tab_alerts:
-            render_alerts_tab()
 
 
 
