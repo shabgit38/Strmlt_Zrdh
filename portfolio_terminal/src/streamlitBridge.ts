@@ -2,6 +2,7 @@ type StreamlitRenderArgs = {
   snapshot?: unknown;
   screen?: unknown;
   liveData?: unknown;
+  alertsData?: unknown;
 };
 
 const STREAMLIT_READY = "streamlit:componentReady";

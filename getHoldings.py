@@ -24,6 +24,7 @@ from kite_analytics import (
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
 from momentum_score import calculate_momentum_scores_from_kite
 from portfolio_terminal_component import render_calculators_terminal, render_portfolio_terminal
+from setAlerts import render_alerts_tab
 from stock_memory_cards import _merge_stock_notes, render_stock_memory_card
 from top_gainers_losers import (
     build_day_movers_summary,
@@ -1633,8 +1634,8 @@ if selected_main_tab == "Historic Data":
         #if benchmark_used and not momentum_df.empty:
         #    st.caption(f"Relative strength benchmark: {benchmark_used}")
 
-        tab_analytics, tab_returns, tab_correlation = st.tabs(
-            ["Analytics", "Returns", "Correlation"]
+        tab_analytics, tab_returns, tab_correlation, tab_alerts = st.tabs(
+            ["Analytics", "Returns", "Correlation", "Alerts"]
         )
         with tab_analytics:
             historic_ladder_highlight_symbols = _summary_ticker_accents(
@@ -1732,6 +1733,12 @@ if selected_main_tab == "Historic Data":
                 display_correlation_matrix(
                     st.session_state.get("historic_close_prices_df", pd.DataFrame())
                 )
+        with tab_alerts:
+            render_alerts_tab()
+    else:
+        (tab_alerts,) = st.tabs(["Alerts"])
+        with tab_alerts:
+            render_alerts_tab()
 
 
 

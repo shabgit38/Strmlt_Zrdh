@@ -82,6 +82,16 @@ def render_calculators_terminal(*, key: str | None = None) -> None:
     st.rerun()
 
 
+def render_alerts_terminal(alerts_data: dict[str, Any], *, key: str | None = None) -> Any:
+    return _portfolio_terminal(
+        snapshot=None,
+        screen="alerts",
+        alertsData=alerts_data,
+        key=key,
+        default=None,
+    )
+
+
 def _missing_spots() -> list[dict[str, Any]]:
     return [{"symbol": symbol, "spot": None, "status": "Missing"} for symbol in _INDEX_SPOT_INSTRUMENTS]
 

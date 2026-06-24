@@ -1,30 +1,33 @@
 import { useEffect, useState } from "react";
 import { PieChart } from "lucide-react";
 import { loadPortfolioSnapshot } from "./api/portfolioApi";
+import { AlertsScreen } from "./components/AlertsScreen";
 import { CalculatorsScreen } from "./components/CalculatorsScreen";
 import { GroupedHoldings, sectorAnchorId } from "./components/GroupedHoldings";
 import { MtfHoldingsTable } from "./components/MtfHoldingsTable";
 import { SectorPieChart } from "./components/SectorPieChart";
 import { SectorSummaryTable } from "./components/SectorSummaryTable";
 import { formatMoney, formatPct, signedClass } from "./format";
+import type { AlertsData } from "./alerts/types";
 import type { CalculatorsLiveData } from "./calculators/types";
 import type { Holding, PortfolioSnapshot } from "./types";
 
 type AppProps = {
   streamlitSnapshot?: PortfolioSnapshot | null;
   streamlitMode?: boolean;
-  screen?: "portfolio" | "calculators";
+  screen?: "portfolio" | "calculators" | "alerts";
   liveData?: CalculatorsLiveData | null;
+  alertsData?: AlertsData | null;
 };
 
-export function App({ streamlitSnapshot, streamlitMode = false, screen = "portfolio", liveData = null }: AppProps) {
+export function App({ streamlitSnapshot, streamlitMode = false, screen = "portfolio", liveData = null, alertsData = null }: AppProps) {
   const [snapshot, setSnapshot] = useState<PortfolioSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedSector, setSelectedSector] = useState<string | null>(null);
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
 
   useEffect(() => {
-    if (screen === "calculators") {
+    if (screen === "calculators" || screen === "alerts") {
       return;
     }
 
@@ -51,6 +54,10 @@ export function App({ streamlitSnapshot, streamlitMode = false, screen = "portfo
 
   if (screen === "calculators") {
     return <CalculatorsScreen liveData={liveData} />;
+  }
+
+  if (screen === "alerts") {
+    return <AlertsScreen data={alertsData} />;
   }
 
   function handleSelectHolding(sector: string, holding: Holding) {
