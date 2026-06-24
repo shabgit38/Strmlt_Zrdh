@@ -297,9 +297,9 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
                   <HeaderCell align="right">Open Qty</HeaderCell>
                   <HeaderCell align="right">Avg Price</HeaderCell>
                   <HeaderCell align="right">LTP</HeaderCell>
-                  <HeaderCell align="right">DTE</HeaderCell>
-                  <HeaderCell align="right">Breakeven</HeaderCell>
-                  <HeaderCell align="right">Dist Spot</HeaderCell>
+                  <HeaderCell align="right" highlight="amber">DTE</HeaderCell>
+                  <HeaderCell align="right" highlight="amber">Breakeven</HeaderCell>
+                  <HeaderCell align="right" highlight="amber">Dist Spot</HeaderCell>
                   <HeaderCell>Alert</HeaderCell>
                   <HeaderCell align="right">Invested</HeaderCell>
                   <HeaderCell align="right">Exit</HeaderCell>
@@ -316,9 +316,9 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
                     <InputCell align="right" widthClass="w-16" value={row.openQty} onChange={(value) => updateOptionRow(row.id, "openQty", value)} />
                     <InputCell align="right" widthClass="w-20" value={row.avgPrice} onChange={(value) => updateOptionRow(row.id, "avgPrice", value)} />
                     <ValueCell align="right" value={row.ltp || "-"} />
-                    <ValueCell align="right" value={formatInteger(row.daysExpiry)} />
-                    <ValueCell align="right" value={formatNullablePrice(row.breakeven)} />
-                    <ValueCell align="right" value={row.distSpot || "-"} />
+                    <ValueCell align="right" highlight="amber" value={formatInteger(row.daysExpiry)} />
+                    <ValueCell align="right" highlight="amber" value={formatNullablePrice(row.breakeven)} />
+                    <ValueCell align="right" highlight="amber" value={row.distSpot || "-"} />
                     <td className={`px-3 py-2 text-sm font-semibold ${alertClass(row.alertTone)}`}>{row.alert}</td>
                     <ValueCell align="right" value={formatNullableMoney(row.invested)} />
                     <InputCell align="right" widthClass="w-20" value={row.exitPrice} onChange={(value) => updateOptionRow(row.id, "exitPrice", value)} />
@@ -495,9 +495,9 @@ function ExistingPositionsSection({
               <HeaderCell align="right">Avg</HeaderCell>
               <HeaderCell align="right">LTP</HeaderCell>
               <HeaderCell align="right">Strike</HeaderCell>
-              <HeaderCell align="right">Breakeven</HeaderCell>
-              <HeaderCell align="right">Dist Spot</HeaderCell>
-              <HeaderCell>DTE</HeaderCell>
+              <HeaderCell align="right" highlight="amber">Breakeven</HeaderCell>
+              <HeaderCell align="right" highlight="amber">Dist Spot</HeaderCell>
+              <HeaderCell align="right" highlight="amber">DTE</HeaderCell>
               <HeaderCell align="right">Invested</HeaderCell>
               <HeaderCell align="right">P&L</HeaderCell>
               <HeaderCell align="right">P&L %</HeaderCell>
@@ -518,9 +518,9 @@ function ExistingPositionsSection({
                   <ValueCell align="right" value={formatPrice(position.averagePrice)} />
                   <ValueCell align="right" value={formatPrice(position.lastPrice)} />
                   <ValueCell align="right" value={position.strike === undefined ? "-" : formatPrice(position.strike)} />
-                  <ValueCell align="right" value={formatNullablePrice(metrics.breakeven)} />
-                  <ValueCell align="right" value={metrics.distSpot || "-"} />
-                  <ValueCell align="right" value={metrics.dte === null ? "-" : String(metrics.dte)} />
+                  <ValueCell align="right" highlight="amber" value={formatNullablePrice(metrics.breakeven)} />
+                  <ValueCell align="right" highlight="amber" value={metrics.distSpot || "-"} />
+                  <ValueCell align="right" highlight="amber" value={metrics.dte === null ? "-" : String(metrics.dte)} />
                   <ValueCell align="right" value={formatMoney(metrics.invested)} />
                   <ValueCell align="right" value={formatMoney(position.pnl)} tone={position.pnl} />
                   <ValueCell align="right" value={formatNullablePct(metrics.pnlPct)} tone={metrics.pnlPct} />
@@ -729,8 +729,20 @@ function SectionHeader({ title, meta = "", onAdd }: { title: string; meta?: stri
   );
 }
 
-function HeaderCell({ children = null, align = "left" }: { children?: ReactNode; align?: "left" | "right" }) {
-  return <th className={`whitespace-nowrap px-3 py-2 ${align === "right" ? "text-right" : "text-left"}`}>{children}</th>;
+function HeaderCell({
+  children = null,
+  align = "left",
+  highlight,
+}: {
+  children?: ReactNode;
+  align?: "left" | "right";
+  highlight?: "amber";
+}) {
+  return (
+    <th className={`whitespace-nowrap px-3 py-2 ${highlightClass(highlight)} ${align === "right" ? "text-right" : "text-left"}`}>
+      {children}
+    </th>
+  );
 }
 
 function InputCell({
@@ -764,21 +776,28 @@ function InputCell({
 function ValueCell({
   value,
   align = "left",
+  highlight,
   tone,
 }: {
   value: string;
   align?: "left" | "right";
+  highlight?: "amber";
   tone?: number | null;
 }) {
   return (
     <td
-      className={`whitespace-nowrap px-3 py-2 tabular-nums ${align === "right" ? "text-right" : "text-left"} ${
+      className={`whitespace-nowrap px-3 py-2 tabular-nums ${highlightClass(highlight)} ${align === "right" ? "text-right" : "text-left"} ${
         tone === undefined || tone === null ? "text-terminal-ink" : signedClass(tone)
       }`}
     >
       {value}
     </td>
   );
+}
+
+function highlightClass(highlight?: "amber") {
+  if (highlight === "amber") return "bg-amber-100 dark:bg-amber-400/20";
+  return "";
 }
 
 function ActionCell({ onRemove, disabled }: { onRemove: () => void; disabled: boolean }) {
