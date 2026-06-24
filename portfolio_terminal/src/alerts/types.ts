@@ -1,4 +1,4 @@
-export type AlertStatusFilter = "all" | "enabled" | "disabled" | "deleted";
+export type AlertStatusFilter = "active" | "enabled" | "disabled";
 
 export type KiteAlert = {
   uuid: string;
@@ -27,11 +27,6 @@ export type AlertsData = {
   loaded?: boolean;
   message?: string;
   error?: string;
-  debug?: string;
-  fetchMeta?: {
-    pages?: Array<{ page: number; count: number }>;
-    responseShapes?: unknown[];
-  };
   lastAction?: string;
   lastRequestId?: string;
 };

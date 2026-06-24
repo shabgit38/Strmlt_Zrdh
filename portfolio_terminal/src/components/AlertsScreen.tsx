@@ -23,14 +23,15 @@ const EMPTY_FORM: AlertFormValues = {
 };
 
 export function AlertsScreen({ data }: { data?: AlertsData | null }) {
-  const [statusFilter, setStatusFilter] = useState<AlertStatusFilter>(data?.statusFilter ?? "all");
+  const [statusFilter, setStatusFilter] = useState<AlertStatusFilter>(data?.statusFilter ?? "active");
   const [sortKey, setSortKey] = useState<SortKey>("status");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [editingUuid, setEditingUuid] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<AlertFormValues>(EMPTY_FORM);
+  const [searchText, setSearchText] = useState("");
 
   useEffect(() => {
-    setStatusFilter(data?.statusFilter ?? "all");
+    setStatusFilter(data?.statusFilter ?? "active");
   }, [data?.statusFilter]);
 
   useEffect(() => {
@@ -38,9 +39,14 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
   }, [data, editingUuid, formValues]);
 
   const alerts = data?.alerts ?? [];
+  const uniqueAlerts = useMemo(() => dedupeAlertsByUuid(alerts), [alerts]);
+  const visibleAlerts = useMemo(
+    () => uniqueAlerts.filter((alert) => matchesStatusFilter(alert, statusFilter)).filter((alert) => matchesSearch(alert, searchText)),
+    [uniqueAlerts, statusFilter, searchText],
+  );
   const sortedAlerts = useMemo(
-    () => [...alerts].sort((left, right) => compareAlerts(left, right, sortKey, sortDirection)),
-    [alerts, sortKey, sortDirection],
+    () => [...visibleAlerts].sort((left, right) => compareAlerts(left, right, sortKey, sortDirection)),
+    [visibleAlerts, sortKey, sortDirection],
   );
 
   function sendAction(action: "fetch" | "create" | "modify" | "delete", payload: Record<string, unknown> = {}) {
@@ -48,7 +54,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
       type: "alerts",
       action,
       requestId: `${Date.now()}-${action}`,
-      statusFilter,
+      statusFilter: "active",
       payload,
     });
   }
@@ -100,7 +106,9 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-wide text-terminal-muted">Alerts</h2>
             <div className="mt-1 text-xs text-terminal-muted">
-              {data?.loaded ? `${alerts.length} alert${alerts.length === 1 ? "" : "s"} loaded` : "Fetch alerts to load Kite data"}
+              {data?.loaded
+                ? `${sortedAlerts.length} shown from ${uniqueAlerts.length} unique alert${uniqueAlerts.length === 1 ? "" : "s"}`
+                : "Fetch alerts to load Kite data"}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -109,10 +117,9 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value as AlertStatusFilter)}
             >
-              <option value="all">All</option>
-              <option value="disabled">Disabled</option>
+              <option value="active">Active</option>
               <option value="enabled">Enabled</option>
-              <option value="deleted">Deleted</option>
+              <option value="disabled">Disabled</option>
             </select>
             <button
               className="inline-flex items-center gap-2 rounded-md border border-terminal-line px-3 py-2 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover"
@@ -125,21 +132,16 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
           </div>
         </section>
 
-        {data?.error ? <div className="rounded-md border border-terminal-avoid bg-terminal-panel p-3 text-sm font-semibold text-terminal-avoid">{data.error}</div> : null}
-        {data?.message ? <div className="rounded-md border border-terminal-line bg-terminal-panel p-3 text-sm font-semibold text-terminal-entry">{data.message}</div> : null}
-        {data?.debug ? (
-          <div className="rounded-md border border-terminal-line bg-terminal-panel p-3 text-xs text-terminal-muted">
-            <span className="font-semibold text-terminal-ink">{data.debug}</span>
-            {data.fetchMeta?.pages?.length ? (
-              <span className="ml-2">
-                Pages: {data.fetchMeta.pages.map((page) => `${page.page}:${page.count}`).join(", ")}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(22rem,0.7fr)]">
+        <section className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(22rem,0.7fr)]">
           <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
+            <div className="border-b border-terminal-line bg-terminal-panel-alt px-3 py-2">
+              <input
+                className="w-full rounded-md border border-terminal-line bg-terminal-panel px-3 py-2 text-sm font-semibold text-terminal-ink outline-none focus:border-terminal-watch"
+                placeholder="Search alerts by symbol, name, status, trigger, or UUID"
+                value={searchText}
+                onChange={(event) => setSearchText(event.target.value)}
+              />
+            </div>
             <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
@@ -201,6 +203,8 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 </button>
               ) : null}
             </div>
+            {data?.error ? <div className="mb-3 rounded-md border border-terminal-avoid bg-terminal-panel-alt p-3 text-sm font-semibold text-terminal-avoid">{data.error}</div> : null}
+            {data?.message ? <div className="mb-3 rounded-md border border-terminal-line bg-terminal-panel-alt p-3 text-sm font-semibold text-terminal-entry">{data.message}</div> : null}
             <div className="grid gap-3">
               <TextField label="Name" value={formValues.name} onChange={(value) => setFormValues((current) => ({ ...current, name: value }))} />
               <div className="grid grid-cols-[0.8fr_1.2fr] gap-2">
@@ -286,6 +290,62 @@ function compareAlerts(left: KiteAlert, right: KiteAlert, sortKey: SortKey, dire
   const leftValue = sortKey === "symbol" ? left.lhs_tradingsymbol : String(left[sortKey] ?? "");
   const rightValue = sortKey === "symbol" ? right.lhs_tradingsymbol : String(right[sortKey] ?? "");
   return leftValue.localeCompare(rightValue) * multiplier;
+}
+
+function dedupeAlertsByUuid(alerts: KiteAlert[]) {
+  const seenKeys = new Set<string>();
+  return alerts.filter((alert) => {
+    const dedupeKey = alertDedupeKey(alert);
+    if (seenKeys.has(dedupeKey)) return false;
+    seenKeys.add(dedupeKey);
+    return true;
+  });
+}
+
+function alertDedupeKey(alert: KiteAlert) {
+  const uuid = String(alert.uuid ?? "").trim();
+  if (uuid) return `uuid:${uuid}`;
+  return [
+    alert.name,
+    alert.status,
+    alert.lhs_exchange,
+    alert.lhs_tradingsymbol,
+    alert.lhs_attribute,
+    alert.operator,
+    alert.rhs_type,
+    alert.rhs_constant,
+    alert.rhs_exchange,
+    alert.rhs_tradingsymbol,
+    alert.rhs_attribute,
+  ]
+    .map((value) => String(value ?? "").trim().toLowerCase())
+    .join("|");
+}
+
+function matchesStatusFilter(alert: KiteAlert, statusFilter: AlertStatusFilter) {
+  const status = String(alert.status ?? "").toLowerCase().trim();
+  if (statusFilter === "active") return status === "enabled" || status === "disabled";
+  return status === statusFilter;
+}
+
+function matchesSearch(alert: KiteAlert, searchText: string) {
+  const query = searchText.trim().toLowerCase();
+  if (!query) return true;
+  return [
+    alert.uuid,
+    alert.name,
+    alert.status,
+    alert.lhs_exchange,
+    alert.lhs_tradingsymbol,
+    alert.operator,
+    alert.rhs_type,
+    alert.rhs_constant,
+    alert.rhs_exchange,
+    alert.rhs_tradingsymbol,
+    alert.rhs_attribute,
+  ]
+    .map((value) => String(value ?? "").toLowerCase())
+    .some((value) => value.includes(query));
 }
 
 function statusRank(status: string) {

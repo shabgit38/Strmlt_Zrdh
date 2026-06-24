@@ -15,11 +15,10 @@ from portfolio_terminal_component import render_alerts_terminal
 ALERTS_STATE_KEY = "kite_alerts_data"
 ALERTS_LAST_REQUEST_ID_KEY = "kite_alerts_last_request_id"
 ALERTS_LOG_STATE_KEY = "kite_alerts_fetch_log"
-ALERTS_DEFAULT_STATUS = "all"
+ALERTS_DEFAULT_STATUS = "active"
 KITE_ALERTS_ENDPOINT = "https://api.kite.trade/alerts"
 ALERTS_HTTP_TIMEOUT_SECONDS = 10
-ALERTS_PAGE_SIZE = 100
-ALERTS_MAX_PAGES = 5
+ALERTS_DEBUG_LOG_ENABLED = False
 ALERT_FIELD_NAMES = [
     "name",
     "type",
@@ -39,7 +38,7 @@ def render_alerts_tab(*, key: str = "alerts_terminal_component") -> None:
     if ALERTS_STATE_KEY not in st.session_state:
         st.session_state[ALERTS_STATE_KEY] = _initial_alerts_data()
 
-    _render_alerts_log()
+    _render_alerts_log_if_enabled()
     component_value = render_alerts_terminal(st.session_state[ALERTS_STATE_KEY], key=key)
     if not _is_alerts_request(component_value):
         _log_alerts_step_once("Waiting for alerts request from React.")
@@ -76,9 +75,11 @@ def _is_alerts_request(value: Any) -> bool:
 def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
     previous_data = st.session_state.get(ALERTS_STATE_KEY, _initial_alerts_data())
     action = str(request.get("action") or "fetch")
+    requested_status_filter = str(request.get("statusFilter") or previous_data.get("statusFilter") or ALERTS_DEFAULT_STATUS)
+    fetch_status_filter = ALERTS_DEFAULT_STATUS if action in {"create", "modify", "delete"} else requested_status_filter
     next_data = {
         "alerts": list(previous_data.get("alerts") or []),
-        "statusFilter": str(request.get("statusFilter") or previous_data.get("statusFilter") or ALERTS_DEFAULT_STATUS),
+        "statusFilter": fetch_status_filter,
         "loaded": bool(previous_data.get("loaded")),
         "lastAction": action,
         "lastRequestId": str(request.get("requestId") or ""),
@@ -109,61 +110,107 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
             delete_alert(api_key, st.session_state.access_token, uuid)
             next_data["message"] = "Alert deleted."
 
-        _log_alerts_step(f"Fetching alerts list with status_filter={next_data['statusFilter']}.")
-        alerts, fetch_meta = get_alerts(
-            api_key,
-            st.session_state.access_token,
-            None if next_data["statusFilter"] == "all" else next_data["statusFilter"],
-        )
+        _log_alerts_step(f"Fetching alerts list with status_filter={fetch_status_filter}.")
+        alerts, fetch_meta = get_alerts(api_key, st.session_state.access_token, fetch_status_filter)
         _log_alerts_step(f"Parsed {len(alerts)} alert row(s) from Kite response.")
-        next_data["alerts"] = enrich_alerts_with_ltp(kite, alerts)
+        next_data["alerts"] = _dedupe_alerts(enrich_alerts_with_ltp(kite, alerts))
         _log_alerts_step(f"Prepared {len(next_data['alerts'])} alert row(s) for React table.")
-        next_data["fetchMeta"] = fetch_meta
-        next_data["debug"] = (
-            f"{action} handled; Kite returned {len(alerts)} alert(s); "
-            f"status filter: {next_data['statusFilter']}"
-        )
+        if ALERTS_DEBUG_LOG_ENABLED:
+            next_data["fetchMeta"] = fetch_meta
+            next_data["debug"] = (
+                f"{action} handled; Kite returned {len(alerts)} alert(s); "
+                f"status filter: {fetch_status_filter}"
+            )
         next_data["loaded"] = True
         next_data.pop("error", None)
+        if not ALERTS_DEBUG_LOG_ENABLED:
+            next_data.pop("fetchMeta", None)
+            next_data.pop("debug", None)
     except Exception as exc:
         if is_token_error(exc):
             clear_auth_state()
         next_data["error"] = str(exc)
-        next_data["debug"] = f"{action} failed before table refresh."
+        if ALERTS_DEBUG_LOG_ENABLED:
+            next_data["debug"] = f"{action} failed before table refresh."
         _log_alerts_step(f"Alerts request failed: {exc}")
     return next_data
 
 
 def get_alerts(api_key: str, access_token: str, status: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    page = 1
-    alerts: list[dict[str, Any]] = []
-    meta: dict[str, Any] = {"pages": [], "responseShapes": [], "stopReason": ""}
-    while page <= ALERTS_MAX_PAGES:
-        query: dict[str, Any] = {"page": page, "page_size": ALERTS_PAGE_SIZE}
-        if status:
-            query["status"] = status
-        endpoint = f"{KITE_ALERTS_ENDPOINT}?{urlencode(query)}"
-        _log_alerts_step(
-            f"Calling Kite Alerts API page={page}, page_size={ALERTS_PAGE_SIZE}, "
-            f"status={status or 'all'}, timeout={ALERTS_HTTP_TIMEOUT_SECONDS}s."
-        )
-        response = _kite_alerts_request(api_key, access_token, endpoint)
-        page_alerts = _extract_alert_rows(response)
-        meta["pages"].append({"page": page, "count": len(page_alerts)})
-        meta["responseShapes"].append(_response_shape(response))
-        _log_alerts_step(
-            f"Kite page {page} response shape={meta['responseShapes'][-1]}; parsed_count={len(page_alerts)}."
-        )
-        alerts.extend(page_alerts)
-        if len(page_alerts) < ALERTS_PAGE_SIZE:
-            meta["stopReason"] = f"page {page} returned fewer than {ALERTS_PAGE_SIZE} rows"
-            _log_alerts_step(f"Stopping alerts pagination: {meta['stopReason']}.")
-            break
-        page += 1
-    if page > ALERTS_MAX_PAGES:
-        meta["stopReason"] = f"max pages reached ({ALERTS_MAX_PAGES})"
-        _log_alerts_step(f"Stopping alerts pagination: {meta['stopReason']}.")
-    return alerts, meta
+    if status in (None, "", "active"):
+        enabled_alerts, enabled_meta = _get_alerts_by_status(api_key, access_token, "enabled")
+        disabled_alerts, disabled_meta = _get_alerts_by_status(api_key, access_token, "disabled")
+        active_alerts = _dedupe_alerts(enabled_alerts + disabled_alerts)
+        return active_alerts, {
+            "status": "active",
+            "statuses": {
+                "enabled": enabled_meta,
+                "disabled": disabled_meta,
+            },
+            "pages": list(enabled_meta.get("pages", [])) + list(disabled_meta.get("pages", [])),
+            "responseShapes": list(enabled_meta.get("responseShapes", [])) + list(disabled_meta.get("responseShapes", [])),
+            "stopReason": f"enabled: {enabled_meta.get('stopReason', '-')}; disabled: {disabled_meta.get('stopReason', '-')}",
+        }
+
+    alerts, meta = _get_alerts_by_status(api_key, access_token, status)
+    return _dedupe_alerts(alerts), meta
+
+
+def _get_alerts_by_status(api_key: str, access_token: str, status: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    query = {"status": status}
+    endpoint = f"{KITE_ALERTS_ENDPOINT}?{urlencode(query)}"
+    _log_alerts_step(f"Calling Kite Alerts API status={status}, timeout={ALERTS_HTTP_TIMEOUT_SECONDS}s.")
+    response = _kite_alerts_request(api_key, access_token, endpoint)
+    response_alerts = _extract_alert_rows(response)
+    filtered_alerts = [
+        alert
+        for alert in response_alerts
+        if str(alert.get("status") or "").lower().strip() == status
+    ]
+    meta: dict[str, Any] = {
+        "status": status,
+        "pages": [{"page": 1, "count": len(filtered_alerts), "rawCount": len(response_alerts)}],
+        "responseShapes": [_response_shape(response)],
+        "stopReason": "single status fetch",
+    }
+    _log_alerts_step(
+        f"Kite status={status} response raw_count={len(response_alerts)}, filtered_count={len(filtered_alerts)}."
+    )
+    return filtered_alerts, meta
+
+
+def _dedupe_alerts(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped_alerts: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for alert in alerts:
+        dedupe_key = _alert_dedupe_key(alert)
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        deduped_alerts.append(alert)
+    return deduped_alerts
+
+
+def _alert_dedupe_key(alert: dict[str, Any]) -> str:
+    uuid = str(alert.get("uuid") or "").strip()
+    if uuid:
+        return f"uuid:{uuid}"
+    return "fallback:" + "|".join(
+        str(alert.get(field_name) or "").strip().lower()
+        for field_name in [
+            "name",
+            "status",
+            "lhs_exchange",
+            "lhs_tradingsymbol",
+            "lhs_attribute",
+            "operator",
+            "rhs_type",
+            "rhs_constant",
+            "rhs_exchange",
+            "rhs_tradingsymbol",
+            "rhs_attribute",
+        ]
+    )
 
 
 def _extract_alert_rows(response: dict[str, Any]) -> list[dict[str, Any]]:
@@ -312,19 +359,26 @@ def _kite_alerts_request(
 
 
 def _log_alerts_step(message: str) -> None:
+    if not ALERTS_DEBUG_LOG_ENABLED:
+        return
     logs = list(st.session_state.get(ALERTS_LOG_STATE_KEY, []))
     logs.append(message)
     st.session_state[ALERTS_LOG_STATE_KEY] = logs[-80:]
 
 
 def _log_alerts_step_once(message: str) -> None:
+    if not ALERTS_DEBUG_LOG_ENABLED:
+        return
     logs = list(st.session_state.get(ALERTS_LOG_STATE_KEY, []))
     if logs and logs[-1] == message:
         return
     _log_alerts_step(message)
 
 
-def _render_alerts_log() -> None:
+def _render_alerts_log_if_enabled() -> None:
+    if not ALERTS_DEBUG_LOG_ENABLED:
+        return
+
     logs = st.session_state.get(ALERTS_LOG_STATE_KEY, [])
     with st.expander("Alerts fetch log", expanded=True):
         if st.button("Clear alerts log", key="clear_alerts_fetch_log"):
