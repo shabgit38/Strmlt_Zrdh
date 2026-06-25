@@ -1245,7 +1245,6 @@ def _exited_holdings_summary_df(df: pd.DataFrame) -> pd.DataFrame:
         {
             "Symbol": exited_batches["symbol"],
             "Sector": exited_batches.get("sector", symbol_key.map(sector_by_symbol)).fillna(symbol_key.map(sector_by_symbol)),
-            "Exit Date": exited_batches.get("exit_date"),
             "Exit Qty": exit_qty,
             "Entry Price": entry_price,
             "Exit Price": exit_price,
@@ -1253,16 +1252,18 @@ def _exited_holdings_summary_df(df: pd.DataFrame) -> pd.DataFrame:
             "Exit Value": exit_value,
             "P&L": pnl,
             "P&L %": pnl_pct,
+            "Exit Date": exited_batches.get("exit_date"),
         }
     )
 
 
-def display_exited_holdings_summary(df: pd.DataFrame) -> None:
+def display_exited_holdings_summary(df: pd.DataFrame, *, show_header: bool = True) -> None:
     exited_df = _exited_holdings_summary_df(df)
     if exited_df.empty:
         return
 
-    st.subheader("Exited Holdings Summary")
+    if show_header:
+        st.subheader("Exited Holdings Summary")
     st.dataframe(
         _style_pnl_columns(exited_df),
         width="stretch",
@@ -1582,6 +1583,30 @@ def load_holdings_breakdown_from_supabase() -> pd.DataFrame:
     return _prepare_holdings_breakdown_df(records)
 
 
+def load_exited_holdings_breakdown_from_supabase() -> pd.DataFrame:
+    supabase_url, supabase_key, table_name = _get_supabase_holdings_config()
+    encoded_table_name = quote(table_name, safe="")
+    endpoint = (
+        f"{supabase_url}/rest/v1/{encoded_table_name}"
+        f"?select=*&holding_status=eq.{quote('Exited', safe='')}&order=id.asc"
+    )
+    headers = _supabase_headers(supabase_key)
+
+    request = Request(endpoint, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase exited holdings lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase exited holdings lookup failed: {exc.reason}") from exc
+
+    return _prepare_holdings_breakdown_df(records)
+
+
 def load_holdings_breakdown_for_symbols(symbols: list[str]) -> pd.DataFrame:
     normalized_symbols = sorted({str(symbol).upper().strip() for symbol in symbols if str(symbol).strip()})
     if not normalized_symbols:
@@ -1724,7 +1749,7 @@ def _refresh_holdings_breakdown_state_for_symbols(symbols: list[str]) -> pd.Data
     _set_holdings_breakdown_state(merged_df)
     return merged_df
 
-def display_holdings_breakdown_df(holdings_breakdown_df: pd.DataFrame) -> None:
+def display_holdings_breakdown_df(holdings_breakdown_df: pd.DataFrame, *, show_exited_summary: bool = True) -> None:
     if holdings_breakdown_df.empty:
         st.info("No holdings breakdown found in Supabase.")
         return
@@ -1753,7 +1778,8 @@ def display_holdings_breakdown_df(holdings_breakdown_df: pd.DataFrame) -> None:
             ltp_by_symbol=st.session_state.get("ltp_by_symbol", {}),
         )
 
-    display_exited_holdings_summary(holdings_breakdown_df)
+    if show_exited_summary:
+        display_exited_holdings_summary(holdings_breakdown_df)
 
 
 def display_supabase_holdings_breakdown(symbols: list[str] | None = None) -> None:

@@ -46,7 +46,9 @@ from getHldgBrk import (
     _set_holdings_breakdown_state,
     clean_holdings_breakdown_for_supabase,
     display_holdings_breakdown_df,
+    display_exited_holdings_summary,
     enrich_holdings_breakdown_with_ltp,
+    load_exited_holdings_breakdown_from_supabase,
     load_holdings_breakdown_for_holdings,
     upsert_holdings_breakdown_in_supabase,
 )
@@ -1226,6 +1228,44 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
         )
 
 
+def _holding_symbol_options(holdings_df: pd.DataFrame) -> list[str]:
+    if holdings_df.empty or "tradingsymbol" not in holdings_df.columns:
+        return []
+    return sorted(
+        {
+            str(symbol).upper().strip()
+            for symbol in holdings_df["tradingsymbol"].dropna()
+            if str(symbol).strip()
+        }
+    )
+
+
+def _filter_breakdown_for_holding(
+    holdings_breakdown_df: pd.DataFrame,
+    holdings_df: pd.DataFrame,
+    symbol: str,
+) -> pd.DataFrame:
+    symbol_key = _normalized_symbol_value(symbol)
+    if not symbol_key or holdings_breakdown_df.empty or "symbol" not in holdings_breakdown_df.columns:
+        return pd.DataFrame()
+
+    selected_rows = holdings_breakdown_df["symbol"].astype(str).str.upper().str.strip().eq(symbol_key)
+
+    if "isin" in holdings_breakdown_df.columns and "isin" in holdings_df.columns:
+        holding_rows = holdings_df[
+            holdings_df["tradingsymbol"].astype(str).str.upper().str.strip().eq(symbol_key)
+        ]
+        selected_isins = {
+            str(isin).upper().strip()
+            for isin in holding_rows["isin"].dropna()
+            if str(isin).strip()
+        }
+        if selected_isins:
+            selected_rows = selected_rows | holdings_breakdown_df["isin"].astype(str).str.upper().str.strip().isin(selected_isins)
+
+    return holdings_breakdown_df[selected_rows].copy()
+
+
 if "access_token" not in st.session_state:
     bootstrap_kite_app("Zerodha Holdings")
 
@@ -1323,14 +1363,6 @@ if selected_main_tab == "Upload":
                 st.error(f"Failed to read XLSX file. Install the missing dependency: {exc}")
             except Exception as exc:
                 st.error(f"Failed to upload holdings breakdown: {exc}")
-
-        try:
-            added_symbols = _render_add_holdings_breakdown_entries_form(
-                st.session_state.get("ltp_by_symbol", {})
-            )
-            affected_symbols_to_refresh.extend(added_symbols)
-        except Exception as exc:
-            st.error(f"Failed to add holdings breakdown entries: {exc}")
 
         if affected_symbols_to_refresh:
             try:
@@ -1431,10 +1463,86 @@ if selected_main_tab == "Holdings":
             st.warning(f"Could not load holdings breakdown from Supabase: {breakdown_error}")
         if kite_holdings_df is None:
             st.info("Fetch holdings to display holdings breakdown.")
-        elif not _holdings_breakdown_state_df().empty:
-            display_holdings_breakdown_df(_holdings_breakdown_state_df())
         else:
-            st.info("No holdings breakdown found in Supabase.")
+            holding_symbols = _holding_symbol_options(kite_holdings_df)
+            if not holding_symbols:
+                st.info("No holding symbols found.")
+            else:
+                selected_breakdown_symbol = st.selectbox(
+                    "Select a holding to edit/exit breakdown",
+                    holding_symbols,
+                    index=None,
+                    placeholder="Select a holding",
+                    key="holdings_breakdown_selected_symbol",
+                )
+                if not selected_breakdown_symbol:
+                    pass
+                elif _holdings_breakdown_state_df().empty:
+                    st.info("No holdings breakdown found in Supabase.")
+                else:
+                    selected_breakdown_df = _filter_breakdown_for_holding(
+                        _holdings_breakdown_state_df(),
+                        kite_holdings_df,
+                        selected_breakdown_symbol,
+                    )
+                    if selected_breakdown_df.empty:
+                        st.info(f"No breakdown found for {selected_breakdown_symbol}.")
+                    else:
+                        display_holdings_breakdown_df(selected_breakdown_df, show_exited_summary=False)
+
+                st.markdown(
+                    '<div style="border-top: 2px solid #f59e0b; margin: 1rem 0;"></div>',
+                    unsafe_allow_html=True,
+                )
+                with st.expander("Add Breakdown Entries", expanded=False):
+                    try:
+                        added_symbols = _render_add_holdings_breakdown_entries_form(
+                            st.session_state.get("ltp_by_symbol", {})
+                        )
+                    except Exception as exc:
+                        added_symbols = []
+                        st.error(f"Failed to add holdings breakdown entries: {exc}")
+
+                    if added_symbols:
+                        try:
+                            with st.spinner("Refreshing holdings breakdown..."):
+                                _refresh_holdings_breakdown_state_for_symbols(added_symbols)
+                            st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
+                            st.rerun()
+                        except Exception as exc:
+                            st.warning(f"Could not refresh holdings breakdown from Supabase: {exc}")
+
+                st.markdown(
+                    '<div style="border-top: 2px solid #f59e0b; margin: 1rem 0;"></div>',
+                    unsafe_allow_html=True,
+                )
+                exited_action_col, exited_header_col = st.columns([0.25, 8], vertical_alignment="center")
+                with exited_action_col:
+                    show_exited_summary = st.button(
+                        "",
+                        key="show_exited_holdings_summary",
+                        icon=":material/visibility:",
+                        help="Show exited holdings summary",
+                        width="content",
+                    )
+                with exited_header_col:
+                    st.markdown(
+                        '<div style="font-size: 1rem; font-weight: 600; line-height: 1.5;">Exited Holdings Summary</div>',
+                        unsafe_allow_html=True,
+                    )
+                if show_exited_summary:
+                    try:
+                        exited_breakdown_df = load_exited_holdings_breakdown_from_supabase()
+                        if exited_breakdown_df.empty:
+                            st.info("No exited holdings found.")
+                        else:
+                            exited_breakdown_df, _ = enrich_holdings_breakdown_with_ltp(
+                                exited_breakdown_df,
+                                st.session_state.get("ltp_by_symbol", {}),
+                            )
+                            display_exited_holdings_summary(exited_breakdown_df, show_header=False)
+                    except Exception as exc:
+                        st.warning(f"Could not load exited holdings summary: {exc}")
     #display_supabase_holdings_breakdown()  
 
     if kite_holdings_df is not None:
