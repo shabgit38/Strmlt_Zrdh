@@ -1,4 +1,4 @@
-import { Calculator, Plus, Trash2 } from "lucide-react";
+import { Calculator, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatMoney, formatPct, formatPrice, signedClass } from "../format";
@@ -60,6 +60,17 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
   const tradeSummaryRows = useMemo(() => summarizeTrades(tradeRows), [tradeRows]);
   const calculatedAvgRows = useMemo(() => calculateAvgRows(avgRows), [avgRows]);
   const avgSummaryRows = useMemo(() => summarizeAverage(avgRows), [avgRows]);
+  const optionSymbols = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          optionRows
+            .map((row) => row.symbol.trim().toUpperCase())
+            .filter(Boolean),
+        ),
+      ),
+    [optionRows],
+  );
 
   useEffect(() => {
     if (!liveData) return;
@@ -82,9 +93,9 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
           if (!quote) return row;
           return {
             ...row,
-            ltp: row.ltp || (quote.ltp === undefined ? "" : String(quote.ltp)),
+            ltp: quote.ltp === undefined ? row.ltp : String(quote.ltp),
             avgPrice: row.avgPrice || (quote.ltp === undefined ? "" : String(quote.ltp)),
-            spot: row.spot || (quote.spot === undefined ? "" : String(quote.spot)),
+            spot: quote.spot === undefined ? row.spot : String(quote.spot),
             expiry: row.expiry || quote.expiry || "",
             strike: row.strike || (quote.strike === undefined ? "" : String(quote.strike)),
             optionType: row.optionType || quote.optionType || "",
@@ -247,12 +258,35 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
     }
   }
 
+  function refreshMarketData() {
+    fetchedSymbolsRef.current.clear();
+    const requestId = `${Date.now()}-manual-refresh`;
+    lastLiveRequestIdRef.current = requestId;
+    const request: CalculatorsLiveRequest = {
+      type: "marketData",
+      requestId,
+      symbols: optionSymbols,
+      includeSpots: true,
+    };
+    setStreamlitComponentValue(request);
+  }
+
   return (
     <main className="min-h-screen bg-terminal-bg">
       <div className="mx-auto max-w-[1680px] space-y-5 px-5 py-5">
-        <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-terminal-muted">
-          <Calculator className="h-4 w-4" />
-          Calculators
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-terminal-muted">
+            <Calculator className="h-4 w-4" />
+            Calculators
+          </div>
+          <button
+            className="inline-flex rounded-md border border-terminal-line p-2 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink"
+            type="button"
+            onClick={refreshMarketData}
+            title="Refresh calculators"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
         </div>
 
         {liveData?.error ? (

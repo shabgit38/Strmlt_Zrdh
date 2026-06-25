@@ -146,7 +146,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
                   <SortableHeader sortKey="symbol" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Symbol</SortableHeader>
-                  <SortableHeader sortKey="name" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Name</SortableHeader>
+                  <SortableHeader className="w-32 max-w-32" sortKey="name" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Name</SortableHeader>
                   <HeaderCell align="right">LTP</HeaderCell>
                   <HeaderCell align="right">Trigger</HeaderCell>
                   <SortableHeader sortKey="status" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Status</SortableHeader>
@@ -159,7 +159,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 {sortedAlerts.map((alert) => (
                   <tr key={alert.uuid} className={`border-t border-terminal-line ${editingUuid === alert.uuid ? "bg-terminal-selected" : ""}`}>
                     <td className="whitespace-nowrap px-3 py-2 font-semibold text-terminal-ink">{alert.lhs_tradingsymbol}</td>
-                    <td className="px-3 py-2 text-terminal-ink">{alert.name}</td>
+                    <td className="max-w-32 truncate whitespace-nowrap px-3 py-2 text-terminal-ink" title={alert.name}>{alert.name}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-terminal-ink">{alert.ltp === null || alert.ltp === undefined ? "-" : formatPrice(Number(alert.ltp))}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-terminal-ink">
                       {alert.operator} {alert.rhs_type === "constant" ? formatTrigger(alert.rhs_constant) : alert.rhs_tradingsymbol || "-"}
@@ -242,6 +242,7 @@ function SortableHeader({
   activeSortKey,
   direction,
   align = "left",
+  className = "",
   onSort,
 }: {
   children: ReactNode;
@@ -249,10 +250,11 @@ function SortableHeader({
   activeSortKey: SortKey;
   direction: SortDirection;
   align?: "left" | "right";
+  className?: string;
   onSort: (sortKey: SortKey) => void;
 }) {
   return (
-    <th className={`whitespace-nowrap px-3 py-2 ${align === "right" ? "text-right" : "text-left"}`}>
+    <th className={`whitespace-nowrap px-3 py-2 ${align === "right" ? "text-right" : "text-left"} ${className}`}>
       <button className={`inline-flex w-full items-center gap-1 text-xs font-semibold uppercase tracking-wide text-terminal-muted hover:text-terminal-ink ${align === "right" ? "justify-end" : "justify-start"}`} type="button" onClick={() => onSort(sortKey)}>
         <span>{children}</span>
         {activeSortKey === sortKey ? <span aria-hidden="true">{direction === "asc" ? "^" : "v"}</span> : null}
