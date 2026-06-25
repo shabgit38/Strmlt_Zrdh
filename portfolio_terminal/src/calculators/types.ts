@@ -103,7 +103,7 @@ export type OptionContract = {
 
 export type TargetOptionContracts = {
   index: string;
-  distancePct: number;
+  strike: number;
   ce?: OptionContract;
   pe?: OptionContract;
   ceContracts?: OptionContract[];

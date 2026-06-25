@@ -31,9 +31,8 @@ _SUPABASE_INSTRUMENT_COLUMNS = ",".join(
         "segment",
     ]
 )
-_TARGET_OPTION_DISTANCES = [0.02, 0.03, 0.05]
-_TARGET_STRIKE_MARGIN = 0.005
-_TARGET_STRIKE_STEP = 500
+_TARGET_STRIKE_RANGE_PCT = 0.05
+_TARGET_STRIKE_STEP = 100
 _INDEX_SPOT_INSTRUMENTS = {
     "NIFTY": "NSE:NIFTY 50",
     "BANKNIFTY": "NSE:NIFTY BANK",
@@ -300,34 +299,31 @@ def _target_option_contracts_from_supabase(spots: list[dict[str, Any]]) -> list[
         if index not in _INDEX_SPOT_INSTRUMENTS or spot_price is None:
             continue
 
-        for option_type in ["CE", "PE"]:
-            min_target, max_target = _target_strike_bounds(spot_price, option_type)
-            contracts.extend(
-                _calculator_option_contracts_from_supabase_filters(
-                    [
-                        f"name=eq.{quote(index, safe='')}",
-                        f"instrument_type=eq.{option_type}",
-                        f"expiry=gte.{date.today().isoformat()}",
-                        f"strike=gte.{min_target:.2f}",
-                        f"strike=lte.{max_target:.2f}",
-                        "order=expiry.asc,strike.asc",
-                    ]
-                )
+        min_target, max_target = _target_strike_bounds(spot_price)
+        contracts.extend(
+            _calculator_option_contracts_from_supabase_filters(
+                [
+                    f"name=eq.{quote(index, safe='')}",
+                    "instrument_type=in.(CE,PE)",
+                    f"expiry=gte.{date.today().isoformat()}",
+                    f"strike=gte.{min_target:.2f}",
+                    f"strike=lte.{max_target:.2f}",
+                    "order=strike.asc,expiry.asc",
+                ]
             )
+        )
     return contracts
 
 
-def _target_strike_bounds(spot_price: float, option_type: str) -> tuple[float, float]:
-    targets = [
-        _rounded_target_strike(spot_price, option_type, distance)
-        for distance in _TARGET_OPTION_DISTANCES
-    ]
-    return min(targets) * (1 - _TARGET_STRIKE_MARGIN), max(targets) * (1 + _TARGET_STRIKE_MARGIN)
+def _target_strike_bounds(spot_price: float) -> tuple[float, float]:
+    lower = math.floor((spot_price * (1 - _TARGET_STRIKE_RANGE_PCT)) / _TARGET_STRIKE_STEP) * _TARGET_STRIKE_STEP
+    upper = math.ceil((spot_price * (1 + _TARGET_STRIKE_RANGE_PCT)) / _TARGET_STRIKE_STEP) * _TARGET_STRIKE_STEP
+    return float(lower), float(upper)
 
 
-def _rounded_target_strike(spot_price: float, option_type: str, distance: float) -> float:
-    raw_target = spot_price * (1 + distance) if option_type == "CE" else spot_price * (1 - distance)
-    return float(math.floor((raw_target / _TARGET_STRIKE_STEP) + 0.5) * _TARGET_STRIKE_STEP)
+def _target_strikes_for_spot(spot_price: float) -> list[float]:
+    lower, upper = _target_strike_bounds(spot_price)
+    return [float(strike) for strike in range(int(lower), int(upper) + _TARGET_STRIKE_STEP, _TARGET_STRIKE_STEP)]
 
 
 def _calculator_option_contracts_from_supabase_filters(filters: list[str]) -> list[dict[str, Any]]:
@@ -454,56 +450,37 @@ def _target_options_from_spots(option_contracts: list[dict[str, Any]], spots: li
         spot_price = spot.get("spot")
         if index not in _INDEX_SPOT_INSTRUMENTS or spot_price is None:
             continue
-        target_options[index] = [
-            {
-                "index": index,
-                "distancePct": distance * 100,
-                "ce": _nearest_contract(
-                    by_index.get(index, []),
-                    "CE",
-                    _rounded_target_strike(float(spot_price), "CE", distance),
-                ),
-                "pe": _nearest_contract(
-                    by_index.get(index, []),
-                    "PE",
-                    _rounded_target_strike(float(spot_price), "PE", distance),
-                ),
-                "ceContracts": _nearest_contracts_by_expiry(
-                    by_index.get(index, []),
-                    "CE",
-                    _rounded_target_strike(float(spot_price), "CE", distance),
-                ),
-                "peContracts": _nearest_contracts_by_expiry(
-                    by_index.get(index, []),
-                    "PE",
-                    _rounded_target_strike(float(spot_price), "PE", distance),
-                ),
-            }
-            for distance in [0.02, 0.03, 0.05]
-        ]
+        index_contracts = by_index.get(index, [])
+        rows: list[dict[str, Any]] = []
+        for strike in _target_strikes_for_spot(float(spot_price)):
+            ce_contracts = _contracts_for_strike(index_contracts, "CE", strike)
+            pe_contracts = _contracts_for_strike(index_contracts, "PE", strike)
+            if not ce_contracts and not pe_contracts:
+                continue
+            rows.append(
+                {
+                    "index": index,
+                    "strike": strike,
+                    "ce": ce_contracts[0] if ce_contracts else None,
+                    "pe": pe_contracts[0] if pe_contracts else None,
+                    "ceContracts": ce_contracts,
+                    "peContracts": pe_contracts,
+                }
+            )
+        target_options[index] = rows
     return target_options
 
 
-def _nearest_contracts_by_expiry(contracts: list[dict[str, Any]], option_type: str, target_strike: float) -> list[dict[str, Any]]:
-    matching_contracts = [contract for contract in contracts if contract.get("optionType") == option_type]
-    contracts_by_expiry: dict[str, list[dict[str, Any]]] = {}
-    for contract in matching_contracts:
-        contracts_by_expiry.setdefault(str(contract.get("expiry")), []).append(contract)
-
-    return [
-        min(expiry_contracts, key=lambda contract: abs(float(contract.get("strike") or 0) - target_strike))
-        for _, expiry_contracts in sorted(contracts_by_expiry.items())
-    ]
-
-
-def _nearest_contract(contracts: list[dict[str, Any]], option_type: str, target_strike: float) -> dict[str, Any] | None:
-    matching_contracts = [contract for contract in contracts if contract.get("optionType") == option_type]
-    if not matching_contracts:
-        return None
-
-    earliest_expiry = min(contract["expiry"] for contract in matching_contracts)
-    expiry_contracts = [contract for contract in matching_contracts if contract["expiry"] == earliest_expiry]
-    return min(expiry_contracts, key=lambda contract: abs(float(contract.get("strike") or 0) - target_strike))
+def _contracts_for_strike(contracts: list[dict[str, Any]], option_type: str, strike: float) -> list[dict[str, Any]]:
+    return sorted(
+        [
+            contract
+            for contract in contracts
+            if contract.get("optionType") == option_type
+            and _float_value(contract.get("strike")) == strike
+        ],
+        key=lambda contract: str(contract.get("expiry") or ""),
+    )
 
 
 def _spots_from_quotes(quotes: dict[str, Any]) -> list[dict[str, Any]]:

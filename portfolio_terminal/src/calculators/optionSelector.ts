@@ -7,20 +7,22 @@ export const INDEX_CONFIG = {
 export type IndexSymbol = keyof typeof INDEX_CONFIG;
 
 export type TargetStrike = {
-  distancePct: number;
-  ceStrike: number;
-  peStrike: number;
+  strike: number;
 };
 
-function roundToStep(value: number, step: number): number {
-  return Math.round(value / step) * step;
+function strikeBounds(spot: number, step: number): { lower: number; upper: number } {
+  return {
+    lower: Math.floor((spot * 0.95) / step) * step,
+    upper: Math.ceil((spot * 1.05) / step) * step,
+  };
 }
 
 export function calculateTargetStrikes(index: IndexSymbol, spot: number): TargetStrike[] {
-  const step = INDEX_CONFIG[index].step;
-  return [0.02, 0.03, 0.05].map((distance) => ({
-    distancePct: distance * 100,
-    ceStrike: roundToStep(spot * (1 + distance), step),
-    peStrike: roundToStep(spot * (1 - distance), step),
-  }));
+  const step = Math.max(INDEX_CONFIG[index].step, 100);
+  const { lower, upper } = strikeBounds(spot, step);
+  const strikes: TargetStrike[] = [];
+  for (let strike = lower; strike <= upper; strike += step) {
+    strikes.push({ strike });
+  }
+  return strikes;
 }
