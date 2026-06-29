@@ -38,6 +38,12 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
     window.setTimeout(() => setStreamlitFrameHeight(), 50);
   }, [data, editingUuid, formValues]);
 
+  useEffect(() => {
+    if (data?.lastAction !== "modify" || data.error) return;
+    setEditingUuid(null);
+    setFormValues(EMPTY_FORM);
+  }, [data?.lastAction, data?.lastRequestId, data?.error]);
+
   const alerts = data?.alerts ?? [];
   const uniqueAlerts = useMemo(() => dedupeAlertsByUuid(alerts), [alerts]);
   const visibleAlerts = useMemo(
@@ -142,16 +148,16 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 onChange={(event) => setSearchText(event.target.value)}
               />
             </div>
-            <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[760px] border-collapse text-left text-sm">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
                   <SortableHeader sortKey="symbol" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Symbol</SortableHeader>
                   <SortableHeader className="w-32 max-w-32" sortKey="name" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Name</SortableHeader>
-                  <HeaderCell align="right">LTP</HeaderCell>
-                  <HeaderCell align="right">Trigger</HeaderCell>
-                  <SortableHeader sortKey="status" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Status</SortableHeader>
-                  <SortableHeader sortKey="updated_at" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Updated</SortableHeader>
+                  <HeaderCell align="right" className="w-20 max-w-20">LTP</HeaderCell>
+                  <HeaderCell align="right" className="w-28 max-w-28">Trigger</HeaderCell>
+                  <SortableHeader className="w-20 max-w-20" sortKey="status" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Status</SortableHeader>
                   <HeaderCell align="right"></HeaderCell>
+                  <SortableHeader className="w-28 max-w-28" sortKey="updated_at" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Updated</SortableHeader>
                 </tr>
               </thead>
               <tbody>
@@ -159,12 +165,11 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                   <tr key={alert.uuid} className={`border-t border-terminal-line ${editingUuid === alert.uuid ? "bg-terminal-selected" : ""}`}>
                     <td className="whitespace-nowrap px-3 py-2 font-semibold text-terminal-ink">{alert.lhs_tradingsymbol}</td>
                     <td className="max-w-32 truncate whitespace-nowrap px-3 py-2 text-terminal-ink" title={alert.name}>{alert.name}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-terminal-ink">{alert.ltp === null || alert.ltp === undefined ? "-" : formatPrice(Number(alert.ltp))}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-terminal-ink">
-                      {alert.operator} {alert.rhs_type === "constant" ? formatTrigger(alert.rhs_constant) : alert.rhs_tradingsymbol || "-"}
+                    <td className="w-20 max-w-20 whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink">{alert.ltp === null || alert.ltp === undefined ? "-" : formatPrice(Number(alert.ltp))}</td>
+                    <td className="w-28 max-w-28 truncate whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink" title={triggerText(alert)}>
+                      {triggerText(alert)}
                     </td>
-                    <td className={`whitespace-nowrap px-3 py-2 font-semibold ${statusClass(alert.status)}`}>{alert.status}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-terminal-muted">{alert.updated_at || "-"}</td>
+                    <td className={`w-20 max-w-20 truncate whitespace-nowrap px-2 py-2 text-xs font-semibold ${statusClass(alert.status)}`} title={alert.status}>{alert.status}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-right">
                       <div className="inline-flex items-center gap-1">
                         <button
@@ -180,6 +185,9 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                           <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
+                    </td>
+                    <td className="w-28 max-w-28 truncate whitespace-nowrap px-2 py-2 text-xs text-terminal-muted" title={alert.updated_at || "-"}>
+                      {formatUpdatedDate(alert.updated_at)}
                     </td>
                   </tr>
                 ))}
@@ -230,8 +238,8 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
   );
 }
 
-function HeaderCell({ children, align = "left" }: { children?: ReactNode; align?: "left" | "right" }) {
-  return <th className={`whitespace-nowrap px-3 py-2 ${align === "right" ? "text-right" : "text-left"}`}>{children}</th>;
+function HeaderCell({ children, align = "left", className = "" }: { children?: ReactNode; align?: "left" | "right"; className?: string }) {
+  return <th className={`whitespace-nowrap px-3 py-2 ${align === "right" ? "text-right" : "text-left"} ${className}`}>{children}</th>;
 }
 
 function SortableHeader({
@@ -370,6 +378,16 @@ function statusClass(status: string) {
 function formatTrigger(value: unknown) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? formatPrice(numberValue) : String(value ?? "-");
+}
+
+function triggerText(alert: KiteAlert) {
+  return `${alert.operator} ${alert.rhs_type === "constant" ? formatTrigger(alert.rhs_constant) : alert.rhs_tradingsymbol || "-"}`;
+}
+
+function formatUpdatedDate(value: string | undefined) {
+  if (!value) return "-";
+  const datePart = value.split(/[T ]/, 1)[0];
+  return datePart || value;
 }
 
 function operatorValue(value: string): AlertFormValues["operator"] {
