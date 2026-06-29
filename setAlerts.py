@@ -114,6 +114,7 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
         alerts, fetch_meta = get_alerts(api_key, st.session_state.access_token, fetch_status_filter)
         _log_alerts_step(f"Parsed {len(alerts)} alert row(s) from Kite response.")
         next_data["alerts"] = _dedupe_alerts(enrich_alerts_with_ltp(kite, alerts))
+        print(f"Disabled alert symbols: {_disabled_alert_symbols_text(next_data['alerts'])}", flush=True)
         _log_alerts_step(f"Prepared {len(next_data['alerts'])} alert row(s) for React table.")
         if ALERTS_DEBUG_LOG_ENABLED:
             next_data["fetchMeta"] = fetch_meta
@@ -189,6 +190,16 @@ def _dedupe_alerts(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen_keys.add(dedupe_key)
         deduped_alerts.append(alert)
     return deduped_alerts
+
+
+def _disabled_alert_symbols_text(alerts: list[dict[str, Any]]) -> str:
+    symbols = {
+        str(alert.get("lhs_tradingsymbol") or "").strip()
+        for alert in alerts
+        if str(alert.get("status") or "").lower().strip() == "disabled"
+        and str(alert.get("lhs_tradingsymbol") or "").strip()
+    }
+    return ", ".join(sorted(symbols))
 
 
 def _alert_dedupe_key(alert: dict[str, Any]) -> str:

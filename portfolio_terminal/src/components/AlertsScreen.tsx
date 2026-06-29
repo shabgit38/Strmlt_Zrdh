@@ -39,7 +39,6 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
   }, [data, editingUuid, formValues]);
 
   const alerts = data?.alerts ?? [];
-  const disabledAlertSymbols = useMemo(() => disabledSymbolsText(alerts), [alerts]);
   const uniqueAlerts = useMemo(() => dedupeAlertsByUuid(alerts), [alerts]);
   const visibleAlerts = useMemo(
     () => uniqueAlerts.filter((alert) => matchesStatusFilter(alert, statusFilter)).filter((alert) => matchesSearch(alert, searchText)),
@@ -111,11 +110,6 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 ? `${sortedAlerts.length} shown from ${uniqueAlerts.length} unique alert${uniqueAlerts.length === 1 ? "" : "s"}`
                 : "Fetch alerts to load Kite data"}
             </div>
-            {data?.loaded && disabledAlertSymbols ? (
-              <div className="mt-1 max-w-3xl break-words text-xs font-semibold text-terminal-near">
-                Disabled alert symbols: {disabledAlertSymbols}
-              </div>
-            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select
@@ -296,19 +290,6 @@ function compareAlerts(left: KiteAlert, right: KiteAlert, sortKey: SortKey, dire
   const leftValue = sortKey === "symbol" ? left.lhs_tradingsymbol : String(left[sortKey] ?? "");
   const rightValue = sortKey === "symbol" ? right.lhs_tradingsymbol : String(right[sortKey] ?? "");
   return leftValue.localeCompare(rightValue) * multiplier;
-}
-
-function disabledSymbolsText(alerts: KiteAlert[]) {
-  return Array.from(
-    new Set(
-      alerts
-        .filter((alert) => String(alert.status ?? "").toLowerCase().trim() === "disabled")
-        .map((alert) => alert.lhs_tradingsymbol.trim())
-        .filter(Boolean),
-    ),
-  )
-    .sort()
-    .join(", ");
 }
 
 function dedupeAlertsByUuid(alerts: KiteAlert[]) {
