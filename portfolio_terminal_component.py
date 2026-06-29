@@ -43,6 +43,11 @@ _INDEX_UNDERLYING_INSTRUMENTS = {
     "BANKNIFTY": "NSE:NIFTY BANK",
     "SENSEX": "BSE:SENSEX",
 }
+_TARGET_OPTION_INDEXES = [
+    "NIFTY",
+    # "BANKNIFTY",
+    # "SENSEX",
+]
 
 _portfolio_terminal = components.declare_component(
     "portfolio_terminal",
@@ -293,10 +298,11 @@ def _option_contracts_by_symbol_from_supabase(symbols: set[str]) -> list[dict[st
 
 def _target_option_contracts_from_supabase(spots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     contracts: list[dict[str, Any]] = []
+    target_indexes = set(_TARGET_OPTION_INDEXES)
     for spot in spots:
         index = str(spot.get("symbol") or "").upper().strip()
         spot_price = _float_value(spot.get("spot"))
-        if index not in _INDEX_SPOT_INSTRUMENTS or spot_price is None:
+        if index not in target_indexes or spot_price is None:
             continue
 
         min_target, max_target = _target_strike_bounds(spot_price)
@@ -443,12 +449,12 @@ def _target_options_from_spots(option_contracts: list[dict[str, Any]], spots: li
     target_options: dict[str, list[dict[str, Any]]] = {}
     by_index = {
         index: [contract for contract in option_contracts if contract.get("index") == index]
-        for index in _INDEX_SPOT_INSTRUMENTS
+        for index in _TARGET_OPTION_INDEXES
     }
     for spot in spots:
         index = str(spot.get("symbol") or "").upper()
         spot_price = spot.get("spot")
-        if index not in _INDEX_SPOT_INSTRUMENTS or spot_price is None:
+        if index not in _TARGET_OPTION_INDEXES or spot_price is None:
             continue
         index_contracts = by_index.get(index, [])
         rows: list[dict[str, Any]] = []

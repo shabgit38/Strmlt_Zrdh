@@ -619,54 +619,33 @@ function IndexSpotCard({
           <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
             <tr>
               <HeaderCell align="right">Strike</HeaderCell>
-              <HeaderCell align="right">CE Expiry</HeaderCell>
-              <HeaderCell align="right">PE Expiry</HeaderCell>
+              <HeaderCell align="right">Expiry</HeaderCell>
+              <HeaderCell align="right">Type</HeaderCell>
+              <HeaderCell align="right"></HeaderCell>
             </tr>
           </thead>
           <tbody>
             {strikeRows.length > 0 && spot.spot !== null ? (
               strikeRows.map((strike) => {
+                const contracts = [
+                  ...(strike.ceContracts ?? (strike.ce ? [strike.ce] : [])),
+                  ...(strike.peContracts ?? (strike.pe ? [strike.pe] : [])),
+                ];
+                const pickerKey = `${spot.symbol}-${strike.strike}`;
                 return (
                   <tr key={`${spot.symbol}-${strike.strike}`} className="border-t border-terminal-line">
                     <ValueCell align="right" value={formatPrice(strike.strike)} />
                     <ContractPicker
                       checkedSymbols={checkedSymbols}
-                      contracts={strike.ceContracts ?? (strike.ce ? [strike.ce] : [])}
-                      pickerKey={`${spot.symbol}-${strike.strike}-CE`}
+                      contracts={contracts}
+                      pickerKey={pickerKey}
                       selectedContracts={selectedContracts}
                       setSelectedContracts={setSelectedContracts}
                       onChange={(checked) =>
-                        selectedContractForKey(
-                          strike.ceContracts ?? (strike.ce ? [strike.ce] : []),
-                          selectedContracts[`${spot.symbol}-${strike.strike}-CE`],
-                        ) &&
+                        selectedContractForPicker(contracts, selectedContracts, pickerKey) &&
                         onToggle({
                           checked,
-                          contract: selectedContractForKey(
-                            strike.ceContracts ?? (strike.ce ? [strike.ce] : []),
-                            selectedContracts[`${spot.symbol}-${strike.strike}-CE`],
-                          )!,
-                          spot: spot.spot ?? 0,
-                        })
-                      }
-                    />
-                    <ContractPicker
-                      checkedSymbols={checkedSymbols}
-                      contracts={strike.peContracts ?? (strike.pe ? [strike.pe] : [])}
-                      pickerKey={`${spot.symbol}-${strike.strike}-PE`}
-                      selectedContracts={selectedContracts}
-                      setSelectedContracts={setSelectedContracts}
-                      onChange={(checked) =>
-                        selectedContractForKey(
-                          strike.peContracts ?? (strike.pe ? [strike.pe] : []),
-                          selectedContracts[`${spot.symbol}-${strike.strike}-PE`],
-                        ) &&
-                        onToggle({
-                          checked,
-                          contract: selectedContractForKey(
-                            strike.peContracts ?? (strike.pe ? [strike.pe] : []),
-                            selectedContracts[`${spot.symbol}-${strike.strike}-PE`],
-                          )!,
+                          contract: selectedContractForPicker(contracts, selectedContracts, pickerKey)!,
                           spot: spot.spot ?? 0,
                         })
                       }
@@ -676,7 +655,7 @@ function IndexSpotCard({
               })
             ) : (
               <tr className="border-t border-terminal-line">
-                <td className="px-3 py-3 text-sm text-terminal-muted" colSpan={3}>
+                <td className="px-3 py-3 text-sm text-terminal-muted" colSpan={4}>
                   Waiting for live spot
                 </td>
               </tr>
@@ -703,33 +682,65 @@ function ContractPicker({
   selectedContracts: Record<string, string>;
   setSelectedContracts: Dispatch<SetStateAction<Record<string, string>>>;
 }) {
-  const selectedContract = selectedContractForKey(contracts, selectedContracts[pickerKey]);
+  const expiryKey = `${pickerKey}-expiry`;
+  const typeKey = `${pickerKey}-type`;
+  const expiries = uniqueExpiries(contracts);
+  const selectedExpiry = selectedContracts[expiryKey] || expiries[0] || "";
+  const availableTypes = optionTypesForExpiry(contracts, selectedExpiry);
+  const selectedType = selectedContracts[typeKey] === "PE" ? "PE" : "CE";
+  const effectiveType = availableTypes.includes(selectedType) ? selectedType : availableTypes[0];
+  const selectedContract = selectedContractForExpiryAndType(contracts, selectedExpiry, effectiveType);
   const checked = selectedContract ? checkedSymbols.has(selectedContract.symbol) : false;
 
   return (
-    <td className="px-3 py-2 text-right">
-      <div className="inline-flex w-full items-center justify-end gap-2">
+    <>
+      <td className="px-2 py-2 text-right">
         <select
           className="max-w-28 rounded-md border border-terminal-line bg-terminal-panel-alt px-1 py-1 text-xs text-terminal-ink outline-none"
           disabled={contracts.length === 0}
-          value={selectedContract?.symbol ?? ""}
+          value={selectedExpiry}
           onChange={(event) => {
             if (checked) {
               onChange(false);
             }
-            setSelectedContracts((previous) => ({ ...previous, [pickerKey]: event.target.value }));
+            setSelectedContracts((previous) => ({ ...previous, [expiryKey]: event.target.value }));
           }}
         >
-          {contracts.length === 0 ? (
+          {expiries.length === 0 ? (
             <option value="">-</option>
           ) : (
-            contracts.map((contract) => (
-              <option key={contract.symbol} value={contract.symbol}>
-                {contract.expiry}
+            expiries.map((expiry) => (
+              <option key={expiry} value={expiry}>
+                {expiry}
               </option>
             ))
           )}
         </select>
+      </td>
+      <td className="px-2 py-2 text-right">
+        <select
+          className="w-16 rounded-md border border-terminal-line bg-terminal-panel-alt px-1 py-1 text-xs text-terminal-ink outline-none"
+          disabled={availableTypes.length === 0}
+          value={effectiveType ?? ""}
+          onChange={(event) => {
+            if (checked) {
+              onChange(false);
+            }
+            setSelectedContracts((previous) => ({ ...previous, [typeKey]: event.target.value }));
+          }}
+        >
+          {availableTypes.length === 0 ? (
+            <option value="">-</option>
+          ) : (
+            availableTypes.map((optionType) => (
+              <option key={optionType} value={optionType}>
+                {optionType}
+              </option>
+            ))
+          )}
+        </select>
+      </td>
+      <td className="px-2 py-2 text-right">
         <button
           className="inline-flex rounded-md border border-terminal-line p-1.5 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
           disabled={!selectedContract || checked}
@@ -739,8 +750,8 @@ function ContractPicker({
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
-      </div>
-    </td>
+      </td>
+    </>
   );
 }
 
@@ -942,9 +953,36 @@ function alertClass(tone: "normal" | "review" | "warning" | "exit" | "hardExit")
   return "text-terminal-muted";
 }
 
-function selectedContractForKey(contracts: OptionContract[], selectedSymbol: string | undefined): OptionContract | null {
-  if (contracts.length === 0) return null;
-  return contracts.find((contract) => contract.symbol === selectedSymbol) ?? contracts[0];
+function selectedContractForPicker(
+  contracts: OptionContract[],
+  selectedContracts: Record<string, string>,
+  pickerKey: string,
+): OptionContract | null {
+  const expiry = selectedContracts[`${pickerKey}-expiry`] || uniqueExpiries(contracts)[0] || "";
+  const selectedType = selectedContracts[`${pickerKey}-type`] === "PE" ? "PE" : "CE";
+  const availableTypes = optionTypesForExpiry(contracts, expiry);
+  const optionType = availableTypes.includes(selectedType) ? selectedType : availableTypes[0];
+  return selectedContractForExpiryAndType(contracts, expiry, optionType);
+}
+
+function selectedContractForExpiryAndType(
+  contracts: OptionContract[],
+  expiry: string,
+  optionType: OptionContract["optionType"] | undefined,
+): OptionContract | null {
+  if (!expiry || !optionType) return null;
+  return contracts.find((contract) => contract.expiry === expiry && contract.optionType === optionType) ?? null;
+}
+
+function uniqueExpiries(contracts: OptionContract[]): string[] {
+  return Array.from(new Set(contracts.map((contract) => contract.expiry))).sort();
+}
+
+function optionTypesForExpiry(contracts: OptionContract[], expiry: string): Array<OptionContract["optionType"]> {
+  const optionTypes = contracts
+    .filter((contract) => contract.expiry === expiry)
+    .map((contract) => contract.optionType);
+  return Array.from(new Set(optionTypes)).sort();
 }
 
 function firstLotSize(targetOptions: TargetOptionContracts[]): number | null {
