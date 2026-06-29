@@ -599,6 +599,16 @@ function IndexSpotCard({
 }) {
   const lotSize = firstLotSize(targetOptions);
   const strikeRows = targetOptions.filter((row) => Number.isFinite(row.strike));
+  const selectedStrikeKey = `${spot.symbol}-strike`;
+  const selectedStrikeValue = selectedContracts[selectedStrikeKey];
+  const selectedStrike = strikeRows.find((row) => String(row.strike) === selectedStrikeValue) ?? strikeRows[0];
+  const selectedStrikeContracts = selectedStrike
+    ? [
+        ...(selectedStrike.ceContracts ?? (selectedStrike.ce ? [selectedStrike.ce] : [])),
+        ...(selectedStrike.peContracts ?? (selectedStrike.pe ? [selectedStrike.pe] : [])),
+      ]
+    : [];
+  const pickerKey = selectedStrike ? `${spot.symbol}-${selectedStrike.strike}` : `${spot.symbol}-strike-picker`;
 
   return (
     <div className="rounded-lg border border-terminal-line bg-terminal-panel p-4 shadow-sm">
@@ -625,34 +635,39 @@ function IndexSpotCard({
             </tr>
           </thead>
           <tbody>
-            {strikeRows.length > 0 && spot.spot !== null ? (
-              strikeRows.map((strike) => {
-                const contracts = [
-                  ...(strike.ceContracts ?? (strike.ce ? [strike.ce] : [])),
-                  ...(strike.peContracts ?? (strike.pe ? [strike.pe] : [])),
-                ];
-                const pickerKey = `${spot.symbol}-${strike.strike}`;
-                return (
-                  <tr key={`${spot.symbol}-${strike.strike}`} className="border-t border-terminal-line">
-                    <ValueCell align="right" value={formatStrikeWithSpotDistance(strike.strike, spot.spot)} />
-                    <ContractPicker
-                      checkedSymbols={checkedSymbols}
-                      contracts={contracts}
-                      pickerKey={pickerKey}
-                      selectedContracts={selectedContracts}
-                      setSelectedContracts={setSelectedContracts}
-                      onChange={(checked) =>
-                        selectedContractForPicker(contracts, selectedContracts, pickerKey) &&
-                        onToggle({
-                          checked,
-                          contract: selectedContractForPicker(contracts, selectedContracts, pickerKey)!,
-                          spot: spot.spot ?? 0,
-                        })
-                      }
-                    />
-                  </tr>
-                );
-              })
+            {selectedStrike && spot.spot !== null ? (
+              <tr className="border-t border-terminal-line">
+                <td className="px-1.5 py-2 text-right">
+                  <select
+                    className="w-32 rounded-md border border-terminal-line bg-terminal-panel-alt px-1 py-1 text-[11px] text-terminal-ink outline-none"
+                    value={String(selectedStrike.strike)}
+                    onChange={(event) =>
+                      setSelectedContracts((previous) => ({ ...previous, [selectedStrikeKey]: event.target.value }))
+                    }
+                  >
+                    {strikeRows.map((strike) => (
+                      <option key={strike.strike} value={String(strike.strike)}>
+                        {formatStrikeWithSpotDistance(strike.strike, spot.spot)}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <ContractPicker
+                  checkedSymbols={checkedSymbols}
+                  contracts={selectedStrikeContracts}
+                  pickerKey={pickerKey}
+                  selectedContracts={selectedContracts}
+                  setSelectedContracts={setSelectedContracts}
+                  onChange={(checked) =>
+                    selectedContractForPicker(selectedStrikeContracts, selectedContracts, pickerKey) &&
+                    onToggle({
+                      checked,
+                      contract: selectedContractForPicker(selectedStrikeContracts, selectedContracts, pickerKey)!,
+                      spot: spot.spot ?? 0,
+                    })
+                  }
+                />
+              </tr>
             ) : (
               <tr className="border-t border-terminal-line">
                 <td className="px-3 py-3 text-sm text-terminal-muted" colSpan={4}>
@@ -696,7 +711,7 @@ function ContractPicker({
     <>
       <td className="px-2 py-2 text-right">
         <select
-          className="max-w-28 rounded-md border border-terminal-line bg-terminal-panel-alt px-1 py-1 text-xs text-terminal-ink outline-none"
+          className="w-24 rounded-md border border-terminal-line bg-terminal-panel-alt px-0.5 py-1 text-[11px] text-terminal-ink outline-none"
           disabled={contracts.length === 0}
           value={selectedExpiry}
           onChange={(event) => {
@@ -717,9 +732,9 @@ function ContractPicker({
           )}
         </select>
       </td>
-      <td className="px-2 py-2 text-right">
+      <td className="px-1 py-2 text-right">
         <select
-          className="w-16 rounded-md border border-terminal-line bg-terminal-panel-alt px-1 py-1 text-xs text-terminal-ink outline-none"
+          className="w-12 rounded-md border border-terminal-line bg-terminal-panel-alt px-0.5 py-1 text-[11px] text-terminal-ink outline-none"
           disabled={availableTypes.length === 0}
           value={effectiveType ?? ""}
           onChange={(event) => {
@@ -740,15 +755,15 @@ function ContractPicker({
           )}
         </select>
       </td>
-      <td className="px-2 py-2 text-right">
+      <td className="px-1 py-2 text-right">
         <button
-          className="inline-flex rounded-md border border-terminal-line p-1.5 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
+          className="inline-flex rounded-md border border-terminal-line p-1 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
           disabled={!selectedContract || checked}
           type="button"
           onClick={() => onChange(true)}
           title={checked ? "Added" : "Add contract"}
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Plus className="h-3 w-3" />
         </button>
       </td>
     </>
