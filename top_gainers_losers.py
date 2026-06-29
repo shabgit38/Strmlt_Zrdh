@@ -47,7 +47,7 @@ def build_portfolio_day_movers_df(holdings_df: pd.DataFrame) -> pd.DataFrame:
     return df.dropna(subset=["Ticker", "ltp", "day_change_pct"])
 
 
-def build_portfolio_day_movers_summary(holdings_df: pd.DataFrame, limit: int = 3) -> pd.DataFrame:
+def build_portfolio_day_movers_summary(holdings_df: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
     movers_df = build_portfolio_day_movers_df(holdings_df)
     if movers_df.empty:
         return pd.DataFrame()
@@ -80,7 +80,7 @@ def build_portfolio_day_movers_summary(holdings_df: pd.DataFrame, limit: int = 3
     return pd.DataFrame(rows)
 
 
-def build_returns_day_movers_summary(returns_df: pd.DataFrame, limit: int = 3) -> pd.DataFrame:
+def build_returns_day_movers_summary(returns_df: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
     if returns_df.empty or not {"Ticker", "Today Return %"}.issubset(returns_df.columns):
         return pd.DataFrame()
 
@@ -109,7 +109,7 @@ def build_returns_day_movers_summary(returns_df: pd.DataFrame, limit: int = 3) -
     return pd.DataFrame(rows)
 
 
-def build_day_movers_summary(day_movers_df: pd.DataFrame, limit: int = 3) -> pd.DataFrame:
+def build_day_movers_summary(day_movers_df: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
     if day_movers_df.empty or not {"Ticker", "DayChg %"}.issubset(day_movers_df.columns):
         return pd.DataFrame()
 
