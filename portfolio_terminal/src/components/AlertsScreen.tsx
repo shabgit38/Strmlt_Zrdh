@@ -5,7 +5,7 @@ import { formatPrice } from "../format";
 import { setStreamlitComponentValue, setStreamlitFrameHeight } from "../streamlitBridge";
 import type { AlertFormValues, AlertsData, AlertStatusFilter, KiteAlert } from "../alerts/types";
 
-type SortKey = "status" | "symbol" | "name" | "ltp" | "alert_count" | "updated_at";
+type SortKey = "status" | "symbol" | "name" | "ltp" | "updated_at";
 type SortDirection = "asc" | "desc";
 
 const EMPTY_FORM: AlertFormValues = {
@@ -39,6 +39,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
   }, [data, editingUuid, formValues]);
 
   const alerts = data?.alerts ?? [];
+  const disabledAlertSymbols = useMemo(() => disabledSymbolsText(alerts), [alerts]);
   const uniqueAlerts = useMemo(() => dedupeAlertsByUuid(alerts), [alerts]);
   const visibleAlerts = useMemo(
     () => uniqueAlerts.filter((alert) => matchesStatusFilter(alert, statusFilter)).filter((alert) => matchesSearch(alert, searchText)),
@@ -110,6 +111,11 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 ? `${sortedAlerts.length} shown from ${uniqueAlerts.length} unique alert${uniqueAlerts.length === 1 ? "" : "s"}`
                 : "Fetch alerts to load Kite data"}
             </div>
+            {data?.loaded && disabledAlertSymbols ? (
+              <div className="mt-1 max-w-3xl break-words text-xs font-semibold text-terminal-near">
+                Disabled alert symbols: {disabledAlertSymbols}
+              </div>
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select
@@ -150,7 +156,6 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                   <HeaderCell align="right">LTP</HeaderCell>
                   <HeaderCell align="right">Trigger</HeaderCell>
                   <SortableHeader sortKey="status" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Status</SortableHeader>
-                  <SortableHeader sortKey="alert_count" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort} align="right">Alert Count</SortableHeader>
                   <SortableHeader sortKey="updated_at" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Updated</SortableHeader>
                   <HeaderCell align="right"></HeaderCell>
                 </tr>
@@ -165,7 +170,6 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                       {alert.operator} {alert.rhs_type === "constant" ? formatTrigger(alert.rhs_constant) : alert.rhs_tradingsymbol || "-"}
                     </td>
                     <td className={`whitespace-nowrap px-3 py-2 font-semibold ${statusClass(alert.status)}`}>{alert.status}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-terminal-ink">{alert.alert_count ?? 0}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-terminal-muted">{alert.updated_at || "-"}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-right">
                       <div className="inline-flex items-center gap-1">
@@ -187,7 +191,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 ))}
                 {data?.loaded && sortedAlerts.length === 0 ? (
                   <tr className="border-t border-terminal-line">
-                    <td className="px-3 py-6 text-sm text-terminal-muted" colSpan={8}>No alerts returned for this filter.</td>
+                    <td className="px-3 py-6 text-sm text-terminal-muted" colSpan={7}>No alerts returned for this filter.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -286,12 +290,25 @@ function SelectField({ label, value, options, onChange }: { label: string; value
 function compareAlerts(left: KiteAlert, right: KiteAlert, sortKey: SortKey, direction: SortDirection) {
   const multiplier = direction === "asc" ? 1 : -1;
   if (sortKey === "status") return (statusRank(left.status) - statusRank(right.status)) * multiplier;
-  if (sortKey === "ltp" || sortKey === "alert_count") {
+  if (sortKey === "ltp") {
     return (numericValue(left[sortKey]) - numericValue(right[sortKey])) * multiplier;
   }
   const leftValue = sortKey === "symbol" ? left.lhs_tradingsymbol : String(left[sortKey] ?? "");
   const rightValue = sortKey === "symbol" ? right.lhs_tradingsymbol : String(right[sortKey] ?? "");
   return leftValue.localeCompare(rightValue) * multiplier;
+}
+
+function disabledSymbolsText(alerts: KiteAlert[]) {
+  return Array.from(
+    new Set(
+      alerts
+        .filter((alert) => String(alert.status ?? "").toLowerCase().trim() === "disabled")
+        .map((alert) => alert.lhs_tradingsymbol.trim())
+        .filter(Boolean),
+    ),
+  )
+    .sort()
+    .join(", ");
 }
 
 function dedupeAlertsByUuid(alerts: KiteAlert[]) {
