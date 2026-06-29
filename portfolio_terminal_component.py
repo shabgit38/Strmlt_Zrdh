@@ -32,7 +32,9 @@ _SUPABASE_INSTRUMENT_COLUMNS = ",".join(
     ]
 )
 _TARGET_STRIKE_RANGE_PCT = 0.05
+_NEAR_TARGET_STRIKE_RANGE_PCT = 0.02
 _TARGET_STRIKE_STEP = 100
+_FAR_TARGET_STRIKE_STEP = 500
 _INDEX_SPOT_INSTRUMENTS = {
     "NIFTY": "NSE:NIFTY 50",
     "BANKNIFTY": "NSE:NIFTY BANK",
@@ -328,8 +330,27 @@ def _target_strike_bounds(spot_price: float) -> tuple[float, float]:
 
 
 def _target_strikes_for_spot(spot_price: float) -> list[float]:
-    lower, upper = _target_strike_bounds(spot_price)
-    return [float(strike) for strike in range(int(lower), int(upper) + _TARGET_STRIKE_STEP, _TARGET_STRIKE_STEP)]
+    far_lower = math.ceil((spot_price * (1 - _TARGET_STRIKE_RANGE_PCT)) / _FAR_TARGET_STRIKE_STEP) * _FAR_TARGET_STRIKE_STEP
+    far_upper = math.floor((spot_price * (1 + _TARGET_STRIKE_RANGE_PCT)) / _FAR_TARGET_STRIKE_STEP) * _FAR_TARGET_STRIKE_STEP
+    lower_near_edge = spot_price * (1 - _NEAR_TARGET_STRIKE_RANGE_PCT)
+    upper_near_edge = spot_price * (1 + _NEAR_TARGET_STRIKE_RANGE_PCT)
+    near_lower = math.ceil((spot_price * (1 - _NEAR_TARGET_STRIKE_RANGE_PCT)) / _TARGET_STRIKE_STEP) * _TARGET_STRIKE_STEP
+    near_upper = math.floor((spot_price * (1 + _NEAR_TARGET_STRIKE_RANGE_PCT)) / _TARGET_STRIKE_STEP) * _TARGET_STRIKE_STEP
+    far_below_upper = math.floor(lower_near_edge / _FAR_TARGET_STRIKE_STEP) * _FAR_TARGET_STRIKE_STEP
+    far_above_lower = math.ceil(upper_near_edge / _FAR_TARGET_STRIKE_STEP) * _FAR_TARGET_STRIKE_STEP
+
+    strikes = set(range(int(near_lower), int(near_upper) + _TARGET_STRIKE_STEP, _TARGET_STRIKE_STEP))
+    strikes.update(
+        strike
+        for strike in range(int(far_lower), int(far_below_upper) + _FAR_TARGET_STRIKE_STEP, _FAR_TARGET_STRIKE_STEP)
+        if strike < near_lower
+    )
+    strikes.update(
+        strike
+        for strike in range(int(far_above_lower), int(far_upper) + _FAR_TARGET_STRIKE_STEP, _FAR_TARGET_STRIKE_STEP)
+        if strike > near_upper
+    )
+    return [float(strike) for strike in sorted(strikes)]
 
 
 def _calculator_option_contracts_from_supabase_filters(filters: list[str]) -> list[dict[str, Any]]:

@@ -634,7 +634,7 @@ function IndexSpotCard({
                 const pickerKey = `${spot.symbol}-${strike.strike}`;
                 return (
                   <tr key={`${spot.symbol}-${strike.strike}`} className="border-t border-terminal-line">
-                    <ValueCell align="right" value={formatPrice(strike.strike)} />
+                    <ValueCell align="right" value={formatStrikeWithSpotDistance(strike.strike, spot.spot)} />
                     <ContractPicker
                       checkedSymbols={checkedSymbols}
                       contracts={contracts}
@@ -923,6 +923,12 @@ function formatNullablePct(value: number | null): string {
 
 function formatInteger(value: number | null): string {
   return value === null ? "-" : value.toString();
+}
+
+function formatStrikeWithSpotDistance(strike: number, spot: number | null): string {
+  if (spot === null || spot === 0) return formatPrice(strike);
+  const distancePct = ((strike - spot) / spot) * 100;
+  return `${formatPrice(strike)} (${distancePct >= 0 ? "+" : ""}${formatPct(distancePct)})`;
 }
 
 function displaySpots(spots: IndexSpot[]): IndexSpot[] {
