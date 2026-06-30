@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+import pandas as pd
 import streamlit as st
 
+from kite_analytics import build_metric_values, calculate_distance_pct, load_analytics_history, pivot_points
 from kite_auth import bootstrap_kite_app, clear_auth_state, is_token_error
+from kite_auth import get_secret_value
 from portfolio_terminal_component import render_alerts_terminal
 
 
@@ -76,7 +79,7 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
     previous_data = st.session_state.get(ALERTS_STATE_KEY, _initial_alerts_data())
     action = str(request.get("action") or "fetch")
     requested_status_filter = str(request.get("statusFilter") or previous_data.get("statusFilter") or ALERTS_DEFAULT_STATUS)
-    fetch_status_filter = ALERTS_DEFAULT_STATUS if action in {"create", "modify", "delete"} else requested_status_filter
+    fetch_status_filter = ALERTS_DEFAULT_STATUS if action == "create" else requested_status_filter
     next_data = {
         "alerts": list(previous_data.get("alerts") or []),
         "statusFilter": fetch_status_filter,
@@ -93,7 +96,17 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
 
         if action == "create":
             _log_alerts_step("Creating alert through Kite Alerts API.")
-            create_alert(api_key, st.session_state.access_token, payload)
+            created_alert = create_alert(api_key, st.session_state.access_token, payload)
+            created_uuid = _created_alert_uuid(created_alert)
+            if created_uuid:
+                next_data["alerts"] = _append_created_alert_row(next_data["alerts"], created_uuid, payload, created_alert)
+                next_data["message"] = "Alert created."
+                next_data["loaded"] = True
+                next_data.pop("error", None)
+                if not ALERTS_DEBUG_LOG_ENABLED:
+                    next_data.pop("fetchMeta", None)
+                    next_data.pop("debug", None)
+                return next_data
             next_data["message"] = "Alert created."
         elif action == "modify":
             uuid = str(payload.get("uuid") or "")
@@ -101,19 +114,34 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("Missing alert uuid for modify.")
             _log_alerts_step(f"Modifying alert uuid={uuid}.")
             modify_alert(api_key, st.session_state.access_token, uuid, payload)
+            next_data["alerts"] = _patch_modified_alert_row(next_data["alerts"], uuid, payload)
             next_data["message"] = "Alert modified."
+            next_data["loaded"] = True
+            next_data.pop("error", None)
+            if not ALERTS_DEBUG_LOG_ENABLED:
+                next_data.pop("fetchMeta", None)
+                next_data.pop("debug", None)
+            return next_data
         elif action == "delete":
             uuid = str(payload.get("uuid") or "")
             if not uuid:
                 raise ValueError("Missing alert uuid for delete.")
             _log_alerts_step(f"Deleting alert uuid={uuid}.")
             delete_alert(api_key, st.session_state.access_token, uuid)
+            next_data["alerts"] = _remove_deleted_alert_row(next_data["alerts"], uuid)
             next_data["message"] = "Alert deleted."
+            next_data["loaded"] = True
+            next_data.pop("error", None)
+            if not ALERTS_DEBUG_LOG_ENABLED:
+                next_data.pop("fetchMeta", None)
+                next_data.pop("debug", None)
+            return next_data
 
         _log_alerts_step(f"Fetching alerts list with status_filter={fetch_status_filter}.")
         alerts, fetch_meta = get_alerts(api_key, st.session_state.access_token, fetch_status_filter)
         _log_alerts_step(f"Parsed {len(alerts)} alert row(s) from Kite response.")
-        next_data["alerts"] = _dedupe_alerts(enrich_alerts_with_ltp(kite, alerts))
+        ltp_enriched_alerts = enrich_alerts_with_ltp(kite, alerts)
+        next_data["alerts"] = _dedupe_alerts(enrich_alerts_with_price_context(kite, ltp_enriched_alerts))
         print(f"Disabled alert symbols: {_disabled_alert_symbols_text(next_data['alerts'])}", flush=True)
         _log_alerts_step(f"Prepared {len(next_data['alerts'])} alert row(s) for React table.")
         if ALERTS_DEBUG_LOG_ENABLED:
@@ -190,6 +218,84 @@ def _dedupe_alerts(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen_keys.add(dedupe_key)
         deduped_alerts.append(alert)
     return deduped_alerts
+
+
+def _patch_modified_alert_row(
+    alerts: list[dict[str, Any]],
+    uuid: str,
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    patched_alerts: list[dict[str, Any]] = []
+    found = False
+    payload_fields = _alert_payload(payload)
+    for alert in alerts:
+        next_alert = dict(alert)
+        if str(next_alert.get("uuid") or "").strip() == uuid:
+            found = True
+            next_alert.update(payload_fields)
+            next_alert["uuid"] = uuid
+            next_alert.setdefault("status", alert.get("status", "enabled"))
+            next_alert.setdefault("alert_count", alert.get("alert_count", 0))
+            if _alert_symbol_changed(alert, next_alert):
+                next_alert["ltp"] = None
+                next_alert["price_context"] = None
+        patched_alerts.append(next_alert)
+
+    if found:
+        return _dedupe_alerts(patched_alerts)
+
+    fallback_alert = dict(payload_fields)
+    fallback_alert["uuid"] = uuid
+    fallback_alert.setdefault("status", "enabled")
+    fallback_alert.setdefault("alert_count", 0)
+    fallback_alert["ltp"] = None
+    fallback_alert["price_context"] = None
+    return _dedupe_alerts(patched_alerts + [fallback_alert])
+
+
+def _append_created_alert_row(
+    alerts: list[dict[str, Any]],
+    uuid: str,
+    payload: dict[str, Any],
+    created_alert: dict[str, Any],
+) -> list[dict[str, Any]]:
+    payload_fields = _alert_payload(payload)
+    next_alert = {
+        **payload_fields,
+        **{key: value for key, value in created_alert.items() if value is not None},
+        "uuid": uuid,
+    }
+    next_alert.setdefault("status", "enabled")
+    next_alert.setdefault("alert_count", 0)
+    next_alert.setdefault("ltp", None)
+    next_alert.setdefault("price_context", None)
+    return _dedupe_alerts(list(alerts) + [next_alert])
+
+
+def _created_alert_uuid(created_alert: dict[str, Any]) -> str:
+    if not isinstance(created_alert, dict):
+        return ""
+    for key in ["uuid", "id", "alert_id"]:
+        value = str(created_alert.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _remove_deleted_alert_row(alerts: list[dict[str, Any]], uuid: str) -> list[dict[str, Any]]:
+    return [
+        dict(alert)
+        for alert in alerts
+        if str(alert.get("uuid") or "").strip() != uuid
+    ]
+
+
+def _alert_symbol_changed(previous_alert: dict[str, Any], next_alert: dict[str, Any]) -> bool:
+    return any(
+        str(previous_alert.get(field_name) or "").strip().upper()
+        != str(next_alert.get(field_name) or "").strip().upper()
+        for field_name in ["lhs_exchange", "lhs_tradingsymbol"]
+    )
 
 
 def _disabled_alert_symbols_text(alerts: list[dict[str, Any]]) -> str:
@@ -294,6 +400,150 @@ def enrich_alerts_with_ltp(kite: Any, alerts: list[dict[str, Any]]) -> list[dict
         next_alert["ltp"] = quote.get("last_price") if isinstance(quote, dict) else None
         enriched_alerts.append(next_alert)
     return enriched_alerts
+
+
+def enrich_alerts_with_price_context(kite: Any, alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    symbols = sorted(
+        {
+            str(alert.get("lhs_tradingsymbol") or "").strip().upper()
+            for alert in alerts
+            if str(alert.get("lhs_tradingsymbol") or "").strip()
+        }
+    )
+    if not symbols:
+        return alerts
+
+    try:
+        _log_alerts_step(f"Loading instrument tokens for {len(symbols)} alert symbol(s).")
+        instrument_df = _load_alert_instrument_tokens(symbols)
+    except Exception as exc:
+        st.session_state["kite_alerts_price_context_error"] = str(exc)
+        _log_alerts_step(f"Price context token lookup failed; continuing without context: {exc}")
+        return alerts
+
+    as_of_date = pd.Timestamp.now().date().isoformat()
+    enriched_alerts: list[dict[str, Any]] = []
+    for alert in alerts:
+        next_alert = dict(alert)
+        token = _resolve_alert_instrument_token(alert, instrument_df)
+        if token is None:
+            next_alert["price_context"] = None
+            enriched_alerts.append(next_alert)
+            continue
+
+        try:
+            analytics_df = load_analytics_history(kite, token, as_of_date)
+            next_alert["price_context"] = _format_alert_price_context(analytics_df, next_alert.get("ltp"))
+        except Exception as exc:
+            next_alert["price_context"] = None
+            _log_alerts_step(
+                f"Price context failed for {next_alert.get('lhs_tradingsymbol') or '-'}; continuing: {exc}"
+            )
+        enriched_alerts.append(next_alert)
+    return enriched_alerts
+
+
+@st.cache_data(ttl=24 * 60 * 60)
+def _load_alert_instrument_tokens(tickers: list[str]) -> pd.DataFrame:
+    normalized_tickers = sorted({ticker.strip().upper() for ticker in tickers if ticker.strip()})
+    if not normalized_tickers:
+        return pd.DataFrame(columns=["tradingsymbol", "instrument_token", "exchange"])
+
+    supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
+    supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
+    table_name = get_secret_value("SUPABASE_TABLE_NAME").strip()
+    if not supabase_url or not supabase_key:
+        raise ValueError("Missing Supabase config for alert price context.")
+
+    ticker_filter = ",".join(f"tradingsymbol.eq.{quote(ticker, safe='')}" for ticker in normalized_tickers)
+    endpoint = (
+        f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
+        f"?select=tradingsymbol,instrument_token,exchange&or=({ticker_filter})"
+    )
+    request = Request(endpoint, headers=_supabase_headers(supabase_key), method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase alert instrument lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase alert instrument lookup failed: {exc.reason}") from exc
+
+    instrument_df = pd.DataFrame(records)
+    if instrument_df.empty:
+        return pd.DataFrame(columns=["tradingsymbol", "instrument_token", "exchange"])
+    for column in ["tradingsymbol", "exchange"]:
+        if column in instrument_df.columns:
+            instrument_df[column] = instrument_df[column].astype(str).str.strip().str.upper()
+    return instrument_df
+
+
+def _supabase_headers(supabase_key: str) -> dict[str, str]:
+    return {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+    }
+
+
+def _resolve_alert_instrument_token(alert: dict[str, Any], instrument_df: pd.DataFrame) -> int | None:
+    if instrument_df.empty or "tradingsymbol" not in instrument_df.columns or "instrument_token" not in instrument_df.columns:
+        return None
+
+    symbol = str(alert.get("lhs_tradingsymbol") or "").strip().upper()
+    exchange = str(alert.get("lhs_exchange") or "").strip().upper()
+    matches = instrument_df[instrument_df["tradingsymbol"].astype(str).str.upper().str.strip().eq(symbol)]
+    if matches.empty:
+        return None
+
+    if exchange and exchange != "INDICES" and "exchange" in matches.columns:
+        exchange_matches = matches[matches["exchange"].astype(str).str.upper().str.strip().eq(exchange)]
+        if not exchange_matches.empty:
+            matches = exchange_matches
+
+    token = pd.to_numeric(matches.iloc[0].get("instrument_token"), errors="coerce")
+    return int(token) if pd.notna(token) else None
+
+
+def _format_alert_price_context(analytics_df: pd.DataFrame, ltp: Any) -> str | None:
+    if analytics_df.empty:
+        return None
+
+    live_ltp = pd.to_numeric(ltp, errors="coerce")
+    metrics = build_metric_values(analytics_df, live_ltp=float(live_ltp) if pd.notna(live_ltp) else None)
+    current_price = metrics.get("LTP", metrics.get("Latest Close"))
+    if current_price is None:
+        return None
+
+    parts = [
+        _nearest_distance_label(
+            "EMA",
+            current_price,
+            {f"EMA{span}": metrics.get(f"EMA{span}") for span in [20, 50, 100, 200]},
+        ),
+        _nearest_distance_label(
+            "52W",
+            current_price,
+            {"52W Low": metrics.get("52W Low"), "52W High": metrics.get("52W High")},
+        ),
+        _nearest_distance_label("Pivot", current_price, pivot_points(analytics_df)),
+    ]
+    return " | ".join(part for part in parts if part) or None
+
+
+def _nearest_distance_label(_group: str, current_price: Any, levels: dict[str, Any]) -> str | None:
+    distances: list[tuple[float, str, float]] = []
+    for label, level in levels.items():
+        distance = calculate_distance_pct(current_price, level)
+        if distance is not None:
+            distances.append((abs(distance), label, distance))
+    if not distances:
+        return None
+
+    _, label, signed_distance = min(distances, key=lambda item: item[0])
+    return f"{label} {signed_distance:+.1f}%"
 
 
 def _quote_instrument_for_alert(alert: dict[str, Any]) -> str:

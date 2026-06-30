@@ -17,6 +17,7 @@ export type KiteAlert = {
   rhs_attribute?: string;
   alert_count: number;
   ltp?: number | null;
+  price_context?: string | null;
   created_at?: string;
   updated_at?: string;
 };

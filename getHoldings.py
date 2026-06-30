@@ -1567,8 +1567,10 @@ if selected_main_tab == "Alerts":
 
 
 if selected_main_tab == "Historic Data":
+    if "historic_saved_tickers_input" not in st.session_state:
+        st.session_state["historic_saved_tickers_input"] = st.session_state.get("historic_tickers_input", "")
     if "historic_tickers_input" not in st.session_state:
-        st.session_state["historic_tickers_input"] = ""
+        st.session_state["historic_tickers_input"] = st.session_state["historic_saved_tickers_input"]
 
     try:
         indices = load_indices_from_supabase()
@@ -1579,11 +1581,19 @@ if selected_main_tab == "Historic Data":
     if indices:
         index_names = ["Custom"] + list(indices.keys())
         default_index = next((name for name in index_names if name.lower() == "main indices"), "Custom")
+        if "historic_saved_selected_index" not in st.session_state:
+            selected_index_value = st.session_state.get("historic_selected_index")
+            st.session_state["historic_saved_selected_index"] = (
+                selected_index_value if selected_index_value in index_names else default_index
+            )
+        if st.session_state.get("historic_saved_selected_index") not in index_names:
+            st.session_state["historic_saved_selected_index"] = default_index
         if st.session_state.get("historic_selected_index") not in index_names:
-            st.session_state["historic_selected_index"] = default_index
+            st.session_state["historic_selected_index"] = st.session_state["historic_saved_selected_index"]
         index_column, benchmark_column = st.columns([2, 1])
         with index_column:
             selected_index = st.selectbox("Select index", index_names, key="historic_selected_index")
+            st.session_state["historic_saved_selected_index"] = selected_index
         with benchmark_column:
             benchmark_symbol = st.text_input(
                 "Momentum benchmark",
@@ -1595,12 +1605,14 @@ if selected_main_tab == "Historic Data":
         if selected_index == "Custom":
             if previous_selected_index != "Custom":
                 st.session_state["historic_tickers_input"] = ""
+                st.session_state["historic_saved_tickers_input"] = ""
                 st.session_state["historic_previous_selected_index"] = selected_index
                 st.rerun()
         else:
             selected_constituents = indices[selected_index]
             if st.session_state["historic_tickers_input"] != selected_constituents:
                 st.session_state["historic_tickers_input"] = selected_constituents
+                st.session_state["historic_saved_tickers_input"] = selected_constituents
                 st.session_state["historic_previous_selected_index"] = selected_index
                 st.rerun()
         st.session_state["historic_previous_selected_index"] = selected_index
@@ -1617,6 +1629,7 @@ if selected_main_tab == "Historic Data":
         key="historic_tickers_input",
         help="Enter one or more stock ticker symbols separated by commas.",
     )
+    st.session_state["historic_saved_tickers_input"] = tickers_input
 
     fetch_dashboard_col, historic_ltp_col = st.columns([1, 3], vertical_alignment="center")
     with fetch_dashboard_col:

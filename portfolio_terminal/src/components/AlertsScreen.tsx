@@ -148,12 +148,13 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 onChange={(event) => setSearchText(event.target.value)}
               />
             </div>
-            <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[900px] border-collapse text-left text-sm">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
                   <SortableHeader sortKey="symbol" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Symbol</SortableHeader>
                   <SortableHeader className="w-32 max-w-32" sortKey="name" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Name</SortableHeader>
                   <HeaderCell align="right" className="w-20 max-w-20">LTP</HeaderCell>
+                  <HeaderCell className="w-48 max-w-48">Position</HeaderCell>
                   <HeaderCell align="right" className="w-28 max-w-28">Trigger</HeaderCell>
                   <SortableHeader className="w-20 max-w-20" sortKey="status" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Status</SortableHeader>
                   <HeaderCell align="right"></HeaderCell>
@@ -163,9 +164,12 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
               <tbody>
                 {sortedAlerts.map((alert) => (
                   <tr key={alert.uuid} className={`border-t border-terminal-line ${editingUuid === alert.uuid ? "bg-terminal-selected" : ""}`}>
-                    <td className="whitespace-nowrap px-3 py-2 font-semibold text-terminal-ink">{alert.lhs_tradingsymbol}</td>
-                    <td className="max-w-32 truncate whitespace-nowrap px-3 py-2 text-terminal-ink" title={alert.name}>{alert.name}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-xs font-semibold text-terminal-ink">{alert.lhs_tradingsymbol}</td>
+                    <td className="max-w-32 truncate whitespace-nowrap px-3 py-2 text-xs text-terminal-ink" title={alert.name}>{alert.name}</td>
                     <td className="w-20 max-w-20 whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink">{alert.ltp === null || alert.ltp === undefined ? "-" : formatPrice(Number(alert.ltp))}</td>
+                    <td className="w-48 max-w-48 px-2 py-2 text-xs leading-4 text-terminal-muted" title={alert.price_context || "-"}>
+                      <span className="line-clamp-2 whitespace-normal break-words tabular-nums">{alert.price_context || "-"}</span>
+                    </td>
                     <td className="w-28 max-w-28 truncate whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink" title={triggerText(alert)}>
                       {triggerText(alert)}
                     </td>
@@ -193,7 +197,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 ))}
                 {data?.loaded && sortedAlerts.length === 0 ? (
                   <tr className="border-t border-terminal-line">
-                    <td className="px-3 py-6 text-sm text-terminal-muted" colSpan={7}>No alerts returned for this filter.</td>
+                    <td className="px-3 py-6 text-sm text-terminal-muted" colSpan={8}>No alerts returned for this filter.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -325,6 +329,7 @@ function alertDedupeKey(alert: KiteAlert) {
     alert.rhs_exchange,
     alert.rhs_tradingsymbol,
     alert.rhs_attribute,
+    alert.price_context,
   ]
     .map((value) => String(value ?? "").trim().toLowerCase())
     .join("|");
