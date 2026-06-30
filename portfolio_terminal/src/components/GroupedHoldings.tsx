@@ -93,15 +93,15 @@ export function GroupedHoldings({
                 </span>
               </div>
             </summary>
-            <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,3fr)_minmax(18rem,0.9fr)]">
+            <div className="grid grid-cols-[minmax(0,1fr)_20rem] gap-4 p-4">
               <div className="overflow-hidden rounded-md border border-terminal-line">
-                <table className="w-full border-collapse text-left text-sm">
+                <table className="w-full border-collapse text-left text-xs">
                   <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                     <tr>
                       {SORT_COLUMNS.map((column) => (
                         <th
                           key={column.key}
-                          className={`px-3 py-2 ${column.align === "right" ? "text-right" : ""}`}
+                          className={`px-2 py-2 ${column.align === "right" ? "text-right" : ""}`}
                         >
                           <button
                             type="button"
@@ -128,29 +128,29 @@ export function GroupedHoldings({
                           selectedSymbol === holding.symbol ? "bg-terminal-selected" : "bg-terminal-panel"
                         }`}
                       >
-                        <td className="px-3 py-2 font-bold text-terminal-ink">{holding.symbol}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{holding.quantity}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">
+                        <td className="px-2 py-2 font-bold text-terminal-ink">{holding.symbol}</td>
+                        <td className="px-2 py-2 text-right tabular-nums">{holding.quantity}</td>
+                        <td className="px-2 py-2 text-right tabular-nums">
                           {formatPrice(holding.averagePrice)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
+                        <td className="px-2 py-2 text-right tabular-nums">
                           {formatMoney(holding.invested)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
+                        <td className="px-2 py-2 text-right tabular-nums">
                           {formatPct(holding.weightPct)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
+                        <td className="px-2 py-2 text-right tabular-nums">
                           {formatMoney(holding.current)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatPrice(holding.ltp)}</td>
-                        <td className={`px-3 py-2 text-right tabular-nums ${signedClass(holding.pnl)}`}>
+                        <td className="px-2 py-2 text-right tabular-nums">{formatPrice(holding.ltp)}</td>
+                        <td className={`px-2 py-2 text-right tabular-nums ${signedClass(holding.pnl)}`}>
                           {formatMoney(holding.pnl)}
                         </td>
-                        <td className={`px-3 py-2 text-right tabular-nums ${signedClass(holding.pnlPct)}`}>
+                        <td className={`px-2 py-2 text-right tabular-nums ${signedClass(holding.pnlPct)}`}>
                           {formatPct(holding.pnlPct)}
                         </td>
                         <td
-                          className={`px-3 py-2 text-right tabular-nums ${signedClass(
+                          className={`px-2 py-2 text-right tabular-nums ${signedClass(
                             holding.dayChangePct
                           )}`}
                         >

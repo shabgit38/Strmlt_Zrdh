@@ -625,58 +625,48 @@ function IndexSpotCard({
       </div>
 
       <div className="mt-3 overflow-hidden rounded-md border border-terminal-line">
-        <table className="w-full border-collapse text-sm">
-          <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
-            <tr>
-              <HeaderCell align="right">Strike</HeaderCell>
-              <HeaderCell align="right">Expiry</HeaderCell>
-              <HeaderCell align="right">Type</HeaderCell>
-              <HeaderCell align="right"></HeaderCell>
-            </tr>
-          </thead>
-          <tbody>
-            {selectedStrike && spot.spot !== null ? (
-              <tr className="border-t border-terminal-line">
-                <td className="px-1.5 py-2 text-right">
-                  <select
-                    className="w-32 rounded-md border border-terminal-line bg-terminal-panel-alt px-1 py-1 text-[11px] text-terminal-ink outline-none"
-                    value={String(selectedStrike.strike)}
-                    onChange={(event) =>
-                      setSelectedContracts((previous) => ({ ...previous, [selectedStrikeKey]: event.target.value }))
-                    }
-                  >
-                    {strikeRows.map((strike) => (
-                      <option key={strike.strike} value={String(strike.strike)}>
-                        {formatStrikeWithSpotDistance(strike.strike, spot.spot)}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <ContractPicker
-                  checkedSymbols={checkedSymbols}
-                  contracts={selectedStrikeContracts}
-                  pickerKey={pickerKey}
-                  selectedContracts={selectedContracts}
-                  setSelectedContracts={setSelectedContracts}
-                  onChange={(checked) =>
-                    selectedContractForPicker(selectedStrikeContracts, selectedContracts, pickerKey) &&
-                    onToggle({
-                      checked,
-                      contract: selectedContractForPicker(selectedStrikeContracts, selectedContracts, pickerKey)!,
-                      spot: spot.spot ?? 0,
-                    })
-                  }
-                />
-              </tr>
-            ) : (
-              <tr className="border-t border-terminal-line">
-                <td className="px-3 py-3 text-sm text-terminal-muted" colSpan={4}>
-                  Waiting for live spot
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <div className="grid grid-cols-[minmax(6rem,1fr)_minmax(4.75rem,0.75fr)_2.75rem_2rem] gap-1 bg-terminal-panel-alt px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wide text-terminal-muted">
+          <span>Strike</span>
+          <span>Expiry</span>
+          <span>Type</span>
+          <span></span>
+        </div>
+        {selectedStrike && spot.spot !== null ? (
+          <div className="grid grid-cols-[minmax(6rem,1fr)_minmax(4.75rem,0.75fr)_2.75rem_2rem] items-center gap-1 border-t border-terminal-line px-2 py-2">
+            <select
+              className="min-w-0 rounded-md border border-terminal-line bg-terminal-panel-alt px-1 py-1 text-[11px] text-terminal-ink outline-none"
+              value={String(selectedStrike.strike)}
+              onChange={(event) =>
+                setSelectedContracts((previous) => ({ ...previous, [selectedStrikeKey]: event.target.value }))
+              }
+            >
+              {strikeRows.map((strike) => (
+                <option key={strike.strike} value={String(strike.strike)}>
+                  {formatStrikeWithSpotDistance(strike.strike, spot.spot)}
+                </option>
+              ))}
+            </select>
+            <ContractPicker
+              checkedSymbols={checkedSymbols}
+              contracts={selectedStrikeContracts}
+              pickerKey={pickerKey}
+              selectedContracts={selectedContracts}
+              setSelectedContracts={setSelectedContracts}
+              onChange={(checked) =>
+                selectedContractForPicker(selectedStrikeContracts, selectedContracts, pickerKey) &&
+                onToggle({
+                  checked,
+                  contract: selectedContractForPicker(selectedStrikeContracts, selectedContracts, pickerKey)!,
+                  spot: spot.spot ?? 0,
+                })
+              }
+            />
+          </div>
+        ) : (
+          <div className="border-t border-terminal-line px-3 py-3 text-sm text-terminal-muted">
+            Waiting for live spot
+          </div>
+        )}
       </div>
     </div>
   );
@@ -709,63 +699,57 @@ function ContractPicker({
 
   return (
     <>
-      <td className="px-2 py-2 text-right">
-        <select
-          className="w-24 rounded-md border border-terminal-line bg-terminal-panel-alt px-0.5 py-1 text-[11px] text-terminal-ink outline-none"
-          disabled={contracts.length === 0}
-          value={selectedExpiry}
-          onChange={(event) => {
-            if (checked) {
-              onChange(false);
-            }
-            setSelectedContracts((previous) => ({ ...previous, [expiryKey]: event.target.value }));
-          }}
-        >
-          {expiries.length === 0 ? (
-            <option value="">-</option>
-          ) : (
-            expiries.map((expiry) => (
-              <option key={expiry} value={expiry}>
-                {expiry}
-              </option>
-            ))
-          )}
-        </select>
-      </td>
-      <td className="px-1 py-2 text-right">
-        <select
-          className="w-12 rounded-md border border-terminal-line bg-terminal-panel-alt px-0.5 py-1 text-[11px] text-terminal-ink outline-none"
-          disabled={availableTypes.length === 0}
-          value={effectiveType ?? ""}
-          onChange={(event) => {
-            if (checked) {
-              onChange(false);
-            }
-            setSelectedContracts((previous) => ({ ...previous, [typeKey]: event.target.value }));
-          }}
-        >
-          {availableTypes.length === 0 ? (
-            <option value="">-</option>
-          ) : (
-            availableTypes.map((optionType) => (
-              <option key={optionType} value={optionType}>
-                {optionType}
-              </option>
-            ))
-          )}
-        </select>
-      </td>
-      <td className="px-1 py-2 text-right">
-        <button
-          className="inline-flex rounded-md border border-terminal-line p-1 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
-          disabled={!selectedContract || checked}
-          type="button"
-          onClick={() => onChange(true)}
-          title={checked ? "Added" : "Add contract"}
-        >
-          <Plus className="h-3 w-3" />
-        </button>
-      </td>
+      <select
+        className="min-w-0 rounded-md border border-terminal-line bg-terminal-panel-alt px-0.5 py-1 text-[11px] text-terminal-ink outline-none"
+        disabled={contracts.length === 0}
+        value={selectedExpiry}
+        onChange={(event) => {
+          if (checked) {
+            onChange(false);
+          }
+          setSelectedContracts((previous) => ({ ...previous, [expiryKey]: event.target.value }));
+        }}
+      >
+        {expiries.length === 0 ? (
+          <option value="">-</option>
+        ) : (
+          expiries.map((expiry) => (
+            <option key={expiry} value={expiry}>
+              {expiry}
+            </option>
+          ))
+        )}
+      </select>
+      <select
+        className="min-w-0 rounded-md border border-terminal-line bg-terminal-panel-alt px-0.5 py-1 text-[11px] text-terminal-ink outline-none"
+        disabled={availableTypes.length === 0}
+        value={effectiveType ?? ""}
+        onChange={(event) => {
+          if (checked) {
+            onChange(false);
+          }
+          setSelectedContracts((previous) => ({ ...previous, [typeKey]: event.target.value }));
+        }}
+      >
+        {availableTypes.length === 0 ? (
+          <option value="">-</option>
+        ) : (
+          availableTypes.map((optionType) => (
+            <option key={optionType} value={optionType}>
+              {optionType}
+            </option>
+          ))
+        )}
+      </select>
+      <button
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-terminal-line text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
+        disabled={!selectedContract || checked}
+        type="button"
+        onClick={() => onChange(true)}
+        title={checked ? "Added" : "Add contract"}
+      >
+        <Plus className="h-3 w-3" />
+      </button>
     </>
   );
 }

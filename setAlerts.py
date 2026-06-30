@@ -57,8 +57,7 @@ def render_alerts_tab(*, key: str = "alerts_terminal_component") -> None:
         return
 
     st.session_state[ALERTS_LAST_REQUEST_ID_KEY] = request_id
-    with st.spinner("Fetching alerts..."):
-        st.session_state[ALERTS_STATE_KEY] = _handle_alerts_request(component_value)
+    st.session_state[ALERTS_STATE_KEY] = _handle_alerts_request(component_value)
     _log_alerts_step("Stored alerts data in session state; rerunning Streamlit.")
     st.rerun()
 
