@@ -7,6 +7,7 @@ import type { AlertFormValues, AlertsData, AlertStatusFilter, KiteAlert } from "
 
 type SortKey = "status" | "symbol" | "name" | "ltp" | "updated_at";
 type SortDirection = "asc" | "desc";
+type AlertAction = "fetch" | "create" | "modify" | "delete";
 
 const EMPTY_FORM: AlertFormValues = {
   name: "",
@@ -29,6 +30,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
   const [editingUuid, setEditingUuid] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<AlertFormValues>(EMPTY_FORM);
   const [searchText, setSearchText] = useState("");
+  const [pendingAction, setPendingAction] = useState<AlertAction | null>(null);
 
   useEffect(() => {
     setStatusFilter(data?.statusFilter ?? "active");
@@ -44,6 +46,11 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
     setFormValues(EMPTY_FORM);
   }, [data?.lastAction, data?.lastRequestId, data?.error]);
 
+  useEffect(() => {
+    if (!data?.lastRequestId) return;
+    setPendingAction(null);
+  }, [data?.lastRequestId]);
+
   const alerts = data?.alerts ?? [];
   const uniqueAlerts = useMemo(() => dedupeAlertsByUuid(alerts), [alerts]);
   const visibleAlerts = useMemo(
@@ -55,11 +62,13 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
     [visibleAlerts, sortKey, sortDirection],
   );
 
-  function sendAction(action: "fetch" | "create" | "modify" | "delete", payload: Record<string, unknown> = {}) {
+  function sendAction(action: AlertAction, payload: Record<string, unknown> = {}) {
+    const requestId = `${Date.now()}-${action}`;
+    setPendingAction(action);
     setStreamlitComponentValue({
       type: "alerts",
       action,
-      requestId: `${Date.now()}-${action}`,
+      requestId,
       statusFilter: "active",
       payload,
     });
@@ -116,6 +125,11 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 ? `${sortedAlerts.length} shown from ${uniqueAlerts.length} unique alert${uniqueAlerts.length === 1 ? "" : "s"}`
                 : "Fetch alerts to load Kite data"}
             </div>
+            {data?.disabledSymbolsText ? (
+              <div className="mt-1 text-xs font-semibold text-terminal-near" title={data.disabledSymbolsText}>
+                Disabled: {data.disabledSymbolsText}
+              </div>
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select
@@ -130,10 +144,11 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
             <button
               className="inline-flex items-center gap-2 rounded-md border border-terminal-line px-3 py-2 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover"
               type="button"
+              disabled={pendingAction !== null}
               onClick={() => sendAction("fetch")}
             >
-              <RefreshCw className="h-4 w-4" />
-              Get alerts
+              <RefreshCw className={`h-4 w-4 ${pendingAction === "fetch" ? "animate-spin" : ""}`} />
+              {pendingAction === "fetch" ? "Fetching..." : "Get alerts"}
             </button>
           </div>
         </section>
@@ -180,13 +195,13 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                           className="rounded-md border border-terminal-line p-2 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
                           type="button"
                           title={alert.type === "simple" ? "Edit" : "ATO edit disabled in phase 1"}
-                          disabled={alert.type !== "simple"}
+                          disabled={alert.type !== "simple" || pendingAction !== null}
                           onClick={() => startEdit(alert)}
                         >
                           <Edit3 className="h-4 w-4" />
                         </button>
-                        <button className="rounded-md border border-terminal-line p-2 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-avoid" type="button" title="Delete" onClick={() => window.confirm(`Delete alert "${alert.name}"?`) && sendAction("delete", { uuid: alert.uuid })}>
-                          <Trash2 className="h-4 w-4" />
+                        <button className="rounded-md border border-terminal-line p-2 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-avoid disabled:cursor-default disabled:opacity-40" type="button" title="Delete" disabled={pendingAction !== null} onClick={() => window.confirm(`Delete alert "${alert.name}"?`) && sendAction("delete", { uuid: alert.uuid })}>
+                          <Trash2 className={`h-4 w-4 ${pendingAction === "delete" ? "animate-pulse" : ""}`} />
                         </button>
                       </div>
                     </td>
@@ -228,10 +243,11 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
               <button
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-terminal-line bg-terminal-panel-alt px-3 py-2 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover"
                 type="button"
+                disabled={pendingAction !== null}
                 onClick={submitForm}
               >
-                <Save className="h-4 w-4" />
-                {editingUuid ? "Modify" : "Create"}
+                <Save className={`h-4 w-4 ${pendingAction === "create" || pendingAction === "modify" ? "animate-pulse" : ""}`} />
+                {pendingAction === "modify" ? "Modifying..." : pendingAction === "create" ? "Creating..." : editingUuid ? "Modify" : "Create"}
               </button>
               <p className="text-xs leading-5 text-terminal-muted">Phase 1 supports simple constant-price alerts. ATO alerts are visible in the table but should be edited in Kite until basket support is added.</p>
             </div>

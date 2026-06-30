@@ -142,7 +142,7 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
         _log_alerts_step(f"Parsed {len(alerts)} alert row(s) from Kite response.")
         ltp_enriched_alerts = enrich_alerts_with_ltp(kite, alerts)
         next_data["alerts"] = _dedupe_alerts(enrich_alerts_with_price_context(kite, ltp_enriched_alerts))
-        print(f"Disabled alert symbols: {_disabled_alert_symbols_text(next_data['alerts'])}", flush=True)
+        next_data["disabledSymbolsText"] = _disabled_alert_symbols_text(next_data["alerts"])
         _log_alerts_step(f"Prepared {len(next_data['alerts'])} alert row(s) for React table.")
         if ALERTS_DEBUG_LOG_ENABLED:
             next_data["fetchMeta"] = fetch_meta
@@ -234,7 +234,7 @@ def _patch_modified_alert_row(
             found = True
             next_alert.update(payload_fields)
             next_alert["uuid"] = uuid
-            next_alert.setdefault("status", alert.get("status", "enabled"))
+            next_alert["status"] = "enabled"
             next_alert.setdefault("alert_count", alert.get("alert_count", 0))
             if _alert_symbol_changed(alert, next_alert):
                 next_alert["ltp"] = None

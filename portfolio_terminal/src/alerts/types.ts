@@ -30,6 +30,7 @@ export type AlertsData = {
   error?: string;
   lastAction?: string;
   lastRequestId?: string;
+  disabledSymbolsText?: string;
 };
 
 export type AlertFormValues = {
