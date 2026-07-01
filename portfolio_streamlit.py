@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Any
 
 import pandas as pd
@@ -141,6 +142,39 @@ def _component_text(value: Any) -> str:
     return str(value)
 
 
+def _mtf_summary_by_symbol(holdings_breakdown_df: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+    if holdings_breakdown_df is None or holdings_breakdown_df.empty:
+        return {}
+    required_columns = {"row_type", "symbol", "trade_date", "trade_type"}
+    if not required_columns.issubset(holdings_breakdown_df.columns):
+        return {}
+
+    active_df = _active_breakdown_df(holdings_breakdown_df)
+    if active_df.empty:
+        return {}
+
+    row_type = active_df["row_type"].astype(str).str.upper().str.strip()
+    trade_type = active_df["trade_type"].astype(str).str.upper().str.strip()
+    mtf_summary_df = active_df[row_type.eq("SUMMARY") & trade_type.eq("MTF")].copy()
+    if mtf_summary_df.empty:
+        return {}
+
+    summary_by_symbol: dict[str, dict[str, Any]] = {}
+    for _, row in mtf_summary_df.iterrows():
+        symbol = _normalized_symbol_value(row.get("symbol"))
+        if not symbol or symbol in summary_by_symbol:
+            continue
+        buy_date = pd.to_datetime(row.get("trade_date"), errors="coerce")
+        if pd.isna(buy_date):
+            continue
+        buy_date_value = buy_date.date()
+        summary_by_symbol[symbol] = {
+            "buyDate": buy_date_value.isoformat(),
+            "holdingDays": max((date.today() - buy_date_value).days, 0),
+        }
+    return summary_by_symbol
+
+
 def _day_pnl_from_ltp_change(ltp: Any, day_change_pct: Any, quantity: Any) -> float:
     ltp_value = pd.to_numeric(ltp, errors="coerce")
     day_change_value = pd.to_numeric(day_change_pct, errors="coerce")
@@ -191,10 +225,14 @@ def _portfolio_component_batches(
     ]
 
 
-def _mtf_snapshot_rows(holdings_df: pd.DataFrame) -> list[dict[str, Any]]:
+def _mtf_snapshot_rows(
+    holdings_df: pd.DataFrame,
+    holdings_breakdown_df: pd.DataFrame | None = None,
+) -> list[dict[str, Any]]:
     mtf_display_df = _mtf_holdings_display_df(holdings_df)
     if mtf_display_df.empty:
         return []
+    summary_by_symbol = _mtf_summary_by_symbol(holdings_breakdown_df)
     return [
         {
             "symbol": _component_text(row.get("Symbol")),
@@ -205,9 +243,19 @@ def _mtf_snapshot_rows(holdings_df: pd.DataFrame) -> list[dict[str, Any]]:
             "ltp": _component_number(row.get("LTP")),
             "pnl": _component_number(row.get("P&L")),
             "dayChangePct": _component_number(row.get("Daychg%")),
+            **summary_by_symbol.get(_normalized_symbol_value(row.get("Symbol")), {}),
         }
         for _, row in mtf_display_df.iterrows()
     ]
+
+
+def build_mtf_holdings_snapshot(
+    holdings_df: pd.DataFrame | None,
+    holdings_breakdown_df: pd.DataFrame | None = None,
+) -> list[dict[str, Any]]:
+    if holdings_df is None or holdings_df.empty:
+        return []
+    return _mtf_snapshot_rows(holdings_df, holdings_breakdown_df)
 
 
 def _mtf_totals(holdings_df: pd.DataFrame) -> dict[str, float]:
@@ -240,7 +288,7 @@ def build_portfolio_terminal_snapshot(
         "asOf": as_of,
         "totals": {"invested": 0, "current": 0, "pnl": 0, "pnlPct": 0, "dayPnl": 0, "dayPnlPct": 0},
         "sectors": [],
-        "mtfHoldings": _mtf_snapshot_rows(holdings_df),
+        "mtfHoldings": _mtf_snapshot_rows(holdings_df, holdings_breakdown_df),
     }
     if holdings_df.empty:
         return empty_snapshot
@@ -334,6 +382,5 @@ def build_portfolio_terminal_snapshot(
             "dayPnlPct": total_day_pnl_pct,
         },
         "sectors": sectors,
-        "mtfHoldings": _mtf_snapshot_rows(holdings_df),
+        "mtfHoldings": _mtf_snapshot_rows(holdings_df, holdings_breakdown_df),
     }
-

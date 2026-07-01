@@ -7,7 +7,7 @@ import {
   setStreamlitFrameHeight,
   subscribeToStreamlitRender,
 } from "./streamlitBridge";
-import type { PortfolioSnapshot } from "./types";
+import type { MtfHolding, PortfolioSnapshot } from "./types";
 import type { CalculatorsLiveData } from "./calculators/types";
 import type { AlertsData } from "./alerts/types";
 
@@ -19,6 +19,7 @@ function renderApp(
   streamlitMode = false,
   screen: Screen = "portfolio",
   liveData?: CalculatorsLiveData | null,
+  mtfHoldings?: MtfHolding[] | null,
   alertsData?: AlertsData | null,
 ) {
   root.render(
@@ -28,6 +29,7 @@ function renderApp(
         streamlitMode={streamlitMode}
         screen={screen}
         liveData={liveData ?? null}
+        mtfHoldings={mtfHoldings ?? []}
         alertsData={alertsData ?? null}
       />
     </React.StrictMode>,
@@ -42,6 +44,7 @@ if (isStreamlitComponent()) {
       true,
       args.screen === "calculators" ? "calculators" : args.screen === "alerts" ? "alerts" : "portfolio",
       args.liveData as CalculatorsLiveData,
+      args.mtfHoldings as MtfHolding[],
       args.alertsData as AlertsData,
     );
   });

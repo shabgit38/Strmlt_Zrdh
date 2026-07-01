@@ -844,8 +844,9 @@ def render_momentum_ranking_table(
         )
     with notes_col:
         selected_rows = momentum_selection.selection.rows if momentum_selection.selection else []
-        if selected_rows:
-            render_stock_memory_card(momentum_display_df.iloc[selected_rows[0]])
+        selected_row = selected_rows[0] if selected_rows else None
+        if selected_row is not None and 0 <= selected_row < len(momentum_display_df):
+            render_stock_memory_card(momentum_display_df.iloc[selected_row])
         else:
             st.info("Select a stock row to view or add notes.")
 
@@ -1559,7 +1560,13 @@ if selected_main_tab == "Holdings":
 
 
 if selected_main_tab == "Calculators":
-    render_calculators_terminal(key="calculators_terminal_component")
+    render_calculators_terminal(
+        key="calculators_terminal_component",
+        mtf_holdings=portfolio_streamlit.build_mtf_holdings_snapshot(
+            st.session_state.get("kite_holdings_df"),
+            _holdings_breakdown_state_df(),
+        ),
+    )
 
 
 if selected_main_tab == "Alerts":

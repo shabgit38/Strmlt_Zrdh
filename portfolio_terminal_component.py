@@ -61,7 +61,11 @@ def render_portfolio_terminal(snapshot: dict[str, Any], *, key: str | None = Non
     _portfolio_terminal(snapshot=snapshot, screen="portfolio", key=key, default=None)
 
 
-def render_calculators_terminal(*, key: str | None = None) -> None:
+def render_calculators_terminal(
+    *,
+    key: str | None = None,
+    mtf_holdings: list[dict[str, Any]] | None = None,
+) -> None:
     if _CALCULATORS_LIVE_DATA_STATE_KEY not in st.session_state:
         st.session_state[_CALCULATORS_LIVE_DATA_STATE_KEY] = {
             "spots": _missing_spots(),
@@ -73,6 +77,7 @@ def render_calculators_terminal(*, key: str | None = None) -> None:
         snapshot=None,
         screen="calculators",
         liveData=st.session_state[_CALCULATORS_LIVE_DATA_STATE_KEY],
+        mtfHoldings=mtf_holdings or [],
         key=key,
         default=None,
     )

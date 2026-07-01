@@ -10,17 +10,25 @@ import { SectorSummaryTable } from "./components/SectorSummaryTable";
 import { formatMoney, formatPct, signedClass } from "./format";
 import type { AlertsData } from "./alerts/types";
 import type { CalculatorsLiveData } from "./calculators/types";
-import type { Holding, PortfolioSnapshot } from "./types";
+import type { Holding, MtfHolding, PortfolioSnapshot } from "./types";
 
 type AppProps = {
   streamlitSnapshot?: PortfolioSnapshot | null;
   streamlitMode?: boolean;
   screen?: "portfolio" | "calculators" | "alerts";
   liveData?: CalculatorsLiveData | null;
+  mtfHoldings?: MtfHolding[];
   alertsData?: AlertsData | null;
 };
 
-export function App({ streamlitSnapshot, streamlitMode = false, screen = "portfolio", liveData = null, alertsData = null }: AppProps) {
+export function App({
+  streamlitSnapshot,
+  streamlitMode = false,
+  screen = "portfolio",
+  liveData = null,
+  mtfHoldings = [],
+  alertsData = null,
+}: AppProps) {
   const [snapshot, setSnapshot] = useState<PortfolioSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedSector, setSelectedSector] = useState<string | null>(null);
@@ -53,7 +61,7 @@ export function App({ streamlitSnapshot, streamlitMode = false, screen = "portfo
   }, [screen, streamlitMode, streamlitSnapshot]);
 
   if (screen === "calculators") {
-    return <CalculatorsScreen liveData={liveData} />;
+    return <CalculatorsScreen liveData={liveData} mtfHoldings={mtfHoldings} />;
   }
 
   if (screen === "alerts") {

@@ -2,6 +2,7 @@ type StreamlitRenderArgs = {
   snapshot?: unknown;
   screen?: unknown;
   liveData?: unknown;
+  mtfHoldings?: unknown;
   alertsData?: unknown;
 };
 

@@ -39,6 +39,8 @@ export type MtfHolding = {
   ltp: number;
   pnl: number;
   dayChangePct: number;
+  buyDate?: string;
+  holdingDays?: number;
 };
 
 export type PortfolioSnapshot = {

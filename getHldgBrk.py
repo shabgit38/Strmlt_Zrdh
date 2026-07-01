@@ -30,6 +30,7 @@ HOLDINGS_COLUMN_MAP = {
     "P&L %": "pnl_pct",
     "P&L chg": "pnl_pct",
     "Date": "trade_date",
+    "Trade Type": "trade_type",
     "Batch Qty": "batch_qty",
     "Batch Price": "batch_price",
     "Age(Days)": "age_days",

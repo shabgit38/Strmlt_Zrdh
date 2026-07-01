@@ -16,6 +16,7 @@ import {
 } from "../calculators/logic";
 import { generateExitAlert } from "../calculators/alertEngine";
 import { formatManualSpotDistance } from "../calculators/optionMetrics";
+import { MtfHoldingsTable } from "./MtfHoldingsTable";
 import type {
   AvgCalculatorRow,
   CalculatorsLiveData,
@@ -27,12 +28,19 @@ import type {
   TargetOptionContracts,
   TradeCalculatorRow,
 } from "../calculators/types";
+import type { MtfHolding } from "../types";
 
 type OptionField = keyof OptionCalculatorRow;
 type TradeField = keyof TradeCalculatorRow;
 type AvgField = keyof AvgCalculatorRow;
 
-export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData | null }) {
+export function CalculatorsScreen({
+  liveData,
+  mtfHoldings = [],
+}: {
+  liveData?: CalculatorsLiveData | null;
+  mtfHoldings?: MtfHolding[];
+}) {
   const [optionRows, setOptionRows] = useState<OptionCalculatorRow[]>(() => [emptyOptionRow()]);
   const [tradeRows, setTradeRows] = useState<TradeCalculatorRow[]>(() => [emptyTradeRow()]);
   const [avgRows, setAvgRows] = useState<AvgCalculatorRow[]>(() => [emptyAvgRow()]);
@@ -302,6 +310,8 @@ export function CalculatorsScreen({ liveData }: { liveData?: CalculatorsLiveData
             positions={existingPositions}
           />
         ) : null}
+
+        <MtfHoldingsTable holdings={mtfHoldings} />
 
         <section className="grid gap-3 md:grid-cols-3">
           {displaySpots(spots).map((spot) => (
