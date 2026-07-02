@@ -456,41 +456,30 @@ def render_stock_memory_card(momentum_row: pd.Series) -> None:
                 + "</div>",
                 unsafe_allow_html=True,
             )
-            why = st.text_area(
-                "Why",
-                value=_format_card_value(card_row.get("why"), ""),
-                height=58,
-                key=f"{editor_key}_why",
-            )
-            moat = st.text_area(
-                "Moat",
-                value=_format_card_value(card_row.get("moat"), ""),
-                height=58,
-                key=f"{editor_key}_moat",
-            )
-            risk = st.text_area(
-                "Risk",
-                value=_format_card_value(card_row.get("risk"), ""),
-                height=58,
-                key=f"{editor_key}_risk",
-            )
-            action_cols = st.columns([0.18, 0.18, 1], vertical_alignment="center")
-            with action_cols[0]:
-                save_clicked = st.button(
-                    "",
-                    key=f"{editor_key}_save",
-                    icon=":material/save:",
-                    help="Save note",
-                    width="content",
+            with st.form(f"{editor_key}_form"):
+                why = st.text_area(
+                    "Why",
+                    value=_format_card_value(card_row.get("why"), ""),
+                    height=58,
+                    key=f"{editor_key}_why",
                 )
-            with action_cols[1]:
-                cancel_clicked = st.button(
-                    "",
-                    key=f"{editor_key}_cancel",
-                    icon=":material/close:",
-                    help="Cancel",
-                    width="content",
+                moat = st.text_area(
+                    "Moat",
+                    value=_format_card_value(card_row.get("moat"), ""),
+                    height=58,
+                    key=f"{editor_key}_moat",
                 )
+                risk = st.text_area(
+                    "Risk",
+                    value=_format_card_value(card_row.get("risk"), ""),
+                    height=58,
+                    key=f"{editor_key}_risk",
+                )
+                action_cols = st.columns([0.18, 0.18, 1], vertical_alignment="center")
+                with action_cols[0]:
+                    save_clicked = st.form_submit_button("Save", type="primary")
+                with action_cols[1]:
+                    cancel_clicked = st.form_submit_button("Cancel")
 
             if cancel_clicked:
                 st.session_state.pop(editor_key, None)

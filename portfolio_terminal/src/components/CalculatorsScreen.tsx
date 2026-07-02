@@ -334,7 +334,7 @@ export function CalculatorsScreen({
             onAdd={() => setOptionRows((rows) => [...rows, emptyOptionRow()])}
           />
           <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
-            <table className="w-full min-w-[1160px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[1160px] border-collapse text-left text-xs">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
                   <HeaderCell>Symbol</HeaderCell>
@@ -363,7 +363,7 @@ export function CalculatorsScreen({
                     <ValueCell align="right" highlight="amber" value={formatInteger(row.daysExpiry)} />
                     <ValueCell align="right" highlight="amber" value={formatNullablePrice(row.breakeven)} />
                     <ValueCell align="right" highlight="amber" value={row.distSpot || "-"} />
-                    <td className={`px-3 py-2 text-sm font-semibold ${alertClass(row.alertTone)}`}>{row.alert}</td>
+                    <td className={`px-3 py-2 text-xs font-semibold ${alertClass(row.alertTone)}`}>{row.alert}</td>
                     <ValueCell align="right" value={formatNullableMoney(row.invested)} />
                     <InputCell align="right" widthClass="w-20" value={row.exitPrice} onChange={(value) => updateOptionRow(row.id, "exitPrice", value)} />
                     <ValueCell align="right" value={formatNullableMoney(row.current)} />
@@ -391,7 +391,7 @@ export function CalculatorsScreen({
             </label>
           </div>
           <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
-            <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[1120px] border-collapse text-left text-xs">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
                   <HeaderCell></HeaderCell>
@@ -460,7 +460,7 @@ export function CalculatorsScreen({
           <section className="space-y-3">
             <SectionHeader title="Average Calculator" onAdd={() => setAvgRows((rows) => [...rows, emptyAvgRow()])} />
             <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
-              <table className="w-full min-w-[720px] border-collapse text-left text-sm">
+              <table className="w-full min-w-[720px] border-collapse text-left text-xs">
                 <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                   <tr>
                     <HeaderCell>Symbol</HeaderCell>
@@ -531,7 +531,7 @@ function ExistingPositionsSection({
         ) : null}
       </div>
       <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
-        <table className="w-full min-w-[920px] border-collapse text-left text-sm">
+        <table className="w-full min-w-[920px] border-collapse text-left text-xs">
           <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
             <tr>
               <HeaderCell>Symbol</HeaderCell>
@@ -569,7 +569,7 @@ function ExistingPositionsSection({
                   <ValueCell align="right" value={formatMoney(position.pnl)} tone={position.pnl} />
                   <ValueCell align="right" value={formatNullablePct(metrics.pnlPct)} tone={metrics.pnlPct} />
                   <ValueCell align="right" value={formatMoney(metrics.balance)} tone={metrics.balance} />
-                  <td className={`px-3 py-2 text-sm font-semibold ${alertClass(metrics.alert.tone)}`}>
+                  <td className={`px-3 py-2 text-xs font-semibold ${alertClass(metrics.alert.tone)}`}>
                     {metrics.alert.label}
                   </td>
                   <td className="px-3 py-2 text-right">
@@ -673,7 +673,7 @@ function IndexSpotCard({
             />
           </div>
         ) : (
-          <div className="border-t border-terminal-line px-3 py-3 text-sm text-terminal-muted">
+          <div className="border-t border-terminal-line px-3 py-3 text-xs text-terminal-muted">
             Waiting for live spot
           </div>
         )}
@@ -815,7 +815,7 @@ function InputCell({
   return (
     <td className="px-2 py-1">
       <input
-        className={`${widthClass} rounded-md border border-terminal-line bg-terminal-panel-alt px-2 py-1 text-sm text-terminal-ink outline-none focus:border-terminal-watch ${
+        className={`${widthClass} rounded-md border border-terminal-line bg-terminal-panel-alt px-2 py-1 text-xs text-terminal-ink outline-none focus:border-terminal-watch ${
           align === "right" ? "text-right tabular-nums" : ""
         }`}
         type={type}
@@ -886,7 +886,7 @@ function SummaryTable({
 }) {
   return (
     <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
-      <table className="w-full border-collapse text-left text-sm">
+      <table className="w-full border-collapse text-left text-xs">
         <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
           <tr>
             {headers.map((header, index) => (

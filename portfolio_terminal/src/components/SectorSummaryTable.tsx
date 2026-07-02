@@ -54,7 +54,7 @@ export function SectorSummaryTable({
         <span className="text-xs text-terminal-muted">{sectors.length} sectors</span>
       </div>
       <div className="overflow-hidden rounded-md border border-terminal-line">
-        <table className="w-full border-collapse text-left text-sm">
+        <table className="w-full border-collapse text-left text-xs">
           <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
             <tr>
               {SORT_COLUMNS.map((column) => (

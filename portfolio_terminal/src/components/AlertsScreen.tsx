@@ -165,7 +165,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 onChange={(event) => setSearchText(event.target.value)}
               />
             </div>
-            <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[900px] border-collapse text-left text-xs">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
                   <SortableHeader sortKey="symbol" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Symbol</SortableHeader>
@@ -214,7 +214,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 ))}
                 {data?.loaded && sortedAlerts.length === 0 ? (
                   <tr className="border-t border-terminal-line">
-                    <td className="px-3 py-6 text-sm text-terminal-muted" colSpan={8}>No alerts returned for this filter.</td>
+                    <td className="px-3 py-6 text-xs text-terminal-muted" colSpan={8}>No alerts returned for this filter.</td>
                   </tr>
                 ) : null}
               </tbody>

@@ -39,19 +39,19 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
               <th className="px-2 py-2 text-right">MTF Qty</th>
               <th className="px-2 py-2 text-right">MTF Avg</th>
               <th className="px-2 py-2 text-right">MTF Value</th>
-              <th className="px-2 py-2 text-right">Initial Margin</th>
-              <th className="px-2 py-2 text-right">Funded</th>
-              <th className="px-2 py-2 text-right">Margin %</th>
-              <th className="px-2 py-2 text-right">Buy Date</th>
+              <th className="px-2 py-2 text-right">LTP</th>
+              <th className="px-2 py-2 text-right">Day Chng%</th>
+              <th className="px-2 py-2 text-right">P&L</th>
+              <th className="px-2 py-2 text-right" title="P&L - Interest - Charges">Net P&L</th>
+              <th className="px-2 py-2 text-right">Breakeven</th>
               <th className="px-2 py-2 text-right">Days</th>
               <th className="px-2 py-2 text-right" title="Funded amount x Daily Interest %">Int/Day</th>
               <th className="px-2 py-2 text-right" title="Funded amount x Daily Interest % x Days">Interest</th>
               <th className="px-2 py-2 text-right" title="min(MTF Value x 0.3%, Rs 20) + Rs 15 pledge charge + 18% GST">Charges</th>
-              <th className="px-2 py-2 text-right">LTP</th>
-              <th className="px-2 py-2 text-right">P&L</th>
-              <th className="px-2 py-2 text-right" title="P&L - Interest - Charges">Net P&L</th>
-              <th className="px-2 py-2 text-right">Breakeven</th>
-              <th className="px-2 py-2 text-right">Day Chng%</th>
+              <th className="px-2 py-2 text-right">Initial Margin</th>
+              <th className="px-2 py-2 text-right">Funded</th>
+              <th className="px-2 py-2 text-right">Margin %</th>
+              <th className="px-2 py-2 text-right">Buy Date</th>
             </tr>
           </thead>
           <tbody>
@@ -63,15 +63,10 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
                   <td className="px-2 py-2 text-right tabular-nums">{holding.mtfQty}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{formatPrice(holding.mtfAvgPrice)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{formatMoney(holding.mtfValue)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{formatMoney(holding.initialMargin)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{formatMoney(metrics.fundedAmount)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{formatNullablePct(metrics.marginPct)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{holding.buyDate || "-"}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{holding.holdingDays ?? "-"}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{formatMoney(metrics.interestPerDay)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{formatNullableMoney(metrics.interestSoFar)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{formatMoney(metrics.charges)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{formatPrice(holding.ltp)}</td>
+                  <td className={`px-2 py-2 text-right tabular-nums ${signedClass(holding.dayChangePct)}`}>
+                    {formatPct(holding.dayChangePct)}
+                  </td>
                   <td className={`px-2 py-2 text-right tabular-nums ${signedClass(holding.pnl)}`}>
                     {formatMoney(holding.pnl)}
                   </td>
@@ -79,9 +74,14 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
                     {formatNullableMoney(metrics.netPnl)}
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums">{formatNullablePrice(metrics.breakeven)}</td>
-                  <td className={`px-2 py-2 text-right tabular-nums ${signedClass(holding.dayChangePct)}`}>
-                    {formatPct(holding.dayChangePct)}
-                  </td>
+                  <td className="px-2 py-2 text-right tabular-nums">{holding.holdingDays ?? "-"}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{formatMoney(metrics.interestPerDay)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{formatNullableMoney(metrics.interestSoFar)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{formatMoney(metrics.charges)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{formatMoney(holding.initialMargin)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{formatMoney(metrics.fundedAmount)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{formatNullablePct(metrics.marginPct)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{holding.buyDate || "-"}</td>
                 </tr>
               );
             })}
