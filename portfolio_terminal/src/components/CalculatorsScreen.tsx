@@ -714,9 +714,6 @@ function ContractPicker({
         disabled={contracts.length === 0}
         value={selectedExpiry}
         onChange={(event) => {
-          if (checked) {
-            onChange(false);
-          }
           setSelectedContracts((previous) => ({ ...previous, [expiryKey]: event.target.value }));
         }}
       >
@@ -735,9 +732,6 @@ function ContractPicker({
         disabled={availableTypes.length === 0}
         value={effectiveType ?? ""}
         onChange={(event) => {
-          if (checked) {
-            onChange(false);
-          }
           setSelectedContracts((previous) => ({ ...previous, [typeKey]: event.target.value }));
         }}
       >
