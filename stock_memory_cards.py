@@ -367,6 +367,19 @@ def _inject_stock_card_styles() -> None:
                 font-weight: 700;
                 margin: 0.25rem 0 0.4rem;
             }
+            div[data-testid="stForm"] div[data-testid="stFormSubmitButton"] {
+                width: 100%;
+            }
+            div[data-testid="stForm"] div[data-testid="stFormSubmitButton"] button {
+                min-width: 0;
+                width: 100%;
+                white-space: nowrap !important;
+            }
+            div[data-testid="stForm"] div[data-testid="stFormSubmitButton"] button p {
+                white-space: nowrap !important;
+                word-break: normal !important;
+                overflow-wrap: normal !important;
+            }
             .stock-memory-card-meta {
                 color: #94a3b8;
                 font-size: 0.8rem;
@@ -475,7 +488,7 @@ def render_stock_memory_card(momentum_row: pd.Series) -> None:
                     height=58,
                     key=f"{editor_key}_risk",
                 )
-                action_cols = st.columns([0.18, 0.18, 1], vertical_alignment="center")
+                action_cols = st.columns(2, vertical_alignment="center")
                 with action_cols[0]:
                     save_clicked = st.form_submit_button("Save", type="primary")
                 with action_cols[1]:

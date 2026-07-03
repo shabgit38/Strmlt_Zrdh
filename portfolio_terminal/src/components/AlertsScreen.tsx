@@ -149,7 +149,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
             </div>
           </div>
           {data?.disabledSymbolsText ? (
-            <div className="truncate rounded-md border border-terminal-line bg-terminal-panel px-3 py-2 text-xs font-semibold text-terminal-near" title={data.disabledSymbolsText}>
+            <div className="whitespace-normal break-words rounded-md border border-terminal-line bg-terminal-panel px-3 py-2 text-xs font-semibold leading-5 text-terminal-near" title={data.disabledSymbolsText}>
               Disabled: {data.disabledSymbolsText}
             </div>
           ) : null}

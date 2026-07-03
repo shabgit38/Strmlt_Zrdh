@@ -72,6 +72,12 @@ def _apply_button_palette() -> None:
     st.markdown(
         f"""
         <style>
+        section.main > div.block-container,
+        div[data-testid="stAppViewContainer"] div[data-testid="stMain"] div[data-testid="stMainBlockContainer"] {{
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+            max-width: none !important;
+        }}
         div.stButton > button,
         div.stButton > button[kind="primary"],
         button[data-testid="stBaseButton-primary"],
