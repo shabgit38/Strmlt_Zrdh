@@ -603,20 +603,20 @@ def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None
     border_padding = 4
     return header_height + (visible_rows + 1) * row_height + border_padding
 
-def _summary_display_df(summary: pd.Series) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {
-                "Qty": summary.get("total_qty"),
-                "Buy Avg": summary.get("buy_avg"),
-                "Invested": summary.get("invested"),
-                "Present": summary.get("present_value"),
-                "LTP": summary.get("ltp"),
-                "P&L": summary.get("pnl"),
-                "P&L %": summary.get("pnl_pct"),
-            }
-        ]
-    )
+def _summary_display_df(summary: pd.Series, *, show_metadata: bool = False) -> pd.DataFrame:
+    row = {
+        "Qty": summary.get("total_qty"),
+        "Buy Avg": summary.get("buy_avg"),
+        "Invested": summary.get("invested"),
+        "Present": summary.get("present_value"),
+        "LTP": summary.get("ltp"),
+        "P&L": summary.get("pnl"),
+        "P&L %": summary.get("pnl_pct"),
+    }
+    if show_metadata:
+        row["Age"] = summary.get("present_age") or summary.get("age_days")
+        row["Trade Type"] = summary.get("trade_type")
+    return pd.DataFrame([row])
 
 
 def _summary_column_config() -> dict[str, Any]:
@@ -631,6 +631,8 @@ def _summary_column_config() -> dict[str, Any]:
         "Exit Price": st.column_config.NumberColumn("Exit Price", width="small", format="%.2f"),
         "P&L": st.column_config.NumberColumn("P&L", width="small", format="%.2f"),
         "P&L %": st.column_config.NumberColumn("P&L %", width="small", format="%.2f%%"),
+        "Age": st.column_config.TextColumn("Age", width="medium"),
+        "Trade Type": st.column_config.TextColumn("Trade Type", width="small"),
     }
 
 def _summary_expander_label(summary: pd.Series, batch_count: int) -> str:
@@ -709,6 +711,8 @@ def _recompute_breakdown_record(record: dict[str, Any], ltp_by_symbol: dict[str,
 
 def _recalculate_summary_from_supabase_batches(summary: pd.Series, ltp_by_symbol: dict[str, float]) -> None:
     if not _row_has_id(summary):
+        return
+    if str(summary.get("trade_type") or "").upper().strip() == "MTF":
         return
 
     symbol = summary.get("symbol")
@@ -967,6 +971,8 @@ def _empty_add_breakdown_entries_df() -> pd.DataFrame:
                 "Row Type": "SUMMARY",
                 "Symbol": "",
                 "Sector": "",
+                "Date": date.today(),
+                "MTF?": False,
                 "Total Qty": None,
                 "Buy Avg": None,
                 "Invested": None,
@@ -986,6 +992,8 @@ def _add_breakdown_entries_column_config() -> dict[str, Any]:
         "Row Type": st.column_config.SelectboxColumn("Row Type", options=["SUMMARY", "BATCH"], required=True),
         "Symbol": st.column_config.TextColumn("Symbol", required=True),
         "Sector": st.column_config.TextColumn("Sector"),
+        "Date": st.column_config.DateColumn("Date"),
+        "MTF?": st.column_config.CheckboxColumn("MTF?"),
         "Total Qty": st.column_config.NumberColumn("Total Qty", min_value=0, step=1, format="%d"),
         "Buy Avg": st.column_config.NumberColumn("Buy Avg", min_value=0.0, format="%.2f"),
         "Invested": st.column_config.NumberColumn("Invested", format="%.2f"),
@@ -1031,6 +1039,8 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
         symbol = str(row.get("Symbol") or "").upper().strip()
         sector = _json_safe_value(row.get("Sector"))
         is_exit = bool(row.get("Exit?"))
+        is_mtf = bool(row.get("MTF?"))
+        trade_date = _date_input_value(row.get("Date"))
 
         if row_type not in {"SUMMARY", "BATCH"}:
             errors.append(f"Row {row_number + 1}: select SUMMARY or BATCH.")
@@ -1059,6 +1069,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                     "row_type": "SUMMARY",
                     "symbol": symbol,
                     "sector": sector,
+                    "trade_date": trade_date,
                     "total_qty": total_qty if total_qty is not None else 0,
                     "buy_avg": buy_avg if buy_avg is not None else 0,
                     "ltp": _lookup_ltp(ltp_by_symbol, symbol),
@@ -1082,7 +1093,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                 "row_type": "BATCH",
                 "symbol": symbol,
                 "sector": sector,
-                "trade_date": date.today(),
+                "trade_date": trade_date,
                 "batch_qty": batch_qty,
                 "batch_price": batch_price,
                 "ltp": _lookup_ltp(ltp_by_symbol, symbol),
@@ -1100,6 +1111,9 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
 
         if is_exit and row_type == "SUMMARY":
             record["holding_status"] = "Exited"
+
+        if is_mtf:
+            record["trade_type"] = "MTF"
 
         if is_exit and row_type == "BATCH":
             record["holding_status"] = "Exited"
@@ -1391,7 +1405,7 @@ def display_holdings_breakdown_preview(
     for summary, batches in summary_batches:
         #_summary_expander_label(summary, len(batches))
         with st.expander(_format_display_value(summary.get("symbol")), expanded=True):
-            summary_display_df = _summary_display_df(summary)
+            summary_display_df = _summary_display_df(summary, show_metadata=not batches)
             if enable_crud and _row_has_id(summary):
                 row_id = _row_id(summary)
                 key_prefix = f"summary_{row_id}"

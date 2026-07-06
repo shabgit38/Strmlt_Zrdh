@@ -171,7 +171,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                   <SortableHeader sortKey="symbol" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Symbol</SortableHeader>
                   <SortableHeader className="w-32 max-w-32" sortKey="name" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Name</SortableHeader>
                   <HeaderCell align="right" className="w-20 max-w-20">LTP</HeaderCell>
-                  <HeaderCell className="w-48 max-w-48">Position</HeaderCell>
+                  <HeaderCell className="w-32 max-w-32">Position</HeaderCell>
                   <HeaderCell align="right" className="w-28 max-w-28">Trigger</HeaderCell>
                   <SortableHeader className="w-20 max-w-20" sortKey="status" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Status</SortableHeader>
                   <HeaderCell align="right"></HeaderCell>
@@ -184,7 +184,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                     <td className="whitespace-nowrap px-3 py-2 text-xs font-semibold text-terminal-ink">{alert.lhs_tradingsymbol}</td>
                     <td className="max-w-32 truncate whitespace-nowrap px-3 py-2 text-xs text-terminal-ink" title={alert.name}>{alert.name}</td>
                     <td className="w-20 max-w-20 whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink">{alert.ltp === null || alert.ltp === undefined ? "-" : formatPrice(Number(alert.ltp))}</td>
-                    <td className="w-48 max-w-48 px-2 py-2 text-xs leading-4 text-terminal-muted" title={alert.price_context || "-"}>
+                    <td className="w-32 max-w-32 px-2 py-2 text-xs leading-4 text-terminal-muted" title={alert.price_context || "-"}>
                       <span className="line-clamp-2 whitespace-normal break-words tabular-nums">{alert.price_context || "-"}</span>
                     </td>
                     <td className="w-28 max-w-28 truncate whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink" title={triggerText(alert)}>
