@@ -165,16 +165,16 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 onChange={(event) => setSearchText(event.target.value)}
               />
             </div>
-            <table className="w-full min-w-[900px] border-collapse text-left text-xs">
+            <table className="w-max min-w-full border-collapse text-left text-xs">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
                   <SortableHeader sortKey="symbol" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Symbol</SortableHeader>
                   <SortableHeader className="w-32 max-w-32" sortKey="name" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Name</SortableHeader>
                   <HeaderCell align="right" className="w-20 max-w-20">LTP</HeaderCell>
                   <HeaderCell className="w-32 max-w-32">Position</HeaderCell>
-                  <HeaderCell align="right" className="w-28 max-w-28">Trigger</HeaderCell>
+                  <HeaderCell align="right" className="w-20 max-w-20">Trigger</HeaderCell>
                   <SortableHeader className="w-20 max-w-20" sortKey="status" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Status</SortableHeader>
-                  <HeaderCell align="right"></HeaderCell>
+                  <HeaderCell align="right" className="w-20 max-w-20"></HeaderCell>
                   <SortableHeader className="w-28 max-w-28" sortKey="updated_at" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Updated</SortableHeader>
                 </tr>
               </thead>
@@ -187,11 +187,11 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                     <td className="w-32 max-w-32 px-2 py-2 text-xs leading-4 text-terminal-muted" title={alert.price_context || "-"}>
                       <span className="line-clamp-2 whitespace-normal break-words tabular-nums">{alert.price_context || "-"}</span>
                     </td>
-                    <td className="w-28 max-w-28 truncate whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink" title={triggerText(alert)}>
+                    <td className="w-20 max-w-20 truncate whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink" title={triggerText(alert)}>
                       {triggerText(alert)}
                     </td>
                     <td className={`w-20 max-w-20 truncate whitespace-nowrap px-2 py-2 text-xs font-semibold ${statusClass(alert.status)}`} title={alert.status}>{alert.status}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right">
+                    <td className="w-20 max-w-20 whitespace-nowrap px-2 py-2 text-right">
                       <div className="inline-flex items-center gap-1">
                         <button
                           className="rounded-md border border-terminal-line p-2 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
