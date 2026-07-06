@@ -124,24 +124,6 @@ def _apply_button_palette() -> None:
 _apply_button_palette()
 
 
-def _apply_holdings_sticky_tabs_style() -> None:
-    st.markdown(
-        """
-        <style>
-        div[data-testid="stTabs"] > div[role="tablist"] {
-            position: sticky;
-            top: 0;
-            z-index: 999;
-            background: #FFFFFF;
-            border-bottom: 1px solid rgba(49, 51, 63, 0.2);
-            padding-top: 0.25rem;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def _supabase_headers(supabase_key: str, *, write: bool = False) -> dict[str, str]:
     headers = {
         "apikey": supabase_key,
@@ -1398,7 +1380,6 @@ if selected_main_tab == "Upload":
                 st.warning(f"Could not refresh holdings breakdown from Supabase: {exc}")
 
 if selected_main_tab == "Holdings":
-    _apply_holdings_sticky_tabs_style()
     fetch_holdings_col, holdings_ltp_col = st.columns([1, 3], vertical_alignment="center")
     with fetch_holdings_col:
         if st.button("Fetch Holdings", type="primary"):
