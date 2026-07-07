@@ -61,6 +61,7 @@ BUTTON_COLOR = "#ffca83"
 BUTTON_HOVER_COLOR = "#f2b766"
 BUTTON_TEXT_COLOR = "#1f2937"
 LTP_REFRESH_INTERVAL_MS = 60 * 60 * 1000
+HOLDINGS_BREAKDOWN_ADD_MESSAGE_KEY = "holdings_breakdown_add_message"
 
 
 def _live_ltp_refreshed_caption(state_key: str) -> None:
@@ -1527,6 +1528,9 @@ if selected_main_tab == "Holdings":
                     '<div style="border-top: 2px solid #f59e0b; margin: 1rem 0;"></div>',
                     unsafe_allow_html=True,
                 )
+                add_message = st.session_state.pop(HOLDINGS_BREAKDOWN_ADD_MESSAGE_KEY, None)
+                if add_message:
+                    st.success(add_message)
                 with st.expander("Add Breakdown Entries", expanded=False):
                     try:
                         added_symbols = _render_add_holdings_breakdown_entries_form(
@@ -1541,6 +1545,9 @@ if selected_main_tab == "Holdings":
                             with st.spinner("Refreshing holdings breakdown..."):
                                 _refresh_holdings_breakdown_state_for_symbols(added_symbols)
                             st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
+                            st.session_state[HOLDINGS_BREAKDOWN_ADD_MESSAGE_KEY] = (
+                                "Added/updated breakdown entries for: " + ", ".join(added_symbols)
+                            )
                             st.rerun()
                         except Exception as exc:
                             st.warning(f"Could not refresh holdings breakdown from Supabase: {exc}")

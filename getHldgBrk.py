@@ -1064,6 +1064,13 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                     f"Row {row_number + 1}: Total Qty and Buy Avg are required for SUMMARY when no batch rows exist."
                 )
                 continue
+            should_create_initial_batch = (
+                not is_mtf
+                and not is_exit
+                and not has_batch_context
+                and total_qty is not None
+                and buy_avg is not None
+            )
             record = _recompute_breakdown_record(
                 {
                     "row_type": "SUMMARY",
@@ -1076,6 +1083,21 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                 },
                 ltp_by_symbol,
             )
+            if should_create_initial_batch:
+                pending_records.append(
+                    _recompute_breakdown_record(
+                        {
+                            "row_type": "BATCH",
+                            "symbol": symbol,
+                            "sector": sector,
+                            "trade_date": trade_date,
+                            "batch_qty": total_qty,
+                            "batch_price": buy_avg,
+                            "ltp": _lookup_ltp(ltp_by_symbol, symbol),
+                        },
+                        ltp_by_symbol,
+                    )
+                )
         else:
             batch_qty = _record_integer_value(row.get("Batch Qty"))
             batch_price = _record_numeric_value(row.get("Batch Price"))
