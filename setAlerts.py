@@ -85,6 +85,7 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
         "loaded": bool(previous_data.get("loaded")),
         "lastAction": action,
         "lastRequestId": str(request.get("requestId") or ""),
+        "disabledSymbolsText": str(previous_data.get("disabledSymbolsText") or ""),
     }
 
     try:
@@ -99,6 +100,7 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
             created_uuid = _created_alert_uuid(created_alert)
             if created_uuid:
                 next_data["alerts"] = _append_created_alert_row(next_data["alerts"], created_uuid, payload, created_alert)
+                next_data["disabledSymbolsText"] = _disabled_alert_symbols_text(next_data["alerts"])
                 next_data["message"] = "Alert created."
                 next_data["loaded"] = True
                 next_data.pop("error", None)
@@ -114,6 +116,7 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
             _log_alerts_step(f"Modifying alert uuid={uuid}.")
             modify_alert(api_key, st.session_state.access_token, uuid, payload)
             next_data["alerts"] = _patch_modified_alert_row(next_data["alerts"], uuid, payload)
+            next_data["disabledSymbolsText"] = _disabled_alert_symbols_text(next_data["alerts"])
             next_data["message"] = "Alert modified."
             next_data["loaded"] = True
             next_data.pop("error", None)
@@ -128,6 +131,7 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
             _log_alerts_step(f"Deleting alert uuid={uuid}.")
             delete_alert(api_key, st.session_state.access_token, uuid)
             next_data["alerts"] = _remove_deleted_alert_row(next_data["alerts"], uuid)
+            next_data["disabledSymbolsText"] = _disabled_alert_symbols_text(next_data["alerts"])
             next_data["message"] = "Alert deleted."
             next_data["loaded"] = True
             next_data.pop("error", None)

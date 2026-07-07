@@ -57,8 +57,9 @@ st.set_page_config(layout="wide")
 
 SUPABASE_INDICES_TABLE_NAME = "Indices_constituents"
 DEFAULT_MOMENTUM_BENCHMARK = "NIFTY 50"
-BUTTON_COLOR = "#7C3AED"
-BUTTON_HOVER_COLOR = "#6D28D9"
+BUTTON_COLOR = "#ffca83"
+BUTTON_HOVER_COLOR = "#f2b766"
+BUTTON_TEXT_COLOR = "#1f2937"
 LTP_REFRESH_INTERVAL_MS = 60 * 60 * 1000
 
 
@@ -84,7 +85,20 @@ def _apply_button_palette() -> None:
         button[data-testid="stBaseButton-secondary"] {{
             background-color: {BUTTON_COLOR} !important;
             border-color: {BUTTON_COLOR} !important;
-            color: #FFFFFF !important;
+            color: {BUTTON_TEXT_COLOR} !important;
+            font-size: 0.8rem !important;
+            line-height: 1.2 !important;
+            min-height: 1.9rem !important;
+            padding: 0.25rem 0.75rem !important;
+            border-radius: 9999px !important;
+        }}
+        div.stButton > button p,
+        div.stButton > button[kind="primary"] p,
+        button[data-testid="stBaseButton-primary"] p,
+        button[data-testid="stBaseButton-secondary"] p {{
+            font-size: 0.8rem !important;
+            line-height: 1.2 !important;
+            margin: 0 !important;
         }}
         div.stButton > button:hover,
         div.stButton > button[kind="primary"]:hover,
@@ -92,14 +106,14 @@ def _apply_button_palette() -> None:
         button[data-testid="stBaseButton-secondary"]:hover {{
             background-color: {BUTTON_HOVER_COLOR} !important;
             border-color: {BUTTON_HOVER_COLOR} !important;
-            color: #FFFFFF !important;
+            color: {BUTTON_TEXT_COLOR} !important;
         }}
         div.stButton > button:focus,
         div.stButton > button[kind="primary"]:focus,
         button[data-testid="stBaseButton-primary"]:focus,
         button[data-testid="stBaseButton-secondary"]:focus {{
             box-shadow: 0 0 0 0.15rem rgba(124, 58, 237, 0.28) !important;
-            color: #FFFFFF !important;
+            color: {BUTTON_TEXT_COLOR} !important;
         }}
         div[data-testid="stDataFrame"] div[role="gridcell"],
         div[data-testid="stDataFrame"] div[role="cell"],
@@ -107,11 +121,23 @@ def _apply_button_palette() -> None:
         div[data-testid="stDataEditor"] div[role="cell"] {{
             font-size: 0.8rem;
         }}
+        section[data-testid="stSidebar"] {{
+            width: 10rem !important;
+            min-width: 10rem !important;
+        }}
+        section[data-testid="stSidebar"] > div {{
+            width: 10rem !important;
+        }}
+        section[data-testid="stSidebar"] div.stButton {{
+            width: fit-content !important;
+        }}
         section[data-testid="stSidebar"] div.stButton > button {{
+            width: fit-content !important;
+            max-width: 9rem !important;
             white-space: normal !important;
             word-break: break-word !important;
             line-height: 1.15;
-            min-height: 2.5rem;
+            min-height: 2rem;
             text-align: left;
             justify-content: flex-start;
         }}
