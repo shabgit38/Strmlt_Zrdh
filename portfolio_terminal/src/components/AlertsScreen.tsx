@@ -168,7 +168,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
             <table className="w-max min-w-full border-collapse text-left text-xs">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
-                  <SortableHeader className="w-32 max-w-32" sortKey="symbol" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Symbol</SortableHeader>
+                  <SortableHeader className="w-[7.5rem] max-w-[7.5rem]" sortKey="symbol" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Symbol</SortableHeader>
                   <SortableHeader className="w-32 max-w-32" sortKey="name" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Name</SortableHeader>
                   <HeaderCell align="right" className="w-20 max-w-20">LTP</HeaderCell>
                   <HeaderCell className="w-32 max-w-32">Position</HeaderCell>
@@ -181,7 +181,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
               <tbody>
                 {sortedAlerts.map((alert) => (
                   <tr key={alert.uuid} className={`border-t border-terminal-line ${editingUuid === alert.uuid ? "bg-terminal-selected" : ""}`}>
-                    <td className="w-32 max-w-32 whitespace-normal break-words px-3 py-2 text-xs font-semibold text-terminal-ink">{alert.lhs_tradingsymbol}</td>
+                    <td className="w-[7.5rem] max-w-[7.5rem] whitespace-normal break-words px-3 py-2 text-xs font-semibold text-terminal-ink">{alert.lhs_tradingsymbol}</td>
                     <td className="w-32 max-w-32 whitespace-normal break-words px-3 py-2 text-xs text-terminal-ink" title={alert.name}>{alert.name}</td>
                     <td className="w-20 max-w-20 whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink">{alert.ltp === null || alert.ltp === undefined ? "-" : formatPrice(Number(alert.ltp))}</td>
                     <td className="w-32 max-w-32 whitespace-normal break-words px-2 py-2 text-xs leading-4 text-terminal-muted" title={alert.price_context || "-"}>

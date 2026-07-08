@@ -53,8 +53,8 @@ def build_portfolio_day_movers_summary(holdings_df: pd.DataFrame, limit: int = 5
         return pd.DataFrame()
 
     rows: list[dict[str, Any]] = []
-    top_gainer = movers_df.sort_values("day_change_pct", ascending=False).head(limit)
-    top_loser = movers_df.sort_values("day_change_pct", ascending=True).head(limit)
+    top_gainer = movers_df[movers_df["day_change_pct"].gt(0)].sort_values("day_change_pct", ascending=False).head(limit)
+    top_loser = movers_df[movers_df["day_change_pct"].lt(0)].sort_values("day_change_pct", ascending=True).head(limit)
     top_contributor = movers_df.sort_values("today_pnl", ascending=False).head(limit)
     top_drag = movers_df.sort_values("today_pnl", ascending=True).head(limit)
 
@@ -93,8 +93,8 @@ def build_returns_day_movers_summary(returns_df: pd.DataFrame, limit: int = 5) -
 
     rows: list[dict[str, Any]] = []
     for label, row_df in [
-        ("Top Gainers", df.sort_values("Today Return %", ascending=False).head(limit)),
-        ("Top Losers", df.sort_values("Today Return %", ascending=True).head(limit)),
+        ("Top Gainers", df[df["Today Return %"].gt(0)].sort_values("Today Return %", ascending=False).head(limit)),
+        ("Top Losers", df[df["Today Return %"].lt(0)].sort_values("Today Return %", ascending=True).head(limit)),
     ]:
         for rank, (_, row) in enumerate(row_df.iterrows(), start=1):
             rows.append(
@@ -122,8 +122,8 @@ def build_day_movers_summary(day_movers_df: pd.DataFrame, limit: int = 5) -> pd.
 
     rows: list[dict[str, Any]] = []
     for label, row_df in [
-        ("Top Gainers", df.sort_values("DayChg %", ascending=False).head(limit)),
-        ("Top Losers", df.sort_values("DayChg %", ascending=True).head(limit)),
+        ("Top Gainers", df[df["DayChg %"].gt(0)].sort_values("DayChg %", ascending=False).head(limit)),
+        ("Top Losers", df[df["DayChg %"].lt(0)].sort_values("DayChg %", ascending=True).head(limit)),
     ]:
         for rank, (_, row) in enumerate(row_df.iterrows(), start=1):
             rows.append(
