@@ -832,11 +832,12 @@ function ValueCell({
   highlight?: "amber";
   tone?: number | null;
 }) {
+  const valueToneClass =
+    tone === undefined || tone === null ? (highlight === "amber" ? "text-terminal-near" : "text-terminal-ink") : signedClass(tone);
+
   return (
     <td
-      className={`whitespace-nowrap px-3 py-2 tabular-nums ${highlightClass(highlight)} ${align === "right" ? "text-right" : "text-left"} ${
-        tone === undefined || tone === null ? "text-terminal-ink" : signedClass(tone)
-      }`}
+      className={`whitespace-nowrap px-3 py-2 tabular-nums ${align === "right" ? "text-right" : "text-left"} ${valueToneClass}`}
     >
       {value}
     </td>

@@ -878,6 +878,81 @@ def _exit_batch_record(row: pd.Series, exit_date: date, exit_price: float, exit_
     }
 
 
+def _batch_fifo_sort_key(row: pd.Series) -> tuple[date, int]:
+    trade_date = _parse_trade_date(row.get("trade_date")) or date.max
+    row_id = _row_id(row)
+    try:
+        numeric_id = int(row_id)
+    except (TypeError, ValueError):
+        numeric_id = 0
+    return (trade_date, numeric_id)
+
+
+def _active_batch_exit_qty(row: pd.Series) -> int:
+    if _is_exited_status(row.get("holding_status")):
+        return 0
+    return max(_int_input_value(row.get("batch_qty")), 0)
+
+
+def _fifo_exit_allocations(rows: list[pd.Series], exit_qty: int) -> list[tuple[pd.Series, int]]:
+    remaining_qty = int(exit_qty)
+    allocations: list[tuple[pd.Series, int]] = []
+    batches = [
+        row
+        for row in rows
+        if str(row.get("row_type") or "").upper() == "BATCH"
+        and _row_has_id(row)
+        and _active_batch_exit_qty(row) > 0
+    ]
+
+    for row in sorted(batches, key=_batch_fifo_sort_key):
+        if remaining_qty <= 0:
+            break
+        row_qty = _active_batch_exit_qty(row)
+        allocated_qty = min(row_qty, remaining_qty)
+        allocations.append((row, allocated_qty))
+        remaining_qty -= allocated_qty
+
+    return allocations
+
+
+def _apply_batch_exit(
+    row: pd.Series,
+    *,
+    exit_date: date,
+    exit_price: float,
+    exit_qty: int,
+    ltp_by_symbol: dict[str, float],
+) -> None:
+    row_id = _row_id(row)
+    batch_qty = _int_input_value(row.get("batch_qty"))
+
+    if exit_qty < batch_qty:
+        remaining_qty = batch_qty - exit_qty
+        active_record = _recompute_breakdown_record(
+            {
+                "row_type": "BATCH",
+                "symbol": row.get("symbol"),
+                "sector": row.get("sector"),
+                "isin": row.get("isin"),
+                "trade_date": row.get("trade_date"),
+                "batch_qty": remaining_qty,
+                "batch_price": row.get("batch_price"),
+                "ltp": row.get("ltp"),
+                "holding_status": None,
+                "exit_date": None,
+                "exit_price": None,
+                "exit_qty": None,
+            },
+            ltp_by_symbol,
+        )
+        update_holdings_breakdown_row(row_id, active_record)
+        insert_holdings_breakdown_row(_exit_batch_record(row, exit_date, exit_price, exit_qty))
+        return
+
+    update_holdings_breakdown_row(row_id, _exit_batch_record(row, exit_date, exit_price, exit_qty))
+
+
 def _render_exit_form(
     rows: list[pd.Series],
     *,
@@ -887,6 +962,7 @@ def _render_exit_form(
 ) -> None:
     first_row = rows[0] if rows else pd.Series(dtype=object)
     is_single_batch_exit = len(rows) == 1 and str(first_row.get("row_type") or "").upper() == "BATCH"
+    is_summary_fifo_exit = summary is not None and any(str(row.get("row_type") or "").upper() == "BATCH" for row in rows)
     with st.form(f"{key_prefix}_exit_form"):
         input_cols = st.columns([1.2, 1.1, 1.0, 0.8, 0.8, 3])
         with input_cols[0]:
@@ -898,7 +974,7 @@ def _render_exit_form(
                 "Exit Qty",
                 value=_exit_quantity_for_row(first_row),
                 step=1,
-                disabled=not is_single_batch_exit,
+                disabled=not (is_single_batch_exit or is_summary_fifo_exit),
             )
         with input_cols[3]:
             submitted = st.form_submit_button("Save exit", type="primary")
@@ -910,36 +986,36 @@ def _render_exit_form(
         st.rerun()
 
     if submitted:
-        for row in rows:
-            row_id = _row_id(row)
-            row_exit_qty = exit_qty if is_single_batch_exit else _exit_quantity_for_row(row)
-            row_type = str(row.get("row_type") or "").upper()
-            batch_qty = _int_input_value(row.get("batch_qty"))
-
-            if row_type == "BATCH" and is_single_batch_exit and row_exit_qty < batch_qty:
-                remaining_qty = batch_qty - row_exit_qty
-                active_record = _recompute_breakdown_record(
-                    {
-                        "row_type": "BATCH",
-                        "symbol": row.get("symbol"),
-                        "sector": row.get("sector"),
-                        "isin": row.get("isin"),
-                        "trade_date": row.get("trade_date"),
-                        "batch_qty": remaining_qty,
-                        "batch_price": row.get("batch_price"),
-                        "ltp": row.get("ltp"),
-                        "holding_status": None,
-                        "exit_date": None,
-                        "exit_price": None,
-                        "exit_qty": None,
-                    },
-                    ltp_by_symbol or {},
+        ltp_lookup = ltp_by_symbol or {}
+        if is_summary_fifo_exit:
+            active_qty = sum(_active_batch_exit_qty(row) for row in rows)
+            if exit_qty <= 0:
+                st.error("Exit Qty must be greater than 0.")
+                return
+            if exit_qty > active_qty:
+                st.error(f"Exit Qty cannot exceed active batch quantity ({active_qty}).")
+                return
+            for row, row_exit_qty in _fifo_exit_allocations(rows, int(exit_qty)):
+                _apply_batch_exit(
+                    row,
+                    exit_date=exit_date,
+                    exit_price=exit_price,
+                    exit_qty=row_exit_qty,
+                    ltp_by_symbol=ltp_lookup,
                 )
-                update_holdings_breakdown_row(row_id, active_record)
-                insert_holdings_breakdown_row(_exit_batch_record(row, exit_date, exit_price, row_exit_qty))
-            else:
+        else:
+            for row in rows:
+                row_exit_qty = exit_qty if is_single_batch_exit else _exit_quantity_for_row(row)
+                row_type = str(row.get("row_type") or "").upper()
+
                 if row_type == "BATCH":
-                    record = _exit_batch_record(row, exit_date, exit_price, row_exit_qty)
+                    _apply_batch_exit(
+                        row,
+                        exit_date=exit_date,
+                        exit_price=exit_price,
+                        exit_qty=row_exit_qty,
+                        ltp_by_symbol=ltp_lookup,
+                    )
                 else:
                     record = {
                         "holding_status": "Exited",
@@ -947,10 +1023,10 @@ def _render_exit_form(
                         "exit_price": exit_price,
                         "exit_qty": row_exit_qty,
                     }
-                update_holdings_breakdown_row(row_id, record)
+                    update_holdings_breakdown_row(_row_id(row), record)
 
         if summary is not None:
-            _recalculate_summary_from_supabase_batches(summary, ltp_by_symbol or {})
+            _recalculate_summary_from_supabase_batches(summary, ltp_lookup)
         affected_symbols = {
             str(row.get("symbol") or "").upper().strip()
             for row in rows
