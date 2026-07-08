@@ -128,6 +128,15 @@ def _record_integer_value(value: Any) -> int | None:
     return int(value)
 
 
+def _is_bonus_trade_type(value: Any) -> bool:
+    return str(value or "").upper().strip() == "BONUS"
+
+
+def _zero_price_requires_bonus(batch_price: Any) -> bool:
+    parsed_price = _record_numeric_value(batch_price)
+    return parsed_price is not None and parsed_price <= 0
+
+
 def _json_safe_record(record: dict[str, Any]) -> dict[str, Any]:
     safe_record = {key: _json_safe_value(value) for key, value in record.items()}
     for column in NUMERIC_HOLDINGS_COLUMNS:
@@ -808,7 +817,7 @@ def _render_batch_form(
     is_edit = batch is not None
     source = batch if batch is not None else summary
     with st.form(f"{key_prefix}_batch_form"):
-        input_cols = st.columns([1.2, 1.1, 1.1, 0.8, 0.8, 3])
+        input_cols = st.columns([1.2, 1.1, 1.1, 0.9, 0.8, 0.8, 3])
         with input_cols[0]:
             trade_date = st.date_input("Date", value=_date_input_value(source.get("trade_date")))
         with input_cols[1]:
@@ -816,8 +825,10 @@ def _render_batch_form(
         with input_cols[2]:
             batch_price = st.number_input("Batch Price", value=_float_input_value(source.get("batch_price")), format="%.2f")
         with input_cols[3]:
-            submitted = st.form_submit_button("Save batch", type="primary")
+            is_bonus = st.checkbox("Bonus?", value=_is_bonus_trade_type(source.get("trade_type")))
         with input_cols[4]:
+            submitted = st.form_submit_button("Save batch", type="primary")
+        with input_cols[5]:
             cancelled = st.form_submit_button("Cancel")
 
     if cancelled:
@@ -825,6 +836,10 @@ def _render_batch_form(
         st.rerun()
 
     if submitted:
+        if _zero_price_requires_bonus(batch_price) and not is_bonus:
+            st.error("Batch Price is zero. If these are bonus shares, tick Bonus? before saving.")
+            return
+
         record = _recompute_breakdown_record(
             {
                 "row_type": "BATCH",
@@ -834,6 +849,7 @@ def _render_batch_form(
                 "trade_date": trade_date,
                 "batch_qty": batch_qty,
                 "batch_price": batch_price,
+                "trade_type": "BONUS" if is_bonus else None,
                 "ltp": source.get("ltp"),
             },
             ltp_by_symbol,
@@ -866,6 +882,7 @@ def _exit_batch_record(row: pd.Series, exit_date: date, exit_price: float, exit_
         "sector": row.get("sector"),
         "isin": row.get("isin"),
         "trade_date": row.get("trade_date"),
+        "trade_type": row.get("trade_type"),
         "batch_qty": exit_qty,
         "batch_price": batch_price,
         "present_value": exit_value,
@@ -936,6 +953,7 @@ def _apply_batch_exit(
                 "sector": row.get("sector"),
                 "isin": row.get("isin"),
                 "trade_date": row.get("trade_date"),
+                "trade_type": row.get("trade_type"),
                 "batch_qty": remaining_qty,
                 "batch_price": row.get("batch_price"),
                 "ltp": row.get("ltp"),
@@ -1049,6 +1067,7 @@ def _empty_add_breakdown_entries_df() -> pd.DataFrame:
                 "Sector": "",
                 "Date": date.today(),
                 "MTF?": False,
+                "Bonus?": False,
                 "Total Qty": None,
                 "Buy Avg": None,
                 "Invested": None,
@@ -1070,6 +1089,7 @@ def _add_breakdown_entries_column_config() -> dict[str, Any]:
         "Sector": st.column_config.TextColumn("Sector"),
         "Date": st.column_config.DateColumn("Date"),
         "MTF?": st.column_config.CheckboxColumn("MTF?"),
+        "Bonus?": st.column_config.CheckboxColumn("Bonus?"),
         "Total Qty": st.column_config.NumberColumn("Total Qty", min_value=0, step=1, format="%d"),
         "Buy Avg": st.column_config.NumberColumn("Buy Avg", min_value=0.0, format="%.2f"),
         "Invested": st.column_config.NumberColumn("Invested", format="%.2f"),
@@ -1116,6 +1136,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
         sector = _json_safe_value(row.get("Sector"))
         is_exit = bool(row.get("Exit?"))
         is_mtf = bool(row.get("MTF?"))
+        is_bonus = bool(row.get("Bonus?"))
         trade_date = _date_input_value(row.get("Date"))
 
         if row_type not in {"SUMMARY", "BATCH"}:
@@ -1180,6 +1201,9 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
             if batch_qty is None or batch_price is None:
                 errors.append(f"Row {row_number + 1}: Batch Qty and Batch Price are required for BATCH.")
                 continue
+            if _zero_price_requires_bonus(batch_price) and not is_bonus:
+                errors.append(f"Row {row_number + 1}: Batch Price is zero. Tick Bonus? if these are bonus shares.")
+                continue
             exit_date = row.get("Exit Date")
             exit_price = _record_numeric_value(row.get("Exit Price"))
             exit_qty = _record_integer_value(row.get("Exit Qty"))
@@ -1192,6 +1216,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                 "symbol": symbol,
                 "sector": sector,
                 "trade_date": trade_date,
+                "trade_type": "BONUS" if is_bonus else None,
                 "batch_qty": batch_qty,
                 "batch_price": batch_price,
                 "ltp": _lookup_ltp(ltp_by_symbol, symbol),
