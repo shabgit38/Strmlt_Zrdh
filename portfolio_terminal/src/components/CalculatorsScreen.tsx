@@ -303,6 +303,8 @@ export function CalculatorsScreen({
           </div>
         ) : null}
 
+        <MtfHoldingsTable holdings={mtfHoldings} />
+
         {existingPositions.length > 0 ? (
           <ExistingPositionsSection
             existingSymbols={new Set(optionRows.map((row) => row.symbol.trim().toUpperCase()).filter(Boolean))}
@@ -310,8 +312,6 @@ export function CalculatorsScreen({
             positions={existingPositions}
           />
         ) : null}
-
-        <MtfHoldingsTable holdings={mtfHoldings} />
 
         <section className="grid gap-3 md:grid-cols-3">
           {displaySpots(spots).map((spot) => (
@@ -625,8 +625,17 @@ function IndexSpotCard({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-terminal-muted">{spot.symbol}</div>
-          <div className="mt-1 text-2xl font-bold tabular-nums text-terminal-ink">
-            {spot.spot === null ? "-" : formatPrice(spot.spot)}
+          <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span className="text-2xl font-bold tabular-nums text-terminal-ink">
+              {spot.spot === null ? "-" : formatPrice(spot.spot)}
+            </span>
+            {spot.dayChange === undefined || spot.dayChange === null || spot.dayChangePct === undefined || spot.dayChangePct === null ? null : (
+              <span className={`text-xs font-semibold tabular-nums ${signedClass(spot.dayChange)}`}>
+                {spot.dayChange >= 0 ? "+" : ""}
+                {formatPrice(spot.dayChange)} / {spot.dayChangePct >= 0 ? "+" : ""}
+                {formatPct(spot.dayChangePct)}
+              </span>
+            )}
           </div>
         </div>
         <div className="text-right text-xs font-semibold uppercase tracking-wide text-terminal-muted">

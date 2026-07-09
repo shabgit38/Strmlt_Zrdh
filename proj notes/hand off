@@ -25,3 +25,13 @@ Then start backend and frontend. If the token is missing/expired, click “Sign 
 Verified:
 - `uv run python -m py_compile backend\app.py backend\portfolio_snapshot.py`
 - `npm.cmd run build` passed, with only the existing Vite chunk-size warning.
+
+2026-07-09 note:
+- Streamlit error reported: `Error fetching dashboard data: HTTPSConnectionPool(host='api.kite.trade', port=443): Read timed out. (read timeout=7)`.
+- The error string comes from the Streamlit historical dashboard path in `getHoldings.py`, not the React/FastAPI backend.
+- KiteConnect defaults to a 7 second request timeout when `timeout=None`.
+- Lightest viable fix, if approved later: set a configurable Kite timeout once in `kite_auth.py` when creating `KiteConnect`, likely defaulting to 20 seconds.
+- Lower-latency alternative: keep the 7 second timeout and only isolate per-symbol historical failures so one slow symbol does not fail the whole dashboard.
+- More forgiving option: use a 20 second Kite timeout plus per-symbol skipping in `kite_analytics.py`.
+- Optional mirror: apply the same timeout setting in `portfolio_terminal/backend/portfolio_snapshot.py` for the React/FastAPI path.
+- No implementation was done for this timeout issue per user instruction.

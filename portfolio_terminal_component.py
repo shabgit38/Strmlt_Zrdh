@@ -154,7 +154,9 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
 
         quotes = kite.ltp(*sorted(set(instruments))) if instruments else {}
         if request.get("includeSpots"):
-            live_data["spots"] = _spots_from_quotes(quotes)
+            spot_instruments = sorted(set(_INDEX_SPOT_INSTRUMENTS.values()))
+            spot_quotes = kite.quote(*spot_instruments) if spot_instruments else {}
+            live_data["spots"] = _spots_from_quotes(spot_quotes or quotes)
             live_data["targetOptions"] = _target_options_from_spots(
                 _target_option_contracts_for_spots(kite, live_data["spots"]),
                 live_data["spots"],
@@ -520,7 +522,23 @@ def _spots_from_quotes(quotes: dict[str, Any]) -> list[dict[str, Any]]:
     for symbol, instrument in _INDEX_SPOT_INSTRUMENTS.items():
         quote = quotes.get(instrument, {})
         if isinstance(quote, dict) and quote.get("last_price") is not None:
-            spots.append({"symbol": symbol, "spot": float(quote["last_price"]), "status": "Live"})
+            spot = float(quote["last_price"])
+            ohlc = quote.get("ohlc") if isinstance(quote.get("ohlc"), dict) else {}
+            previous_close = _float_value(ohlc.get("close"))
+            day_change = None
+            day_change_pct = None
+            if previous_close:
+                day_change = spot - previous_close
+                day_change_pct = ((spot - previous_close) / previous_close) * 100
+            spots.append(
+                {
+                    "symbol": symbol,
+                    "spot": spot,
+                    "dayChange": day_change,
+                    "dayChangePct": day_change_pct,
+                    "status": "Live",
+                }
+            )
         else:
             spots.append({"symbol": symbol, "spot": None, "status": "Missing"})
     return spots

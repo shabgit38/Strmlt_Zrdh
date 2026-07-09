@@ -77,6 +77,8 @@ export type AvgSummaryRow = {
 export type IndexSpot = {
   symbol: string;
   spot: number | null;
+  dayChange?: number | null;
+  dayChangePct?: number | null;
   status: "Live" | "Missing" | "Error";
 };
 
