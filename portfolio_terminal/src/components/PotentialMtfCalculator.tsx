@@ -70,7 +70,7 @@ export function PotentialMtfCalculator({ liveData }: { liveData?: CalculatorsLiv
           <Metric label="Charges" value={money(metrics.charges)} />
           <Metric label="Net P&L" value={money(metrics.netPnl)} tone={tone(metrics.netPnl)} />
           <Metric label="Net Ret%" value={pct(metrics.netReturnPct)} tone={tone(metrics.netReturnPct)} />
-          <Metric label="Breakeven" value={priceValue(metrics.breakeven)} />
+          <Metric label="Breakeven" value={priceValue(metrics.breakeven)} tone="text-terminal-near" />
         </div>
       </div>
     </section>

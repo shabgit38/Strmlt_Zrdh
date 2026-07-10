@@ -73,7 +73,7 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
                   <td className={`px-2 py-2 text-right tabular-nums ${signedClass(metrics.netPnl ?? 0)}`}>
                     {formatNullableMoney(metrics.netPnl)}
                   </td>
-                  <td className="px-2 py-2 text-right tabular-nums">{formatNullablePrice(metrics.breakeven)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-terminal-near">{formatNullablePrice(metrics.breakeven)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{holding.holdingDays ?? "-"}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-terminal-near">{formatMoney(metrics.interestPerDay)}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-terminal-near">{formatNullableMoney(metrics.interestSoFar)}</td>
