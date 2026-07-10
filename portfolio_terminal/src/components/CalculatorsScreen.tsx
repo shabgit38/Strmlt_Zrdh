@@ -17,6 +17,7 @@ import {
 import { generateExitAlert } from "../calculators/alertEngine";
 import { formatManualSpotDistance } from "../calculators/optionMetrics";
 import { MtfHoldingsTable } from "./MtfHoldingsTable";
+import { PotentialMtfCalculator } from "./PotentialMtfCalculator";
 import type {
   AvgCalculatorRow,
   CalculatorsLiveData,
@@ -304,6 +305,7 @@ export function CalculatorsScreen({
         ) : null}
 
         <MtfHoldingsTable holdings={mtfHoldings} />
+        <PotentialMtfCalculator liveData={liveData} />
 
         {existingPositions.length > 0 ? (
           <ExistingPositionsSection

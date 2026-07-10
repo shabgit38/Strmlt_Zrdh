@@ -117,6 +117,7 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
         "requestId": request.get("requestId"),
         "spots": previous_data.get("spots") or _missing_spots(),
         "options": dict(previous_data.get("options") or {}),
+        "equities": dict(previous_data.get("equities") or {}),
         "targetOptions": dict(previous_data.get("targetOptions") or {}),
         "positions": previous_data.get("positions") or [],
     }
@@ -130,13 +131,26 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
                 if str(symbol).strip()
             }
         )
-        raw_positions = _open_positions(kite)
+        equity_symbols = sorted(
+            {
+                str(symbol).upper().strip()
+                for symbol in request.get("equitySymbols", [])
+                if str(symbol).strip()
+            }
+        )
+        needs_option_context = bool(symbols or request.get("includeSpots"))
+        raw_positions = _open_positions(kite) if needs_option_context else []
         position_symbols = [position["symbol"] for position in raw_positions]
-        contract_by_symbol = _option_contracts_by_symbol(kite, set(symbols + position_symbols))
+        contract_by_symbol = (
+            _option_contracts_by_symbol(kite, set(symbols + position_symbols))
+            if needs_option_context
+            else {}
+        )
         positions = _enrich_open_option_positions(raw_positions, contract_by_symbol)
         instruments: list[str] = []
         if request.get("includeSpots"):
             instruments.extend(_INDEX_SPOT_INSTRUMENTS.values())
+        instruments.extend(f"NSE:{symbol}" for symbol in equity_symbols)
 
         underlying_by_symbol = {symbol: _underlying_instrument_for_option(symbol) for symbol in symbols}
         position_underlying_by_symbol = {
@@ -161,7 +175,15 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
                 _target_option_contracts_for_spots(kite, live_data["spots"]),
                 live_data["spots"],
             )
-        live_data["positions"] = _positions_with_spot(positions, position_underlying_by_symbol, quotes)
+        if needs_option_context:
+            live_data["positions"] = _positions_with_spot(positions, position_underlying_by_symbol, quotes)
+
+        for symbol in equity_symbols:
+            equity_quote = quotes.get(f"NSE:{symbol}", {})
+            quote_payload: dict[str, Any] = {"symbol": symbol}
+            if isinstance(equity_quote, dict) and equity_quote.get("last_price") is not None:
+                quote_payload["ltp"] = float(equity_quote["last_price"])
+            live_data["equities"][symbol] = quote_payload
 
         for symbol in symbols:
             contract = contract_by_symbol.get(symbol)

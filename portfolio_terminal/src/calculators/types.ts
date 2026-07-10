@@ -130,6 +130,7 @@ export type CalculatorsLiveData = {
   fetchedAt?: string;
   spots?: IndexSpot[];
   options?: Record<string, LiveOptionQuote>;
+  equities?: Record<string, { symbol: string; ltp?: number }>;
   targetOptions?: Record<string, TargetOptionContracts[]>;
   positions?: ExistingOptionPosition[];
   error?: string;
@@ -140,4 +141,5 @@ export type CalculatorsLiveRequest = {
   requestId: string;
   symbols: string[];
   includeSpots: boolean;
+  equitySymbols?: string[];
 };
