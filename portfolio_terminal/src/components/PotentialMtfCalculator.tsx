@@ -48,29 +48,29 @@ export function PotentialMtfCalculator({ liveData }: { liveData?: CalculatorsLiv
         <span>Potential MTF Trade Calculator</span>
         <span className="text-xs normal-case font-normal">20% margin · 0.04% daily interest</span>
       </div>
-      <div className="rounded-lg border border-terminal-line bg-terminal-panel p-4 shadow-sm">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+      <div className="rounded-lg border border-terminal-line bg-terminal-panel p-3 shadow-sm">
+        <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
           <Field label="Symbol"><input value={symbol} onChange={(event) => { setSymbol(event.target.value.toUpperCase()); requestedSymbol.current = ""; }} placeholder="e.g. INFY" /></Field>
-          <Field label="Quantity"><input type="number" min="0" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></Field>
-          <Field label="Entry price / LTP"><input type="number" min="0" step="0.05" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="Fetched or editable" /></Field>
-          <Field label="Expected return %"><input type="number" step="0.1" value={expectedReturn} onChange={(event) => setExpectedReturn(event.target.value)} /></Field>
-          <Field label="Entry date"><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} /></Field>
-          <Field label="Exit date"><input type="date" value={exitDate} onChange={(event) => setExitDate(event.target.value)} /></Field>
+          <Field label="MTF Qty"><input type="number" min="0" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></Field>
+          <Field label="MTF Avg"><input type="number" min="0" step="0.05" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="Live / editable" /></Field>
+          <Field label="Exp Ret%"><input type="number" step="0.1" value={expectedReturn} onChange={(event) => setExpectedReturn(event.target.value)} /></Field>
+          <Field label="Buy Date"><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} /></Field>
+          <Field label="Exit Date"><input type="date" value={exitDate} onChange={(event) => setExitDate(event.target.value)} /></Field>
         </div>
         {entryDate && exitDate && metrics.days === null ? <p className="mt-2 text-xs font-semibold text-terminal-avoid">Exit date must be on or after entry date.</p> : null}
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <Metric label="Holding period" value={metrics.days === null ? "-" : `${metrics.days} days`} />
-          <Metric label="Total buy value" value={money(metrics.buyValue)} />
-          <Metric label="Your investment" value={money(metrics.initialMargin)} />
-          <Metric label="Funded by Zerodha" value={money(metrics.fundedAmount)} />
-          <Metric label="Interest / day" value={money(metrics.interestPerDay)} />
-          <Metric label="Applicable interest" value={money(metrics.interest)} tone="text-terminal-near" />
-          <Metric label="Expected exit price" value={priceValue(metrics.exitPrice)} />
-          <Metric label="Gross P&L" value={money(metrics.grossPnl)} tone={tone(metrics.grossPnl)} />
-          <Metric label="Brokerage + charges" value={money(metrics.charges)} />
+        <div className="mt-2 grid gap-1.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-12">
+          <Metric label="Days" value={metrics.days === null ? "-" : String(metrics.days)} />
+          <Metric label="MTF Value" value={money(metrics.buyValue)} />
+          <Metric label="Initial Margin" value={money(metrics.initialMargin)} />
+          <Metric label="Funded" value={money(metrics.fundedAmount)} />
+          <Metric label="Int/Day" value={money(metrics.interestPerDay)} />
+          <Metric label="Interest" value={money(metrics.interest)} tone="text-terminal-near" />
+          <Metric label="Exit Price" value={priceValue(metrics.exitPrice)} />
+          <Metric label="P&L" value={money(metrics.grossPnl)} tone={tone(metrics.grossPnl)} />
+          <Metric label="Charges" value={money(metrics.charges)} />
           <Metric label="Net P&L" value={money(metrics.netPnl)} tone={tone(metrics.netPnl)} />
-          <Metric label="Net return" value={pct(metrics.netReturnPct)} tone={tone(metrics.netReturnPct)} />
-          <Metric label="Breakeven price" value={priceValue(metrics.breakeven)} />
+          <Metric label="Net Ret%" value={pct(metrics.netReturnPct)} tone={tone(metrics.netReturnPct)} />
+          <Metric label="Breakeven" value={priceValue(metrics.breakeven)} />
         </div>
       </div>
     </section>
@@ -78,11 +78,11 @@ export function PotentialMtfCalculator({ liveData }: { liveData?: CalculatorsLiv
 }
 
 function Field({ label, children }: { label: string; children: ReactElement<{ className?: string }> }) {
-  return <label className="space-y-1 text-xs font-semibold text-terminal-muted"><span>{label}</span><span className="block [&>input]:w-full [&>input]:rounded-md [&>input]:border [&>input]:border-terminal-line [&>input]:bg-terminal-panel-alt [&>input]:px-2 [&>input]:py-2 [&>input]:text-sm [&>input]:text-terminal-ink [&>input]:outline-none focus:[&>input]:border-terminal-watch">{children}</span></label>;
+  return <label className="min-w-0 space-y-0.5 text-[11px] font-semibold uppercase tracking-wide text-terminal-muted"><span>{label}</span><span className="block [&>input]:w-full [&>input]:min-w-0 [&>input]:rounded-md [&>input]:border [&>input]:border-terminal-line [&>input]:bg-terminal-panel-alt [&>input]:px-2 [&>input]:py-1.5 [&>input]:text-xs [&>input]:text-terminal-ink [&>input]:outline-none focus:[&>input]:border-terminal-watch">{children}</span></label>;
 }
 
 function Metric({ label, value, tone = "text-terminal-ink" }: { label: string; value: string; tone?: string }) {
-  return <div className="rounded-md border border-terminal-line bg-terminal-panel-alt p-3"><div className="text-[11px] font-semibold uppercase tracking-wide text-terminal-muted">{label}</div><div className={`mt-1 text-base font-bold tabular-nums ${tone}`}>{value}</div></div>;
+  return <div className="min-w-0 rounded-md border border-terminal-line bg-terminal-panel-alt px-1.5 py-2"><div className="truncate text-[9px] font-semibold uppercase tracking-wide text-terminal-muted" title={label}>{label}</div><div className={`mt-0.5 truncate text-xs font-bold tabular-nums ${tone}`} title={value}>{value}</div></div>;
 }
 
 function calculatePotentialMtf(qtyText: string, priceText: string, returnText: string, entry: string, exit: string) {
