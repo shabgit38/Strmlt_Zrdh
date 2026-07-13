@@ -521,11 +521,7 @@ def _format_alert_price_context(analytics_df: pd.DataFrame, ltp: Any) -> str | N
         return None
 
     parts = [
-        _nearest_distance_label(
-            "EMA",
-            current_price,
-            {f"EMA{span}": metrics.get(f"EMA{span}") for span in [20, 50, 100, 200]},
-        ),
+        *_ema_distance_labels(current_price, metrics),
         _nearest_distance_label(
             "52W",
             current_price,
@@ -546,7 +542,48 @@ def _nearest_distance_label(_group: str, current_price: Any, levels: dict[str, A
         return None
 
     _, label, signed_distance = min(distances, key=lambda item: item[0])
-    return f"{label} {signed_distance:+.1f}%"
+    return f"{label} {signed_distance:+.1f}% {_format_indicator_value(levels[label])}"
+
+
+def _ema_distance_labels(current_price: Any, metrics: dict[str, Any]) -> list[str]:
+    current = pd.to_numeric(current_price, errors="coerce")
+    ema_values = {
+        span: pd.to_numeric(metrics.get(f"EMA{span}"), errors="coerce")
+        for span in [20, 50, 100, 200]
+    }
+    if pd.isna(current):
+        return []
+
+    current_value = float(current)
+    ema20, ema50, ema100, ema200 = (ema_values[span] for span in [20, 50, 100, 200])
+    if pd.notna(ema20) and current_value >= float(ema20):
+        spans = [20]
+    elif pd.notna(ema50) and current_value >= float(ema50):
+        spans = [20, 50]
+    elif pd.notna(ema100) and current_value >= float(ema100):
+        spans = [50, 100]
+    elif pd.notna(ema200) and current_value >= float(ema200):
+        spans = [100, 200]
+    else:
+        spans = [200]
+
+    return [
+        _distance_label_with_value(f"EMA{span}", current_value, float(ema_values[span]))
+        for span in spans
+        if pd.notna(ema_values[span])
+    ]
+
+
+def _distance_label_with_value(label: str, current_price: float, level: float) -> str:
+    distance = calculate_distance_pct(current_price, level)
+    return f"{label} {distance:+.1f}% {_format_indicator_value(level)}"
+
+
+def _format_indicator_value(value: Any) -> str:
+    numeric_value = pd.to_numeric(value, errors="coerce")
+    if pd.isna(numeric_value):
+        return "-"
+    return f"{float(numeric_value):.2f}".rstrip("0").rstrip(".")
 
 
 def _quote_instrument_for_alert(alert: dict[str, Any]) -> str:

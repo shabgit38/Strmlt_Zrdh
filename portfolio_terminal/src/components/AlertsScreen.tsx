@@ -155,7 +155,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
           ) : null}
         </section>
 
-        <section className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(22rem,0.7fr)]">
+        <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
           <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
             <div className="border-b border-terminal-line bg-terminal-panel-alt px-3 py-2">
               <input
@@ -173,6 +173,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                   <HeaderCell align="right" className="w-20 max-w-20">LTP</HeaderCell>
                   <HeaderCell className="w-32 max-w-32">Position</HeaderCell>
                   <HeaderCell align="right" className="w-20 max-w-20">Trigger</HeaderCell>
+                  <HeaderCell align="right" className="w-28 max-w-28">Distance</HeaderCell>
                   <SortableHeader className="w-20 max-w-20" sortKey="status" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Status</SortableHeader>
                   <HeaderCell align="right" className="w-20 max-w-20"></HeaderCell>
                   <SortableHeader className="w-28 max-w-28" sortKey="updated_at" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Updated</SortableHeader>
@@ -189,6 +190,9 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                     </td>
                     <td className="w-20 max-w-20 truncate whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink" title={triggerText(alert)}>
                       {triggerText(alert)}
+                    </td>
+                    <td className="w-28 max-w-28 whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink" title={alertDistanceText(alert)}>
+                      {alertDistanceText(alert)}
                     </td>
                     <td className={`w-20 max-w-20 truncate whitespace-nowrap px-2 py-2 text-xs font-semibold ${statusClass(alert.status)}`} title={alert.status}>{alert.status}</td>
                     <td className="w-20 max-w-20 whitespace-nowrap px-2 py-2 text-right">
@@ -214,7 +218,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 ))}
                 {data?.loaded && sortedAlerts.length === 0 ? (
                   <tr className="border-t border-terminal-line">
-                    <td className="px-3 py-6 text-xs text-terminal-muted" colSpan={8}>No alerts returned for this filter.</td>
+                    <td className="px-3 py-6 text-xs text-terminal-muted" colSpan={9}>No alerts returned for this filter.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -389,6 +393,17 @@ function statusRank(status: string) {
 function numericValue(value: unknown) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : Number.NEGATIVE_INFINITY;
+}
+
+function alertDistanceText(alert: KiteAlert) {
+  if (alert.rhs_type !== "constant") return "-";
+  const ltp = Number(alert.ltp);
+  const trigger = Number(alert.rhs_constant);
+  if (!Number.isFinite(ltp) || ltp === 0 || !Number.isFinite(trigger)) return "-";
+  const points = trigger - ltp;
+  const percentage = (Math.abs(points) / ltp) * 100;
+  const direction = points > 0 ? "↑" : points < 0 ? "↓" : "";
+  return `${direction}${direction ? " " : ""}${formatPrice(Math.abs(points))} / ${percentage.toFixed(2)}%`;
 }
 
 function statusClass(status: string) {
