@@ -837,8 +837,7 @@ def _format_symbol_color_summary(
             "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:6.5rem;font-weight:700;color:{background};'>{label}</span>"
             f"<span style='background:{tint};color:#FFFFFF;font-weight:700;"
-            f"padding:0.2rem 0.45rem;border:1px solid {background};"
-            f"border-left:3px solid {background};border-radius:0.25rem;'>"
+            f"padding:0.2rem 0.45rem;border-radius:0.25rem;'>"
             f"{symbol_text}</span></div>"
         )
     return (
