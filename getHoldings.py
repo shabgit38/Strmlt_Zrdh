@@ -699,7 +699,7 @@ def _format_momentum_label_summary(
         rows.append(
             "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:5rem;font-weight:700;color:{background};'>{label}</span>"
-            f"<span style='background:{tint};color:#FFFFFF;font-weight:700;"
+            f"<span style='background:{tint};color:#FFFFFF;font-weight:400;"
             f"padding:0.2rem 0.45rem;border-radius:0.25rem;'>"
             f"{symbol_text}</span></div>"
         )
@@ -725,9 +725,10 @@ def display_momentum_label_summary(
 
 def _summary_panel_html(title: str, body_html: str, accent: str) -> str:
     return (
-        f"<div style='border:1px solid {accent};border-left:4px solid {accent};"
+        f"<div style='border:1px solid {accent};"
         "border-radius:8px;padding:0.65rem 0.75rem;margin:0.15rem 0 0.75rem 0;'>"
-        f"<div style='font-size:0.85rem;font-weight:700;margin-bottom:0.45rem;color:{accent};'>"
+        f"<div style='font-size:1rem;font-weight:400;text-transform:uppercase;"
+        f"margin-bottom:0.45rem;color:{accent};'>"
         f"{escape(title)}</div>"
         f"{body_html}"
         "</div>"
@@ -1179,13 +1180,18 @@ def _render_price_ladder_summary_card(
     dashboard_df: pd.DataFrame,
     *,
     highlight_symbols: dict[str, str] | None = None,
+    show_positions: bool = False,
 ) -> None:
-    summary_html = format_price_ladder_summary_html(dashboard_df, highlight_symbols=highlight_symbols)
+    summary_html = format_price_ladder_summary_html(
+        dashboard_df,
+        highlight_symbols=highlight_symbols,
+        show_positions=show_positions,
+    )
     if not summary_html:
         st.info("No price ladder summary available.")
         return
     st.markdown(
-        _summary_panel_html("Price Ladder Summary", summary_html, "#0F766E"),
+        _summary_panel_html("Price Ladder Summary", summary_html, BUTTON_COLOR),
         unsafe_allow_html=True,
     )
 
@@ -1202,7 +1208,7 @@ def _render_holdings_momentum_summary(momentum_df: pd.DataFrame, day_movers_df: 
         _summary_panel_html(
             "Momentum Summary",
             _format_momentum_label_summary(label_groups, highlight_symbols=momentum_summary_highlight_symbols),
-            "#7C3AED",
+            BUTTON_COLOR,
         ),
         unsafe_allow_html=True,
     )
@@ -1235,14 +1241,12 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
             + ("..." if len(momentum_failed_symbols) > 10 else "")
         )
 
-    momentum_col, price_col = st.columns(2, vertical_alignment="top")
-    with momentum_col:
-        _render_holdings_momentum_summary(momentum_df, day_movers_df)
-    with price_col:
-        _render_price_ladder_summary_card(
-            sorted_dashboard_df,
-            highlight_symbols=price_ladder_highlight_symbols,
-        )
+    _render_holdings_momentum_summary(momentum_df, day_movers_df)
+    _render_price_ladder_summary_card(
+        sorted_dashboard_df,
+        highlight_symbols=price_ladder_highlight_symbols,
+        show_positions=True,
+    )
 
     with st.expander("Momentum Ranking", expanded=False):
         render_momentum_ranking_table(
@@ -1826,16 +1830,17 @@ if selected_main_tab == "Historic Data":
             historic_ladder_highlight_symbols = _summary_ticker_accents(
                 build_day_movers_summary(day_movers_df)
             )
-            display_day_movers_summary(day_movers_df)
-
-            momentum_col, price_col = st.columns(2, vertical_alignment="top")
-            with momentum_col:
+            momentum_summary_col, day_movers_col = st.columns([3, 2], gap="medium")
+            with momentum_summary_col:
                 _render_holdings_momentum_summary(momentum_df, day_movers_df)
-            with price_col:
-                _render_price_ladder_summary_card(
-                    sorted_dashboard_df,
-                    highlight_symbols=historic_ladder_highlight_symbols,
-                )
+            with day_movers_col:
+                display_day_movers_summary(day_movers_df)
+
+            _render_price_ladder_summary_card(
+                sorted_dashboard_df,
+                highlight_symbols=historic_ladder_highlight_symbols,
+                show_positions=True,
+            )
 
             with st.expander("Momentum Ranking", expanded=False):
                 render_momentum_ranking_table(

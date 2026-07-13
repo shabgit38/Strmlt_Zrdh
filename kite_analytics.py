@@ -1,5 +1,6 @@
 from datetime import datetime, time
 from html import escape
+import re
 from typing import Any
 
 import pandas as pd
@@ -389,7 +390,7 @@ def build_metric_ladder(
     buy_avg: float | None = None,
     quantity: float | None = None,
     invested: float | None = None,
-) -> list[tuple[str, float | tuple[float, ...] | None]]:
+) -> list[tuple[str, float | str | tuple[float, ...] | None]]:
     """
     Build an ascending price ladder from the cached 2Y daily dataframe.
     """
@@ -401,7 +402,8 @@ def build_metric_ladder(
         if range_position is not None and current_price is not None
         else None
     )
-    ladder: list[tuple[str, float | tuple[float, ...] | None]] = [
+    pivots = pivot_points(analytics_df)
+    ladder: list[tuple[str, float | str | tuple[float, ...] | None]] = [
         ("Range Position", range_with_ltp),
     ]
     if range_position is not None and buy_avg is not None:
@@ -417,14 +419,85 @@ def build_metric_ladder(
         ladder.append(("Qty", quantity))
 
     ladder.append(("Range Used", range_position))
+    ladder.append(("Position", _format_price_position(metrics, pivots, range_position)))
     for span in [20, 50, 100, 200]:
         label = f"EMA{span}"
         ladder.append((f"__EMA_DISTANCE__{label}", calculate_distance_pct(current_price, metrics.get(label))))
-    ladder.extend(sorted({**metrics, **pivot_points(analytics_df)}.items(), key=lambda item: item[1]))
+    for label in ["52W High", "52W Low"]:
+        ladder.append((f"__52W_DISTANCE__{label}", calculate_distance_pct(current_price, metrics.get(label))))
+    ladder.extend(sorted({**metrics, **pivots}.items(), key=lambda item: item[1]))
     return ladder
 
 
-def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float | tuple[float, ...] | None]]]) -> pd.DataFrame:
+def _format_price_position(
+    metrics: dict[str, float],
+    pivots: dict[str, float],
+    range_position: tuple[float, float, float] | None = None,
+) -> str | None:
+    current_price = metrics.get("LTP", metrics.get("Latest Close"))
+    if current_price is None:
+        return None
+    current_label = "LTP" if metrics.get("LTP") is not None else "Latest Close"
+
+    ema_values = {span: metrics.get(f"EMA{span}") for span in [20, 50, 100, 200]}
+    ema20, ema50, ema100, ema200 = (ema_values[span] for span in [20, 50, 100, 200])
+    if ema20 is not None and current_price >= ema20:
+        ema_spans = [20]
+    elif ema50 is not None and current_price >= ema50:
+        ema_spans = [20, 50]
+    elif ema100 is not None and current_price >= ema100:
+        ema_spans = [50, 100]
+    elif ema200 is not None and current_price >= ema200:
+        ema_spans = [100, 200]
+    else:
+        ema_spans = [200]
+
+    technical_parts = [
+        _format_position_level(f"EMA{span}", current_price, ema_values[span])
+        for span in ema_spans
+        if ema_values[span] is not None
+    ]
+    nearest_52w = _nearest_position_level(
+        current_price,
+        {label: metrics.get(label) for label in ["52W Low", "52W High"]},
+    )
+    nearest_pivot = _nearest_position_level(current_price, pivots)
+    technical_parts.extend(part for part in [nearest_52w, nearest_pivot] if part)
+    parts: list[str] = []
+    if range_position is not None:
+        parts.append(f"Upper Rng {_format_position_number(range_position[2])}")
+    parts.append(f"{current_label} {_format_position_number(current_price)}")
+    parts.extend(technical_parts)
+    if range_position is not None:
+        parts.append(f"Lower Rng {_format_position_number(range_position[1])}")
+    return " | ".join(parts) or None
+
+
+def _nearest_position_level(current_price: float, levels: dict[str, Any]) -> str | None:
+    candidates: list[tuple[float, str]] = []
+    for label, level in levels.items():
+        distance = calculate_distance_pct(current_price, level)
+        if distance is not None:
+            candidates.append((abs(distance), _format_position_level(label, current_price, level)))
+    return min(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def _format_position_level(label: str, current_price: float, level: Any) -> str:
+    distance = calculate_distance_pct(current_price, level)
+    numeric_level = pd.to_numeric(level, errors="coerce")
+    if distance is None or pd.isna(numeric_level):
+        return ""
+    level_text = _format_position_number(float(numeric_level))
+    return f"{label} {distance:+.1f}% {level_text}"
+
+
+def _format_position_number(value: float) -> str:
+    return f"{float(value):,.2f}".rstrip("0").rstrip(".")
+
+
+def build_vertical_dashboard(
+    ladders: dict[str, list[tuple[str, float | str | tuple[float, ...] | None]]]
+) -> pd.DataFrame:
     """
     Build a vertical table with one sorted metric ladder column per ticker.
     """
@@ -436,8 +509,12 @@ def build_vertical_dashboard(ladders: dict[str, list[tuple[str, float | tuple[fl
             else f"Rng:{value[0]:.1f}%" if label == "Range Position" and value is not None
             else f"Buy:{value[0]:.1f}% [{value[3]:.2f}]" if label == "Buy" and value is not None and len(value) > 3
             else f"[{value[1]:.2f} - {value[2]:.2f}]" if label == "Range Used" and value is not None
+            else f"Position: {value}" if label == "Position" and value is not None
+            else "Position: -" if label == "Position"
             else f"{label.removeprefix('__EMA_DISTANCE__')}\n{value:+.2f}%" if label.startswith("__EMA_DISTANCE__") and value is not None
             else f"{label.removeprefix('__EMA_DISTANCE__')}: NA" if label.startswith("__EMA_DISTANCE__")
+            else f"{label.removeprefix('__52W_DISTANCE__')}\n{value:+.2f}%" if label.startswith("__52W_DISTANCE__") and value is not None
+            else f"{label.removeprefix('__52W_DISTANCE__')}: NA" if label.startswith("__52W_DISTANCE__")
             else f"{label}: {value:.2f}" if value is not None
             else f"{label}: -"
             for label, value in ladder
@@ -481,6 +558,9 @@ MOMENTUM_PALETTE = {
     "avoid": ("#64748B", "#FFFFFF"),
 }
 
+# Display-only fallback: Position values remain in the dashboard for the summary chart.
+SHOW_PRICE_POSITION_TEXT = False
+
 
 def build_historic_dashboard_frames(
     _kite: KiteConnect,
@@ -501,7 +581,7 @@ def build_historic_dashboard_frames(
     """
     Build the returns and sorted price ladder frames shared by historic screens.
     """
-    ladders: dict[str, list[tuple[str, float]]] = {}
+    ladders: dict[str, list[tuple[str, float | str | tuple[float, ...] | None]]] = {}
     close_prices: dict[str, pd.Series] = {}
     return_rows: list[dict] = []
     skipped_symbols: list[str] = []
@@ -595,7 +675,7 @@ def build_price_ladder_and_day_movers_frames(
     invested_key: str | None = None,
     live_ltp_by_symbol: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    ladders: dict[str, list[tuple[str, float]]] = {}
+    ladders: dict[str, list[tuple[str, float | str | tuple[float, ...] | None]]] = {}
     day_mover_rows: list[dict[str, float | str]] = []
     skipped_symbols: list[str] = []
     resolved_live_ltp_by_symbol: dict[str, float] = {
@@ -692,10 +772,21 @@ def display_historic_price_ladder_frame(
     if show_summary:
         display_price_ladder_summary(dashboard_df, highlight_symbols=highlight_symbols)
 
+    display_df = dashboard_df
+    if not SHOW_PRICE_POSITION_TEXT:
+        position_rows = dashboard_df.apply(
+            lambda row: any(
+                isinstance(value, str) and value.startswith("Position: ")
+                for value in row
+            ),
+            axis=1,
+        )
+        display_df = dashboard_df.loc[~position_rows].reset_index(drop=True)
+
     st.dataframe(
-        dashboard_df.style.map(highlight_ltp_cells),
+        display_df.style.map(highlight_ltp_cells),
         width="stretch",
-        height=_historic_dashboard_height(len(dashboard_df), max_rows=max_rows),
+        height=_historic_dashboard_height(len(display_df), max_rows=max_rows),
         hide_index=True,
     )
 
@@ -716,13 +807,18 @@ def format_price_ladder_summary_html(
     dashboard_df: pd.DataFrame,
     *,
     highlight_symbols: dict[str, str] | None = None,
+    show_positions: bool = False,
 ) -> str:
     if dashboard_df.empty:
         return ""
 
     symbol_color_groups = _group_dashboard_symbols_by_range_color(dashboard_df)
     if any(symbol_color_groups.values()):
-        return _format_symbol_color_summary(symbol_color_groups, highlight_symbols=highlight_symbols)
+        return _format_symbol_color_summary(
+            symbol_color_groups,
+            dashboard_df=dashboard_df if show_positions else None,
+            highlight_symbols=highlight_symbols,
+        )
     return ""
 
 
@@ -822,6 +918,7 @@ def _format_summary_symbols(symbols: list[str], highlight_symbols: dict[str, str
 def _format_symbol_color_summary(
     color_groups: dict[str, list[str]],
     *,
+    dashboard_df: pd.DataFrame | None = None,
     highlight_symbols: dict[str, str] | None = None,
 ) -> str:
     summary_items = [
@@ -831,12 +928,16 @@ def _format_symbol_color_summary(
         ("< 25", *MOMENTUM_PALETTE["avoid"], "rgba(100, 116, 139, 0.18)", color_groups["red"]),
     ]
     rows = []
-    for label, background, foreground, tint, symbols in summary_items:
-        symbol_text = _format_summary_symbols(symbols, highlight_symbols)
+    for label, background, foreground, _tint, symbols in summary_items:
+        symbol_text = (
+            _format_summary_symbols_with_positions(symbols, dashboard_df, highlight_symbols)
+            if dashboard_df is not None
+            else _format_summary_symbols(symbols, highlight_symbols)
+        )
         rows.append(
-            "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
+            "<div style='display:flex;align-items:flex-start;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:6.5rem;font-weight:700;color:{background};'>{label}</span>"
-            f"<span style='background:{tint};color:#FFFFFF;font-weight:700;"
+            f"<span style='color:inherit;font-weight:400;"
             f"padding:0.2rem 0.45rem;border-radius:0.25rem;'>"
             f"{symbol_text}</span></div>"
         )
@@ -844,6 +945,240 @@ def _format_symbol_color_summary(
         "<div style='display:grid;gap:0.35rem;margin:0 0 0.75rem 0;'>"
         + "".join(rows)
         + "</div>"
+    )
+
+
+def _format_summary_symbols_with_positions(
+    symbols: list[str],
+    dashboard_df: pd.DataFrame,
+    highlight_symbols: dict[str, str] | None = None,
+) -> str:
+    if not symbols:
+        return "-"
+
+    highlight_accents = {
+        str(symbol).strip().upper(): str(accent).strip()
+        for symbol, accent in (highlight_symbols or {}).items()
+        if str(symbol).strip() and str(accent).strip()
+    }
+    rows: list[str] = []
+    for symbol in symbols:
+        symbol_text = str(symbol).strip()
+        accent = highlight_accents.get(symbol_text.upper())
+        symbol_style = "font-weight:400;"
+        if accent:
+            symbol_style += (
+                f"display:inline-block;padding:0.03rem 0.2rem;border:1px solid {accent};"
+                f"border-left:3px solid {accent};border-radius:0.2rem;"
+            )
+        position = _position_text_from_dashboard_column(
+            dashboard_df.get(symbol_text, pd.Series(dtype=object))
+        )
+        position_html = _format_position_summary_html(position) if position else "-"
+        position_chart_html = _format_position_line_chart_html(position) if position else ""
+        position_text_html = (
+            f"<span style='min-width:0;font-weight:600;color:inherit;'>{position_html}</span>"
+            if SHOW_PRICE_POSITION_TEXT
+            else ""
+        )
+        rows.append(
+            "<div style='display:grid;grid-template-columns:7rem minmax(0,1fr);"
+            "column-gap:0.5rem;align-items:center;margin:0.12rem 0 0.35rem;'>"
+            f"<span style='{symbol_style}align-self:center;'>{escape(symbol_text)}</span>"
+            f"{position_text_html}"
+            f"{position_chart_html}"
+            "</div>"
+        )
+    return "".join(rows)
+
+
+def _position_text_from_dashboard_column(symbol_values: pd.Series) -> str | None:
+    position: str | None = None
+    ltp_label: str | None = None
+    ltp_value: float | None = None
+    range_low: float | None = None
+    range_high: float | None = None
+    low_52w_distance: str | None = None
+    low_52w_value: float | None = None
+    for value in symbol_values:
+        if not isinstance(value, str):
+            continue
+        if value.startswith("Position: "):
+            position = value.removeprefix("Position: ").strip() or None
+        elif value.startswith("EMA") and "\n" not in value and "%" in value and ":" not in value:
+            position = value.strip() or None
+        elif value.startswith("LTP:") or value.startswith("Latest Close:"):
+            label, raw_number = value.split(":", 1)
+            try:
+                ltp_label, ltp_value = label, float(raw_number.strip())
+            except ValueError:
+                pass
+        elif value.startswith("[") and value.endswith("]") and " - " in value:
+            try:
+                low_text, high_text = value[1:-1].split(" - ", 1)
+                range_low, range_high = float(low_text), float(high_text)
+            except ValueError:
+                pass
+        elif value.startswith("52W Low\n"):
+            candidate_distance = value.splitlines()[-1].strip()
+            if re.fullmatch(r"[+-]\d+(?:\.\d+)?%", candidate_distance):
+                low_52w_distance = candidate_distance
+        elif value.startswith("52W Low:"):
+            try:
+                low_52w_value = float(value.split(":", 1)[1].strip())
+            except ValueError:
+                pass
+
+    if not position:
+        return None
+
+    low_52w_part = (
+        f"52W Low {low_52w_distance} {_format_position_number(low_52w_value)}"
+        if low_52w_distance is not None and low_52w_value is not None
+        else None
+    )
+    if position.startswith("Upper Rng "):
+        parts = position.split(" | ")
+        if low_52w_part and not any(part.startswith("52W Low ") for part in parts):
+            lower_index = next(
+                (index for index, part in enumerate(parts) if part.startswith("Lower Rng ")),
+                len(parts),
+            )
+            parts.insert(lower_index, low_52w_part)
+        return " | ".join(parts)
+
+    parts: list[str] = []
+    if range_high is not None:
+        parts.append(f"Upper Rng {_format_position_number(range_high)}")
+    if ltp_label and ltp_value is not None:
+        parts.append(f"{ltp_label} {_format_position_number(ltp_value)}")
+    parts.append(position)
+    if low_52w_part and "52W Low " not in position:
+        parts.append(low_52w_part)
+    if range_low is not None:
+        parts.append(f"Lower Rng {_format_position_number(range_low)}")
+    return " | ".join(parts)
+
+
+def _format_position_summary_html(position: str) -> str:
+    formatted = escape(position).replace(" | ", "&nbsp;&nbsp;|&nbsp;&nbsp;")
+    formatted = re.sub(
+        r"(?:Latest Close|LTP)\s+[\d,]+(?:\.\d+)?",
+        lambda match: (
+            f"<span style='color:{MOMENTUM_PALETTE['near'][0]};font-weight:800;'>"
+            f"{match.group(0)}</span>"
+        ),
+        formatted,
+    )
+
+    def color_distance(match: re.Match[str]) -> str:
+        value = match.group(0)
+        numeric_value = float(value.removesuffix("%"))
+        color = (
+            "#64748B"
+            if numeric_value == 0
+            else MOMENTUM_PALETTE["entry"][0]
+            if numeric_value > 0
+            else "#BE123C"
+        )
+        return f"<span style='color:{color};font-weight:800;'>{value}</span>"
+
+    return re.sub(r"[+-]\d+(?:\.\d+)?%", color_distance, formatted)
+
+
+def _format_position_line_chart_html(position: str) -> str:
+    """Render the existing Position values; do not derive any technical metric."""
+    parsed_points: list[tuple[str, float, str | None]] = []
+    for part in position.split(" | "):
+        endpoint_match = re.fullmatch(
+            r"(Upper Rng|Lower Rng|LTP|Latest Close)\s+([\d,]+(?:\.\d+)?)",
+            part.strip(),
+        )
+        if endpoint_match:
+            parsed_points.append(
+                (
+                    endpoint_match.group(1),
+                    float(endpoint_match.group(2).replace(",", "")),
+                    None,
+                )
+            )
+            continue
+
+        metric_match = re.fullmatch(
+            r"(.+?)\s+([+-]\d+(?:\.\d+)?%)\s+([\d,]+(?:\.\d+)?)",
+            part.strip(),
+        )
+        if metric_match:
+            parsed_points.append(
+                (
+                    metric_match.group(1),
+                    float(metric_match.group(3).replace(",", "")),
+                    metric_match.group(2),
+                )
+            )
+
+    if not any(label == "Upper Rng" for label, _value, _distance in parsed_points) or not any(
+        label == "Lower Rng" for label, _value, _distance in parsed_points
+    ):
+        return ""
+
+    ordered_points = sorted(parsed_points, key=lambda point: point[1], reverse=True)
+    nodes: list[str] = []
+    last_index = len(ordered_points) - 1
+    for index, (label, value, distance) in enumerate(ordered_points):
+        is_endpoint = label in {"Upper Rng", "Lower Rng"}
+        is_current = label in {"LTP", "Latest Close"}
+        distance_color = "#64748B"
+        if distance:
+            numeric_distance = float(distance.removesuffix("%"))
+            distance_color = (
+                "#64748B"
+                if numeric_distance == 0
+                else MOMENTUM_PALETTE["entry"][0]
+                if numeric_distance > 0
+                else "#BE123C"
+            )
+        marker_color = (
+            MOMENTUM_PALETTE["near"][0]
+            if is_current
+            else MOMENTUM_PALETTE["wait"][0]
+            if is_endpoint
+            else distance_color
+        )
+        title = escape(f"{label} {_format_position_number(value)}" + (f" {distance}" if distance else ""))
+        left_line = "transparent" if index == 0 else "#64748B"
+        right_line = "transparent" if index == last_index else "#64748B"
+        node_background = "rgba(255, 202, 131, 0.12)" if is_current else "transparent"
+        percentage_html = (
+            f"<span style='color:{distance_color};font-weight:800;'>{escape(distance)}</span>"
+            if distance
+            else "<span>&nbsp;</span>"
+        )
+        nodes.append(
+            f"<span title='{title}' style='display:grid;grid-template-rows:1.1rem 0.65rem auto;"
+            f"min-width:6.25rem;text-align:center;align-items:center;background:{node_background};"
+            "border-radius:0.35rem;'>"
+            "<span style='font-size:0.8rem;font-weight:400;white-space:nowrap;color:#FFFFFF;'>"
+            f"{escape(label)}</span>"
+            "<span style='display:flex;align-items:center;width:100%;'>"
+            f"<span style='flex:1;height:2px;background:{left_line};opacity:0.75;'></span>"
+            f"<span style='width:0.55rem;height:0.55rem;flex:0 0 0.55rem;border-radius:50%;"
+            f"background:{marker_color};border:1px solid currentColor;'></span>"
+            f"<span style='flex:1;height:2px;background:{right_line};opacity:0.75;'></span>"
+            "</span>"
+            "<span style='display:grid;gap:0.02rem;font-size:0.8rem;line-height:1.05;'>"
+            f"<span style='font-size:0.9rem;font-weight:700;color:{marker_color};'>"
+            f"{escape(_format_position_number(value))}</span>"
+            f"{percentage_html}</span></span>"
+        )
+
+    return (
+        "<span style='grid-column:2;display:grid;grid-template-columns:repeat("
+        + str(len(ordered_points))
+        + ",minmax(6.25rem,1fr));width:100%;overflow-x:auto;margin:0;"
+        "padding:0.1rem 0 0.2rem;'>"
+        + "".join(nodes)
+        + "</span>"
     )
 
 
@@ -883,7 +1218,12 @@ def highlight_numeric_scale_cells(data: pd.DataFrame, columns: list[str]) -> pd.
 
 
 def highlight_ltp_cells(value: str) -> str:
-    if isinstance(value, str) and value.startswith("EMA") and "\n" in value and "%" in value:
+    if (
+        isinstance(value, str)
+        and (value.startswith("EMA") or value.startswith("52W High") or value.startswith("52W Low"))
+        and "\n" in value
+        and "%" in value
+    ):
         try:
             distance_pct = float(value.splitlines()[-1].strip().removesuffix("%"))
         except (IndexError, ValueError):

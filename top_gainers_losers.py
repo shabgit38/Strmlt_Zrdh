@@ -244,7 +244,7 @@ def _inject_summary_card_styles() -> None:
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            font-weight: 600;
+            font-weight: 400;
         }
         .tgl-card__value {
             color: var(--tgl-accent);
