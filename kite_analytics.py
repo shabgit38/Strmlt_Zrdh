@@ -2,6 +2,7 @@ from datetime import datetime, time
 from html import escape
 import re
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -10,12 +11,36 @@ from kiteconnect import KiteConnect
 from quant_calcs import calculate_ema
 
 
+IST = ZoneInfo("Asia/Kolkata")
+DAILY_CANDLE_COMPLETE_TIME = time(15, 40)
+
+
 def _normalize_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.index = pd.to_datetime(df.index)
     if getattr(df.index, "tz", None) is not None:
         df.index = df.index.tz_localize(None)
     return df
+
+
+def _completed_daily_rows(df: pd.DataFrame, now: datetime | None = None) -> pd.DataFrame:
+    """Return daily rows completed as of the 15:40 IST availability buffer."""
+    normalized_df = _normalize_datetime_index(df).sort_index()
+    if normalized_df.empty:
+        return normalized_df
+
+    now_ist = now or datetime.now(IST)
+    if now_ist.tzinfo is None:
+        now_ist = now_ist.replace(tzinfo=IST)
+    else:
+        now_ist = now_ist.astimezone(IST)
+
+    today = now_ist.date()
+    row_dates = pd.Index(normalized_df.index.date)
+    completed = normalized_df.loc[row_dates <= today]
+    if now_ist.time().replace(tzinfo=None) < DAILY_CANDLE_COMPLETE_TIME:
+        completed = completed.loc[pd.Index(completed.index.date) < today]
+    return completed
 
 
 def add_ema(df: pd.DataFrame) -> pd.DataFrame:
@@ -256,8 +281,17 @@ def compute_period_returns(
 
     returns: dict[str, float | None] = {}
     latest_date = pd.to_datetime(df.index[-1])
-    if latest_date.date() == datetime.now().date() and len(df) >= 2:
-        previous_close = pd.to_numeric(df.iloc[-2]["Close"], errors="coerce")
+    completed_df = _completed_daily_rows(df)
+    if latest_date.date() == datetime.now(IST).date() and not completed_df.empty:
+        if pd.to_datetime(completed_df.index[-1]).date() == latest_date.date():
+            previous_rows = completed_df.iloc[:-1]
+        else:
+            previous_rows = completed_df
+        previous_close = (
+            pd.to_numeric(previous_rows.iloc[-1]["Close"], errors="coerce")
+            if not previous_rows.empty
+            else None
+        )
         if pd.notna(previous_close) and float(previous_close) != 0:
             returns["Today Return %"] = {
                 "return_pct": round(
@@ -360,11 +394,10 @@ def pivot_points(df: pd.DataFrame) -> dict[str, float]:
     if normalized_df.empty:
         return {}
 
-    latest_date = pd.to_datetime(normalized_df.index[-1]).date()
-    if latest_date == datetime.now().date() and len(normalized_df) >= 2:
-        reference_row = normalized_df.iloc[-2]
-    else:
-        reference_row = normalized_df.iloc[-1]
+    completed_df = _completed_daily_rows(normalized_df)
+    if completed_df.empty:
+        return {}
+    reference_row = completed_df.iloc[-1]
 
     high = float(reference_row["High"])
     low = float(reference_row["Low"])
@@ -457,12 +490,15 @@ def _format_price_position(
         for span in ema_spans
         if ema_values[span] is not None
     ]
-    nearest_52w = _nearest_position_level(
-        current_price,
-        {label: metrics.get(label) for label in ["52W Low", "52W High"]},
-    )
-    nearest_pivot = _nearest_position_level(current_price, pivots)
-    technical_parts.extend(part for part in [nearest_52w, nearest_pivot] if part)
+    if ema200 is not None and current_price < ema200:
+        nearest_52w = _format_position_level("52W Low", current_price, metrics.get("52W Low"))
+    else:
+        nearest_52w = _nearest_position_level(
+            current_price,
+            {label: metrics.get(label) for label in ["52W Low", "52W High"]},
+        )
+    surrounding_pivots = _surrounding_position_levels(current_price, pivots)
+    technical_parts.extend(part for part in [nearest_52w, *surrounding_pivots] if part)
     parts: list[str] = []
     if range_position is not None:
         parts.append(f"Upper Rng {_format_position_number(range_position[2])}")
@@ -480,6 +516,33 @@ def _nearest_position_level(current_price: float, levels: dict[str, Any]) -> str
         if distance is not None:
             candidates.append((abs(distance), _format_position_level(label, current_price, level)))
     return min(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def _surrounding_position_levels(current_price: float, levels: dict[str, Any]) -> list[str]:
+    numeric_levels: list[tuple[float, str]] = []
+    for label, level in levels.items():
+        numeric_level = pd.to_numeric(level, errors="coerce")
+        if pd.notna(numeric_level):
+            numeric_levels.append((float(numeric_level), label))
+    numeric_levels.sort(key=lambda item: item[0])
+
+    exact = [item for item in numeric_levels if item[0] == current_price]
+    if exact:
+        selected = exact[:1]
+    else:
+        below = [item for item in numeric_levels if item[0] < current_price]
+        above = [item for item in numeric_levels if item[0] > current_price]
+        selected = []
+        if below:
+            selected.append(below[-1])
+        if above:
+            selected.append(above[0])
+
+        pivot_value = pd.to_numeric(levels.get("D Pivot"), errors="coerce")
+        if pd.notna(pivot_value) and current_price < float(pivot_value):
+            selected.reverse()
+
+    return [_format_position_level(label, current_price, level) for level, label in selected]
 
 
 def _format_position_level(label: str, current_price: float, level: Any) -> str:
@@ -644,10 +707,20 @@ def _historic_day_mover_row(symbol: str, analytics_df: pd.DataFrame, ltp: Any = 
 
     df = _normalize_datetime_index(analytics_df)
     df.sort_index(inplace=True)
+    completed_df = _completed_daily_rows(df)
+    if completed_df.empty:
+        return None
     latest_price = pd.to_numeric(ltp, errors="coerce")
     if pd.isna(latest_price):
         latest_price = pd.to_numeric(df.iloc[-1]["Close"], errors="coerce")
-    previous_close = pd.to_numeric(df.iloc[-2]["Close"], errors="coerce")
+    latest_date = pd.to_datetime(df.index[-1]).date()
+    if latest_date == datetime.now(IST).date() and pd.to_datetime(completed_df.index[-1]).date() == latest_date:
+        previous_rows = completed_df.iloc[:-1]
+    else:
+        previous_rows = completed_df
+    if previous_rows.empty:
+        return None
+    previous_close = pd.to_numeric(previous_rows.iloc[-1]["Close"], errors="coerce")
     if pd.isna(latest_price) or pd.isna(previous_close) or float(previous_close) == 0:
         return None
 

@@ -211,7 +211,13 @@ def _portfolio_component_batches(
     batch_df = active_df[selected_rows].copy()
     if batch_df.empty:
         return []
-    if "id" in batch_df.columns:
+    if "trade_date" in batch_df.columns:
+        batch_df = (
+            batch_df.assign(_trade_date_sort=pd.to_datetime(batch_df["trade_date"], errors="coerce"))
+            .sort_values("_trade_date_sort", ascending=True, na_position="last", kind="stable")
+            .drop(columns="_trade_date_sort")
+        )
+    elif "id" in batch_df.columns:
         batch_df = batch_df.sort_values("id", kind="stable")
 
     return [

@@ -5,7 +5,7 @@ import { formatPrice } from "../format";
 import { setStreamlitComponentValue, setStreamlitFrameHeight } from "../streamlitBridge";
 import type { AlertFormValues, AlertsData, AlertStatusFilter, KiteAlert } from "../alerts/types";
 
-type SortKey = "status" | "symbol" | "name" | "ltp" | "updated_at";
+type SortKey = "status" | "symbol" | "name" | "ltp" | "distance_pct" | "updated_at";
 type SortDirection = "asc" | "desc";
 type AlertAction = "fetch" | "create" | "modify" | "delete";
 
@@ -173,7 +173,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                   <HeaderCell align="right" className="w-20 max-w-20">LTP</HeaderCell>
                   <HeaderCell className="w-32 max-w-32">Position</HeaderCell>
                   <HeaderCell align="right" className="w-20 max-w-20">Trigger</HeaderCell>
-                  <HeaderCell align="right" className="w-28 max-w-28">Distance</HeaderCell>
+                  <SortableHeader align="right" className="w-28 max-w-28" sortKey="distance_pct" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Distance</SortableHeader>
                   <SortableHeader className="w-20 max-w-20" sortKey="status" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Status</SortableHeader>
                   <HeaderCell align="right" className="w-20 max-w-20"></HeaderCell>
                   <SortableHeader className="w-28 max-w-28" sortKey="updated_at" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Updated</SortableHeader>
@@ -318,6 +318,13 @@ function SelectField({ label, value, options, onChange }: { label: string; value
 function compareAlerts(left: KiteAlert, right: KiteAlert, sortKey: SortKey, direction: SortDirection) {
   const multiplier = direction === "asc" ? 1 : -1;
   if (sortKey === "status") return (statusRank(left.status) - statusRank(right.status)) * multiplier;
+  if (sortKey === "distance_pct") {
+    const leftDistance = alertDistancePercentage(left);
+    const rightDistance = alertDistancePercentage(right);
+    if (leftDistance === null) return rightDistance === null ? 0 : 1;
+    if (rightDistance === null) return -1;
+    return (leftDistance - rightDistance) * multiplier;
+  }
   if (sortKey === "ltp") {
     return (numericValue(left[sortKey]) - numericValue(right[sortKey])) * multiplier;
   }
@@ -395,13 +402,20 @@ function numericValue(value: unknown) {
   return Number.isFinite(numberValue) ? numberValue : Number.NEGATIVE_INFINITY;
 }
 
-function alertDistanceText(alert: KiteAlert) {
-  if (alert.rhs_type !== "constant") return "-";
+function alertDistancePercentage(alert: KiteAlert) {
+  if (alert.rhs_type !== "constant") return null;
   const ltp = Number(alert.ltp);
   const trigger = Number(alert.rhs_constant);
-  if (!Number.isFinite(ltp) || ltp === 0 || !Number.isFinite(trigger)) return "-";
+  if (!Number.isFinite(ltp) || ltp === 0 || !Number.isFinite(trigger)) return null;
+  return (Math.abs(trigger - ltp) / ltp) * 100;
+}
+
+function alertDistanceText(alert: KiteAlert) {
+  const percentage = alertDistancePercentage(alert);
+  if (percentage === null) return "-";
+  const ltp = Number(alert.ltp);
+  const trigger = Number(alert.rhs_constant);
   const points = trigger - ltp;
-  const percentage = (Math.abs(points) / ltp) * 100;
   const direction = points > 0 ? "↑" : points < 0 ? "↓" : "";
   return `${direction}${direction ? " " : ""}${formatPrice(Math.abs(points))} / ${percentage.toFixed(2)}%`;
 }
