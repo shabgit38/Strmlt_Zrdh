@@ -415,6 +415,12 @@ def _extract_historic_ladder_summary(dashboard_df: pd.DataFrame) -> pd.DataFrame
                     row[f"{lines[0]} Dist %"] = float(lines[-1].strip().removesuffix("%"))
                 except (IndexError, ValueError):
                     pass
+            elif "\n" in value and value.startswith(("52W High", "52W Low")) and value.endswith("%"):
+                lines = value.splitlines()
+                try:
+                    row[f"{lines[0]} Dist %"] = float(lines[-1].strip().removesuffix("%"))
+                except (IndexError, ValueError):
+                    pass
             elif value.startswith("52W High:"):
                 row["52W High"] = _parse_prefixed_float(value, "52W High:")
             elif value.startswith("52W Low:"):
@@ -423,6 +429,37 @@ def _extract_historic_ladder_summary(dashboard_df: pd.DataFrame) -> pd.DataFrame
         rows.append(row)
 
     return pd.DataFrame(rows)
+
+
+def _filter_historic_price_ladder(
+    dashboard_df: pd.DataFrame,
+    ema_filter: str,
+    proximity_filter: str,
+    proximity_pct: float,
+) -> pd.DataFrame:
+    if dashboard_df.empty or (ema_filter == "All" and proximity_filter == "All"):
+        return dashboard_df
+
+    summary_df = _extract_historic_ladder_summary(dashboard_df).set_index("Ticker")
+    selected_symbols = pd.Series(True, index=summary_df.index, dtype=bool)
+
+    def numeric_column(column: str) -> pd.Series:
+        if column not in summary_df.columns:
+            return pd.Series(float("nan"), index=summary_df.index)
+        return pd.to_numeric(summary_df[column], errors="coerce")
+
+    if ema_filter != "All":
+        direction, ema_label = ema_filter.split(" ", 1)
+        distances = numeric_column(f"{ema_label} Dist %")
+        selected_symbols &= distances.ge(0) if direction == "Above" else distances.lt(0)
+
+    if proximity_filter != "All":
+        distance_column = f"{proximity_filter.removeprefix('Near ')} Dist %"
+        distances = numeric_column(distance_column)
+        selected_symbols &= distances.abs().le(float(proximity_pct))
+
+    selected = set(summary_df.index[selected_symbols.fillna(False)])
+    return dashboard_df.loc[:, [column for column in dashboard_df.columns if str(column).strip().upper() in selected]]
 
 
 def build_consolidated_momentum_dashboard(
@@ -1836,8 +1873,49 @@ if selected_main_tab == "Historic Data":
             with day_movers_col:
                 display_day_movers_summary(day_movers_df)
 
-            _render_price_ladder_summary_card(
+            ema_filter_col, proximity_filter_col, proximity_pct_col = st.columns([2, 2, 1], gap="small")
+            with ema_filter_col:
+                historic_ema_filter = st.selectbox(
+                    "EMA filter",
+                    [
+                        "All",
+                        "Above EMA20",
+                        "Below EMA20",
+                        "Above EMA50",
+                        "Below EMA50",
+                        "Above EMA100",
+                        "Below EMA100",
+                        "Above EMA200",
+                        "Below EMA200",
+                    ],
+                    key="historic_price_summary_ema_filter",
+                )
+            with proximity_filter_col:
+                historic_proximity_filter = st.selectbox(
+                    "52-week proximity",
+                    ["All", "Near 52W High", "Near 52W Low"],
+                    key="historic_price_summary_52w_filter",
+                )
+            with proximity_pct_col:
+                historic_proximity_pct = st.number_input(
+                    "Near within %",
+                    min_value=0.1,
+                    max_value=100.0,
+                    value=5.0,
+                    step=0.5,
+                    key="historic_price_summary_near_pct",
+                )
+
+            filtered_dashboard_df = _filter_historic_price_ladder(
                 sorted_dashboard_df,
+                historic_ema_filter,
+                historic_proximity_filter,
+                historic_proximity_pct,
+            )
+            st.caption(f"{len(filtered_dashboard_df.columns)} of {len(sorted_dashboard_df.columns)} stocks")
+
+            _render_price_ladder_summary_card(
+                filtered_dashboard_df,
                 highlight_symbols=historic_ladder_highlight_symbols,
                 show_positions=True,
             )
@@ -1852,7 +1930,7 @@ if selected_main_tab == "Historic Data":
 
             with st.expander("Price Ladder", expanded=False):
                 display_historic_price_ladder_frame(
-                    sorted_dashboard_df,
+                    filtered_dashboard_df,
                     max_rows=12,
                     highlight_symbols=historic_ladder_highlight_symbols,
                     show_summary=False,
