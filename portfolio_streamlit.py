@@ -4,6 +4,8 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from kite_analytics import position_line_chart_points_from_dashboard_column
+
 from getHldgBrk import (
     _active_breakdown_df,
     _ltp_match_symbol,
@@ -289,6 +291,7 @@ def build_portfolio_terminal_snapshot(
     holdings_breakdown_df: pd.DataFrame,
     *,
     as_of: str,
+    dashboard_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     empty_snapshot = {
         "asOf": as_of,
@@ -348,9 +351,13 @@ def build_portfolio_terminal_snapshot(
         holdings: list[dict[str, Any]] = []
         for _, holding in sector_df.iterrows():
             holding_invested = _component_number(holding.get("Invested"))
+            symbol = _component_text(holding.get("Symbol"))
+            position_chart = []
+            if dashboard_df is not None and not dashboard_df.empty and symbol in dashboard_df.columns:
+                position_chart = position_line_chart_points_from_dashboard_column(dashboard_df[symbol])
             holdings.append(
                 {
-                    "symbol": _component_text(holding.get("Symbol")),
+                    "symbol": symbol,
                     "quantity": _component_int(holding.get("Quantity")),
                     "averagePrice": _component_number(holding.get("Avg Price")),
                     "invested": holding_invested,
@@ -360,6 +367,7 @@ def build_portfolio_terminal_snapshot(
                     "pnl": _component_number(holding.get("P&L")),
                     "pnlPct": _component_number(holding.get("P&L %")),
                     "dayChangePct": _component_number(holding.get("DayChg %")),
+                    "positionChart": position_chart,
                     "batches": _portfolio_component_batches(holding.get("Symbol"), holding.get("ISIN"), holdings_breakdown_df),
                 }
             )

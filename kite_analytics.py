@@ -1161,44 +1161,21 @@ def _format_position_summary_html(position: str) -> str:
 
 def _format_position_line_chart_html(position: str) -> str:
     """Render the existing Position values; do not derive any technical metric."""
-    parsed_points: list[tuple[str, float, str | None]] = []
-    for part in position.split(" | "):
-        endpoint_match = re.fullmatch(
-            r"(Upper Rng|Lower Rng|LTP|Latest Close)\s+([\d,]+(?:\.\d+)?)",
-            part.strip(),
-        )
-        if endpoint_match:
-            parsed_points.append(
-                (
-                    endpoint_match.group(1),
-                    float(endpoint_match.group(2).replace(",", "")),
-                    None,
-                )
-            )
-            continue
+    parsed_points = _position_line_chart_points(position)
 
-        metric_match = re.fullmatch(
-            r"(.+?)\s+([+-]\d+(?:\.\d+)?%)\s+([\d,]+(?:\.\d+)?)",
-            part.strip(),
-        )
-        if metric_match:
-            parsed_points.append(
-                (
-                    metric_match.group(1),
-                    float(metric_match.group(3).replace(",", "")),
-                    metric_match.group(2),
-                )
-            )
-
-    if not any(label == "Upper Rng" for label, _value, _distance in parsed_points) or not any(
-        label == "Lower Rng" for label, _value, _distance in parsed_points
+    if not any(point["label"] == "Upper Rng" for point in parsed_points) or not any(
+        point["label"] == "Lower Rng" for point in parsed_points
     ):
         return ""
 
-    ordered_points = sorted(parsed_points, key=lambda point: point[1], reverse=True)
+    ordered_points = sorted(parsed_points, key=lambda point: point["value"], reverse=True)
     nodes: list[str] = []
     last_index = len(ordered_points) - 1
-    for index, (label, value, distance) in enumerate(ordered_points):
+    for index, point in enumerate(ordered_points):
+        label = str(point["label"])
+        value = float(point["value"])
+        distance = point["distance"]
+        distance = str(distance) if distance is not None else None
         is_endpoint = label in {"Upper Rng", "Lower Rng"}
         is_current = label in {"LTP", "Latest Close"}
         distance_color = "#64748B"
@@ -1253,6 +1230,58 @@ def _format_position_line_chart_html(position: str) -> str:
         + "".join(nodes)
         + "</span>"
     )
+
+
+def _position_line_chart_points(position: str) -> list[dict[str, float | str | None]]:
+    """Parse the shared price-position string into serializable chart points."""
+    parsed_points: list[tuple[str, float, str | None]] = []
+    for part in position.split(" | "):
+        endpoint_match = re.fullmatch(
+            r"(Upper Rng|Lower Rng|LTP|Latest Close)\s+([\d,]+(?:\.\d+)?)",
+            part.strip(),
+        )
+        if endpoint_match:
+            parsed_points.append(
+                (
+                    endpoint_match.group(1),
+                    float(endpoint_match.group(2).replace(",", "")),
+                    None,
+                )
+            )
+            continue
+
+        metric_match = re.fullmatch(
+            r"(.+?)\s+([+-]\d+(?:\.\d+)?%)\s+([\d,]+(?:\.\d+)?)",
+            part.strip(),
+        )
+        if metric_match:
+            parsed_points.append(
+                (
+                    metric_match.group(1),
+                    float(metric_match.group(3).replace(",", "")),
+                    metric_match.group(2),
+                )
+            )
+
+    return [
+        {"label": label, "value": value, "distance": distance}
+        for label, value, distance in parsed_points
+    ]
+
+
+def position_line_chart_points_from_dashboard_column(
+    symbol_values: pd.Series,
+) -> list[dict[str, float | str | None]]:
+    """Return the Historic Data position-chart points for one dashboard symbol."""
+    position = _position_text_from_dashboard_column(symbol_values)
+    if not position:
+        return []
+    points = _position_line_chart_points(position)
+    if not any(point["label"] == "Upper Rng" for point in points) or not any(
+        point["label"] == "Lower Rng" for point in points
+    ):
+        return []
+    return sorted(points, key=lambda point: float(point["value"]), reverse=True)
 
 
 def highlight_return_cells(data: pd.DataFrame) -> pd.DataFrame:

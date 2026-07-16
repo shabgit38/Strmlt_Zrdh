@@ -16,7 +16,14 @@ export type Holding = {
   pnl: number;
   pnlPct: number;
   dayChangePct: number;
+  positionChart?: PositionChartPoint[];
   batches: Batch[];
+};
+
+export type PositionChartPoint = {
+  label: string;
+  value: number;
+  distance: string | null;
 };
 
 export type SectorGroup = {

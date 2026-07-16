@@ -1470,6 +1470,7 @@ if selected_main_tab == "Holdings":
                 kite_holdings_df,
                 _holdings_breakdown_state_df(),
                 as_of=as_of,
+                dashboard_df=st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame()),
             )
             render_portfolio_terminal(snapshot, key="portfolio_terminal_component")
             ltp_refresh_error = st.session_state.get("kite_holdings_ltp_refresh_error")

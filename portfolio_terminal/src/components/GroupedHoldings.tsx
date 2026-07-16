@@ -1,8 +1,9 @@
 import { ChevronDown } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { Holding, SectorGroup } from "../types";
 import { formatMoney, formatPct, formatPrice, signedClass } from "../format";
 import { BatchBreakdownPanel } from "./BatchBreakdownPanel";
+import { PositionLineChart } from "./PositionLineChart";
 
 type GroupedHoldingsProps = {
   sectors: SectorGroup[];
@@ -121,8 +122,9 @@ export function GroupedHoldings({
                   </thead>
                   <tbody>
                     {sortedHoldings.map((holding) => (
+                      <Fragment key={holding.symbol}>
                       <tr
-                        key={holding.symbol}
+                        key={`${holding.symbol}-row`}
                         onClick={() => onSelectHolding(sector.sector, holding)}
                         className={`cursor-pointer border-t border-terminal-line transition hover:bg-terminal-hover ${
                           selectedSymbol === holding.symbol ? "bg-terminal-selected" : "bg-terminal-panel"
@@ -157,6 +159,10 @@ export function GroupedHoldings({
                           {formatPct(holding.dayChangePct)}
                         </td>
                       </tr>
+                      <tr key={`${holding.symbol}-chart`} className="border-t border-terminal-line bg-terminal-panel-alt/40">
+                        <td colSpan={10}><PositionLineChart points={holding.positionChart} /></td>
+                      </tr>
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>
