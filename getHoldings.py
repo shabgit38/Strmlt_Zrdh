@@ -683,6 +683,15 @@ def _group_momentum_symbols_by_label(momentum_df: pd.DataFrame) -> dict[str, lis
     return label_groups
 
 
+def _momentum_label_by_symbol(momentum_df: pd.DataFrame) -> dict[str, str]:
+    """Return the same symbol labels used by the Momentum Summary card."""
+    return {
+        symbol: label
+        for label, symbols in _group_momentum_symbols_by_label(momentum_df).items()
+        for symbol in symbols
+    }
+
+
 SUMMARY_HIGHLIGHT_ACCENTS = {
     "Top Gainer": "#7DCE9B",
     "Top Gainers": "#7DCE9B",
@@ -1217,11 +1226,13 @@ def _render_price_ladder_summary_card(
     dashboard_df: pd.DataFrame,
     *,
     highlight_symbols: dict[str, str] | None = None,
+    momentum_labels: dict[str, str] | None = None,
     show_positions: bool = False,
 ) -> None:
     summary_html = format_price_ladder_summary_html(
         dashboard_df,
         highlight_symbols=highlight_symbols,
+        momentum_labels=momentum_labels,
         show_positions=show_positions,
     )
     if not summary_html:
@@ -1918,6 +1929,7 @@ if selected_main_tab == "Historic Data":
             _render_price_ladder_summary_card(
                 filtered_dashboard_df,
                 highlight_symbols=historic_ladder_highlight_symbols,
+                momentum_labels=_momentum_label_by_symbol(momentum_df),
                 show_positions=True,
             )
 
