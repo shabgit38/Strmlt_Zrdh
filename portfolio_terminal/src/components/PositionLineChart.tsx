@@ -9,10 +9,10 @@ export function PositionLineChart({ points = [] }: PositionLineChartProps) {
   if (points.length === 0) return null;
 
   return (
-    <div className="col-span-10 overflow-x-auto px-2 pb-3 pt-1">
+    <div className="col-span-10 overflow-x-auto px-1 pb-2 pt-1">
       <div
         className="grid min-w-max"
-        style={{ gridTemplateColumns: `repeat(${points.length}, minmax(6.25rem, 1fr))` }}
+        style={{ gridTemplateColumns: `repeat(${points.length}, minmax(4.25rem, 1fr))` }}
       >
         {points.map((point, index) => {
           const current = point.label === "LTP" || point.label === "Latest Close";
@@ -31,20 +31,22 @@ export function PositionLineChart({ points = [] }: PositionLineChartProps) {
           return (
             <div
               key={`${point.label}-${point.value}`}
-              className={`grid grid-rows-[1.1rem_0.65rem_auto] items-center rounded-md text-center ${
+              className={`grid grid-rows-[0.9rem_0.5rem_auto] items-center rounded text-center ${
                 current ? "bg-amber-100/10" : ""
               }`}
               title={`${point.label} ${formatPrice(point.value)}${point.distance ? ` ${point.distance}` : ""}`}
             >
-              <span className="whitespace-nowrap text-xs text-terminal-ink">{point.label}</span>
+              <span className="whitespace-nowrap text-[10px] leading-none text-terminal-ink">
+                {point.label}
+              </span>
               <span className="flex w-full items-center">
                 <span className={`h-0.5 flex-1 ${index === 0 ? "bg-transparent" : "bg-terminal-muted/60"}`} />
-                <span className="h-2 w-2 flex-none rounded-full border" style={{ backgroundColor: color }} />
+                <span className="h-1.5 w-1.5 flex-none rounded-full border" style={{ backgroundColor: color }} />
                 <span className={`h-0.5 flex-1 ${index === points.length - 1 ? "bg-transparent" : "bg-terminal-muted/60"}`} />
               </span>
-              <span className="grid text-xs leading-tight">
+              <span className="grid text-[10px] leading-none">
                 <span className="font-bold" style={{ color }}>{formatPrice(point.value)}</span>
-                <span className="font-bold" style={{ color }}>{point.distance ?? "\u00a0"}</span>
+                <span className="mt-0.5 font-bold" style={{ color }}>{point.distance ?? "\u00a0"}</span>
               </span>
             </div>
           );
