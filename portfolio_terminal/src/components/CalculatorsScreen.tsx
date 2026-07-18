@@ -523,6 +523,16 @@ function ExistingPositionsSection({
   positions: ExistingOptionPosition[];
 }) {
   const spotSummary = existingPositionsSpotSummary(positions);
+  const totals = positions.reduce(
+    (total, position) => {
+      const metrics = existingPositionMetrics(position);
+      total.invested += metrics.invested;
+      total.pnl += position.pnl;
+      return total;
+    },
+    { invested: 0, pnl: 0 },
+  );
+  const totalPnlPct = totals.invested === 0 ? null : (totals.pnl / totals.invested) * 100;
 
   return (
     <section className="space-y-3">
@@ -587,6 +597,13 @@ function ExistingPositionsSection({
                 </tr>
               );
             })}
+            <tr className="border-t-2 border-terminal-line bg-terminal-panel-alt font-semibold">
+              <td className="px-3 py-2 text-terminal-ink" colSpan={8}>Total</td>
+              <ValueCell align="right" value={formatMoney(totals.invested)} />
+              <ValueCell align="right" value={formatMoney(totals.pnl)} tone={totals.pnl} />
+              <ValueCell align="right" value={formatNullablePct(totalPnlPct)} tone={totalPnlPct} />
+              <td colSpan={3}></td>
+            </tr>
           </tbody>
         </table>
       </div>
