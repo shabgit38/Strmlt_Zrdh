@@ -1062,17 +1062,13 @@ def _empty_add_breakdown_entries_df() -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
-                "Row Type": "SUMMARY",
                 "Symbol": "",
                 "Sector": "",
                 "Date": date.today(),
                 "MTF?": False,
                 "Bonus?": False,
-                "Total Qty": None,
-                "Buy Avg": None,
-                "Invested": None,
-                "Batch Qty": None,
-                "Batch Price": None,
+                "Qty": None,
+                "Price": None,
                 "Exit?": False,
                 "Exit Date": None,
                 "Exit Qty": None,
@@ -1084,17 +1080,13 @@ def _empty_add_breakdown_entries_df() -> pd.DataFrame:
 
 def _add_breakdown_entries_column_config() -> dict[str, Any]:
     return {
-        "Row Type": st.column_config.SelectboxColumn("Row Type", options=["SUMMARY", "BATCH"], required=True),
         "Symbol": st.column_config.TextColumn("Symbol", required=True),
         "Sector": st.column_config.TextColumn("Sector"),
         "Date": st.column_config.DateColumn("Date"),
         "MTF?": st.column_config.CheckboxColumn("MTF?"),
         "Bonus?": st.column_config.CheckboxColumn("Bonus?"),
-        "Total Qty": st.column_config.NumberColumn("Total Qty", min_value=0, step=1, format="%d"),
-        "Buy Avg": st.column_config.NumberColumn("Buy Avg", min_value=0.0, format="%.2f"),
-        "Invested": st.column_config.NumberColumn("Invested", format="%.2f"),
-        "Batch Qty": st.column_config.NumberColumn("Batch Qty", min_value=0, step=1, format="%d"),
-        "Batch Price": st.column_config.NumberColumn("Batch Price", min_value=0.0, format="%.2f"),
+        "Qty": st.column_config.NumberColumn("Qty", min_value=0, step=1, format="%d"),
+        "Price": st.column_config.NumberColumn("Price", min_value=0.0, format="%.2f"),
         "Exit?": st.column_config.CheckboxColumn("Exit?"),
         "Exit Date": st.column_config.DateColumn("Exit Date"),
         "Exit Qty": st.column_config.NumberColumn("Exit Qty", min_value=0, step=1, format="%d"),
@@ -1106,10 +1098,8 @@ def _has_add_breakdown_entry_values(row: pd.Series) -> bool:
     value_columns = [
         "Symbol",
         "Sector",
-        "Total Qty",
-        "Buy Avg",
-        "Batch Qty",
-        "Batch Price",
+        "Qty",
+        "Price",
         "Exit Qty",
         "Exit Price",
     ]
@@ -1120,18 +1110,29 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
     affected_symbols: set[str] = set()
     errors: list[str] = []
     pending_records: list[dict[str, Any]] = []
-    submitted_batch_symbols = {
+    submitted_symbols = sorted({
         str(row.get("Symbol") or "").upper().strip()
         for _, row in entries_df.iterrows()
-        if str(row.get("Row Type") or "").upper().strip() == "BATCH"
-        and str(row.get("Symbol") or "").strip()
+        if str(row.get("Symbol") or "").strip()
+    })
+    existing_df = load_holdings_breakdown_for_symbols(submitted_symbols)
+    existing_by_symbol = {
+        symbol: (
+            existing_df[
+                existing_df["symbol"].astype(str).str.upper().str.strip().eq(symbol)
+            ].copy()
+            if not existing_df.empty and "symbol" in existing_df.columns
+            else pd.DataFrame()
+        )
+        for symbol in submitted_symbols
     }
+    seen_symbols: set[str] = set()
+    pending_summary_symbols: set[str] = set()
 
     for row_number, row in entries_df.iterrows():
         if not _has_add_breakdown_entry_values(row):
             continue
 
-        row_type = str(row.get("Row Type") or "").upper().strip()
         symbol = str(row.get("Symbol") or "").upper().strip()
         sector = _json_safe_value(row.get("Sector"))
         is_exit = bool(row.get("Exit?"))
@@ -1139,34 +1140,29 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
         is_bonus = bool(row.get("Bonus?"))
         trade_date = _date_input_value(row.get("Date"))
 
-        if row_type not in {"SUMMARY", "BATCH"}:
-            errors.append(f"Row {row_number + 1}: select SUMMARY or BATCH.")
-            continue
         if not symbol:
             errors.append(f"Row {row_number + 1}: Symbol is required.")
             continue
 
+        symbol_df = existing_by_symbol.get(symbol, pd.DataFrame())
+        symbol_exists = not symbol_df.empty or symbol in seen_symbols
+        row_type = "BATCH" if symbol_exists else "SUMMARY"
+        qty = _record_integer_value(row.get("Qty"))
+        price = _record_numeric_value(row.get("Price"))
+
+        if qty is None or price is None:
+            errors.append(f"Row {row_number + 1}: Qty and Price are required.")
+            seen_symbols.add(symbol)
+            continue
+
         if row_type == "SUMMARY":
-            total_qty = _record_integer_value(row.get("Total Qty"))
-            buy_avg = _record_numeric_value(row.get("Buy Avg"))
-            symbol_df = load_holdings_breakdown_for_symbols([symbol])
-            has_existing_batch = (
-                not symbol_df.empty
-                and "row_type" in symbol_df.columns
-                and symbol_df["row_type"].astype(str).str.upper().str.strip().eq("BATCH").any()
-            )
-            has_batch_context = has_existing_batch or symbol in submitted_batch_symbols
-            if not has_batch_context and (total_qty is None or buy_avg is None):
-                errors.append(
-                    f"Row {row_number + 1}: Total Qty and Buy Avg are required for SUMMARY when no batch rows exist."
-                )
+            if _zero_price_requires_bonus(price) and not is_bonus:
+                errors.append(f"Row {row_number + 1}: Price is zero. Tick Bonus? if these are bonus shares.")
+                seen_symbols.add(symbol)
                 continue
             should_create_initial_batch = (
                 not is_mtf
                 and not is_exit
-                and not has_batch_context
-                and total_qty is not None
-                and buy_avg is not None
             )
             record = _recompute_breakdown_record(
                 {
@@ -1174,8 +1170,8 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                     "symbol": symbol,
                     "sector": sector,
                     "trade_date": trade_date,
-                    "total_qty": total_qty if total_qty is not None else 0,
-                    "buy_avg": buy_avg if buy_avg is not None else 0,
+                    "total_qty": qty,
+                    "buy_avg": price,
                     "ltp": _lookup_ltp(ltp_by_symbol, symbol),
                 },
                 ltp_by_symbol,
@@ -1188,19 +1184,17 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                             "symbol": symbol,
                             "sector": sector,
                             "trade_date": trade_date,
-                            "batch_qty": total_qty,
-                            "batch_price": buy_avg,
+                            "trade_type": "BONUS" if is_bonus else None,
+                            "batch_qty": qty,
+                            "batch_price": price,
                             "ltp": _lookup_ltp(ltp_by_symbol, symbol),
                         },
                         ltp_by_symbol,
                     )
                 )
         else:
-            batch_qty = _record_integer_value(row.get("Batch Qty"))
-            batch_price = _record_numeric_value(row.get("Batch Price"))
-            if batch_qty is None or batch_price is None:
-                errors.append(f"Row {row_number + 1}: Batch Qty and Batch Price are required for BATCH.")
-                continue
+            batch_qty = qty
+            batch_price = price
             if _zero_price_requires_bonus(batch_price) and not is_bonus:
                 errors.append(f"Row {row_number + 1}: Batch Price is zero. Tick Bonus? if these are bonus shares.")
                 continue
@@ -1232,6 +1226,28 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                 else _recompute_breakdown_record(base_record, ltp_by_symbol)
             )
 
+            has_existing_summary = (
+                not symbol_df.empty
+                and "row_type" in symbol_df.columns
+                and symbol_df["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY").any()
+            )
+            if not has_existing_summary and symbol not in pending_summary_symbols:
+                pending_records.append(
+                    _recompute_breakdown_record(
+                        {
+                            "row_type": "SUMMARY",
+                            "symbol": symbol,
+                            "sector": sector,
+                            "trade_date": trade_date,
+                            "total_qty": 0,
+                            "buy_avg": 0,
+                            "ltp": _lookup_ltp(ltp_by_symbol, symbol),
+                        },
+                        ltp_by_symbol,
+                    )
+                )
+                pending_summary_symbols.add(symbol)
+
         if is_exit and row_type == "SUMMARY":
             record["holding_status"] = "Exited"
 
@@ -1246,6 +1262,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
 
         pending_records.append(record)
         affected_symbols.add(symbol)
+        seen_symbols.add(symbol)
 
     if errors:
         raise ValueError(" ".join(errors))
@@ -1284,7 +1301,6 @@ def _render_add_holdings_breakdown_entries_form(ltp_by_symbol: dict[str, float])
             width="stretch",
             hide_index=True,
             num_rows="dynamic",
-            disabled=["Invested"],
             column_config=_add_breakdown_entries_column_config(),
         )
         submitted = st.form_submit_button("Add entries", type="primary")
@@ -1402,6 +1418,17 @@ def display_exited_holdings_summary(df: pd.DataFrame, *, show_header: bool = Tru
 
     if show_header:
         st.subheader("Exited Holdings Summary")
+
+    exited_symbols = sorted(
+        {
+            str(symbol).upper().strip()
+            for symbol in exited_df["Symbol"].dropna()
+            if str(symbol).strip()
+        }
+    )
+    if exited_symbols:
+        st.markdown(f"**Symbols:** {', '.join(exited_symbols)}")
+
     st.dataframe(
         _style_pnl_columns(exited_df),
         width="stretch",
