@@ -1106,6 +1106,26 @@ def _has_add_breakdown_entry_values(row: pd.Series) -> bool:
     return any(pd.notna(row.get(column)) and str(row.get(column)).strip() != "" for column in value_columns)
 
 
+def _canonical_symbol_isin(symbol_df: pd.DataFrame) -> str | None:
+    if symbol_df.empty or "isin" not in symbol_df.columns:
+        return None
+
+    candidates = symbol_df.copy()
+    candidates["_isin_key"] = candidates["isin"].apply(_json_safe_value)
+    candidates = candidates[candidates["_isin_key"].notna()]
+    if candidates.empty:
+        return None
+
+    if "row_type" in candidates.columns:
+        summary_rows = candidates[
+            candidates["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY")
+        ]
+        if not summary_rows.empty:
+            return str(summary_rows.iloc[0]["_isin_key"]).upper().strip()
+
+    return str(candidates.iloc[0]["_isin_key"]).upper().strip()
+
+
 def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dict[str, float]) -> list[str]:
     affected_symbols: set[str] = set()
     errors: list[str] = []
@@ -1126,6 +1146,11 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
         )
         for symbol in submitted_symbols
     }
+    isin_by_symbol = {
+        symbol: isin
+        for symbol, symbol_df in existing_by_symbol.items()
+        if (isin := _canonical_symbol_isin(symbol_df))
+    }
     seen_symbols: set[str] = set()
     pending_summary_symbols: set[str] = set()
 
@@ -1139,6 +1164,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
         is_mtf = bool(row.get("MTF?"))
         is_bonus = bool(row.get("Bonus?"))
         trade_date = _date_input_value(row.get("Date"))
+        canonical_isin = isin_by_symbol.get(symbol)
 
         if not symbol:
             errors.append(f"Row {row_number + 1}: Symbol is required.")
@@ -1168,6 +1194,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                 {
                     "row_type": "SUMMARY",
                     "symbol": symbol,
+                    "isin": canonical_isin,
                     "sector": sector,
                     "trade_date": trade_date,
                     "total_qty": qty,
@@ -1182,6 +1209,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                         {
                             "row_type": "BATCH",
                             "symbol": symbol,
+                            "isin": canonical_isin,
                             "sector": sector,
                             "trade_date": trade_date,
                             "trade_type": "BONUS" if is_bonus else None,
@@ -1208,6 +1236,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
             base_record = {
                 "row_type": "BATCH",
                 "symbol": symbol,
+                "isin": canonical_isin,
                 "sector": sector,
                 "trade_date": trade_date,
                 "trade_type": "BONUS" if is_bonus else None,
@@ -1237,6 +1266,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                         {
                             "row_type": "SUMMARY",
                             "symbol": symbol,
+                            "isin": canonical_isin,
                             "sector": sector,
                             "trade_date": trade_date,
                             "total_qty": 0,
@@ -1266,6 +1296,14 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
 
     if errors:
         raise ValueError(" ".join(errors))
+
+    for symbol, canonical_isin in isin_by_symbol.items():
+        symbol_df = existing_by_symbol[symbol]
+        existing_isins = symbol_df.get("isin", pd.Series(index=symbol_df.index, dtype=object)).apply(
+            lambda value: str(_json_safe_value(value) or "").upper().strip()
+        )
+        if not existing_isins.eq(canonical_isin).all():
+            update_holdings_breakdown_rows_for_symbol(symbol, {"isin": canonical_isin})
 
     for record in pending_records:
         row_type = str(record.get("row_type") or "").upper().strip()
@@ -1700,6 +1738,63 @@ def update_holdings_breakdown_row(row_id: Any, record: dict[str, Any]) -> None:
         ) from exc
     except URLError as exc:
         raise RuntimeError(f"Supabase holdings update failed: {exc.reason}") from exc
+
+
+def update_holdings_breakdown_rows_for_symbol(symbol: str, record: dict[str, Any]) -> None:
+    symbol_key = str(symbol or "").upper().strip()
+    if not symbol_key:
+        raise ValueError("Symbol is required for holdings breakdown update.")
+
+    supabase_url, supabase_key, table_name = _get_supabase_holdings_config()
+    encoded_table_name = quote(table_name, safe="")
+    endpoint = f"{supabase_url}/rest/v1/{encoded_table_name}?symbol=eq.{quote(symbol_key, safe='')}"
+    safe_record = _supabase_write_record(record)
+    payload = json.dumps(safe_record, allow_nan=False).encode("utf-8")
+    request = Request(endpoint, data=payload, headers=_supabase_headers(supabase_key, write=True), method="PATCH")
+    try:
+        with urlopen(request, timeout=60) as response:
+            response.read()
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase holdings symbol update failed - HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase holdings symbol update failed: {exc.reason}") from exc
+
+
+def propagate_existing_holdings_breakdown_isins() -> dict[str, int]:
+    holdings_df = load_holdings_breakdown_from_supabase()
+    if holdings_df.empty or "symbol" not in holdings_df.columns:
+        return {"symbols_with_isin": 0, "symbols_updated": 0, "rows_updated": 0}
+
+    symbols_with_isin = 0
+    symbols_updated = 0
+    rows_updated = 0
+    symbol_keys = holdings_df["symbol"].astype(str).str.upper().str.strip()
+    for symbol in sorted({value for value in symbol_keys if value}):
+        symbol_df = holdings_df[symbol_keys.eq(symbol)].copy()
+        canonical_isin = _canonical_symbol_isin(symbol_df)
+        if not canonical_isin:
+            continue
+
+        symbols_with_isin += 1
+        existing_isins = symbol_df.get("isin", pd.Series(index=symbol_df.index, dtype=object)).apply(
+            lambda value: str(_json_safe_value(value) or "").upper().strip()
+        )
+        mismatched_rows = ~existing_isins.eq(canonical_isin)
+        if not mismatched_rows.any():
+            continue
+
+        update_holdings_breakdown_rows_for_symbol(symbol, {"isin": canonical_isin})
+        symbols_updated += 1
+        rows_updated += int(mismatched_rows.sum())
+
+    return {
+        "symbols_with_isin": symbols_with_isin,
+        "symbols_updated": symbols_updated,
+        "rows_updated": rows_updated,
+    }
 
 
 def _prepare_holdings_breakdown_df(records: list[dict[str, Any]]) -> pd.DataFrame:
