@@ -14,6 +14,20 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
   }
 
   const dailyInterestRate = parseNumber(dailyInterestPct) / 100;
+  const calculatedHoldings = holdings.map((holding) => ({
+    holding,
+    metrics: mtfInterestMetrics(holding, dailyInterestRate),
+  }));
+  const totals = calculatedHoldings.reduce(
+    (summary, { holding, metrics }) => ({
+      mtfValue: summary.mtfValue + holding.mtfValue,
+      interest: summary.interest + (metrics.interestSoFar ?? 0),
+      charges: summary.charges + metrics.charges,
+      initialMargin: summary.initialMargin + holding.initialMargin,
+      fundedAmount: summary.fundedAmount + metrics.fundedAmount,
+    }),
+    { mtfValue: 0, interest: 0, charges: 0, initialMargin: 0, fundedAmount: 0 },
+  );
 
   return (
     <section>
@@ -55,8 +69,7 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
             </tr>
           </thead>
           <tbody>
-            {holdings.map((holding) => {
-              const metrics = mtfInterestMetrics(holding, dailyInterestRate);
+            {calculatedHoldings.map(({ holding, metrics }) => {
               return (
                 <tr key={holding.symbol} className="border-t border-terminal-line">
                   <td className="px-2 py-2 font-bold text-terminal-ink">{holding.symbol}</td>
@@ -86,6 +99,18 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
               );
             })}
           </tbody>
+          <tfoot className="border-t-2 border-terminal-line bg-terminal-panel-alt font-semibold text-terminal-ink">
+            <tr>
+              <td colSpan={3} className="px-2 py-2 uppercase tracking-wide">Total</td>
+              <td className="px-2 py-2 text-right tabular-nums">{formatMoney(totals.mtfValue)}</td>
+              <td colSpan={7} className="px-2 py-2" />
+              <td className="px-2 py-2 text-right tabular-nums text-terminal-near">{formatMoney(totals.interest)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{formatMoney(totals.charges)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{formatMoney(totals.initialMargin)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{formatMoney(totals.fundedAmount)}</td>
+              <td colSpan={2} className="px-2 py-2" />
+            </tr>
+          </tfoot>
         </table>
       </div>
     </section>

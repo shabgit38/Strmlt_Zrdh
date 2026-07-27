@@ -1293,6 +1293,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
     _render_price_ladder_summary_card(
         sorted_dashboard_df,
         highlight_symbols=price_ladder_highlight_symbols,
+        momentum_labels=_momentum_label_by_symbol(momentum_df),
         show_positions=True,
     )
 
