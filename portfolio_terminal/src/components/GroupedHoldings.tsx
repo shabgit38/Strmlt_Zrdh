@@ -138,7 +138,7 @@ export function GroupedHoldings({
                         <td className="px-2 py-2 text-right tabular-nums">
                           {formatMoney(holding.invested)}
                         </td>
-                        <td className="px-2 py-2 text-right tabular-nums">
+                        <td className="px-2 py-2 text-right tabular-nums text-[#5EA6D1]">
                           {formatPct(holding.weightPct)}
                         </td>
                         <td className="px-2 py-2 text-right tabular-nums">

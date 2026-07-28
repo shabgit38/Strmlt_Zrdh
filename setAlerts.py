@@ -144,7 +144,13 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
         alerts, fetch_meta = get_alerts(api_key, st.session_state.access_token, fetch_status_filter)
         _log_alerts_step(f"Parsed {len(alerts)} alert row(s) from Kite response.")
         ltp_enriched_alerts = enrich_alerts_with_ltp(kite, alerts)
-        next_data["alerts"] = _dedupe_alerts(enrich_alerts_with_price_context(kite, ltp_enriched_alerts))
+        next_data["alerts"] = _dedupe_alerts(
+            enrich_alerts_with_price_context(
+                kite,
+                ltp_enriched_alerts,
+                previous_alerts=list(previous_data.get("alerts") or []),
+            )
+        )
         next_data["disabledSymbolsText"] = _disabled_alert_symbols_text(next_data["alerts"])
         _log_alerts_step(f"Prepared {len(next_data['alerts'])} alert row(s) for React table.")
         if ALERTS_DEBUG_LOG_ENABLED:
@@ -405,33 +411,56 @@ def enrich_alerts_with_ltp(kite: Any, alerts: list[dict[str, Any]]) -> list[dict
     return enriched_alerts
 
 
-def enrich_alerts_with_price_context(kite: Any, alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def enrich_alerts_with_price_context(
+    kite: Any,
+    alerts: list[dict[str, Any]],
+    *,
+    previous_alerts: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    previous_context_by_uuid = {
+        str(alert.get("uuid") or "").strip(): alert.get("price_context")
+        for alert in previous_alerts or []
+        if str(alert.get("uuid") or "").strip()
+    }
+    enriched_alerts: list[dict[str, Any]] = []
+    new_alert_indexes: list[int] = []
+    for alert in alerts:
+        next_alert = dict(alert)
+        uuid = str(next_alert.get("uuid") or "").strip()
+        if uuid and uuid in previous_context_by_uuid:
+            next_alert["price_context"] = previous_context_by_uuid[uuid]
+        else:
+            next_alert["price_context"] = None
+            new_alert_indexes.append(len(enriched_alerts))
+        enriched_alerts.append(next_alert)
+
+    if not new_alert_indexes:
+        _log_alerts_step("Reused cached price context for all existing alert UUIDs.")
+        return enriched_alerts
+
     symbols = sorted(
         {
-            str(alert.get("lhs_tradingsymbol") or "").strip().upper()
-            for alert in alerts
-            if str(alert.get("lhs_tradingsymbol") or "").strip()
+            str(enriched_alerts[index].get("lhs_tradingsymbol") or "").strip().upper()
+            for index in new_alert_indexes
+            if str(enriched_alerts[index].get("lhs_tradingsymbol") or "").strip()
         }
     )
     if not symbols:
-        return alerts
+        return enriched_alerts
 
     try:
-        _log_alerts_step(f"Loading instrument tokens for {len(symbols)} alert symbol(s).")
+        _log_alerts_step(f"Loading instrument tokens for {len(symbols)} new alert symbol(s).")
         instrument_df = _load_alert_instrument_tokens(symbols)
     except Exception as exc:
         st.session_state["kite_alerts_price_context_error"] = str(exc)
         _log_alerts_step(f"Price context token lookup failed; continuing without context: {exc}")
-        return alerts
+        return enriched_alerts
 
     as_of_date = pd.Timestamp.now().date().isoformat()
-    enriched_alerts: list[dict[str, Any]] = []
-    for alert in alerts:
-        next_alert = dict(alert)
-        token = _resolve_alert_instrument_token(alert, instrument_df)
+    for index in new_alert_indexes:
+        next_alert = enriched_alerts[index]
+        token = _resolve_alert_instrument_token(next_alert, instrument_df)
         if token is None:
-            next_alert["price_context"] = None
-            enriched_alerts.append(next_alert)
             continue
 
         try:
@@ -442,7 +471,6 @@ def enrich_alerts_with_price_context(kite: Any, alerts: list[dict[str, Any]]) ->
             _log_alerts_step(
                 f"Price context failed for {next_alert.get('lhs_tradingsymbol') or '-'}; continuing: {exc}"
             )
-        enriched_alerts.append(next_alert)
     return enriched_alerts
 
 

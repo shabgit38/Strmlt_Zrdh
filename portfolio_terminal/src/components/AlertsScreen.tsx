@@ -8,6 +8,7 @@ import type { AlertFormValues, AlertsData, AlertStatusFilter, KiteAlert } from "
 type SortKey = "status" | "symbol" | "name" | "ltp" | "distance_pct" | "updated_at";
 type SortDirection = "asc" | "desc";
 type AlertAction = "fetch" | "create" | "modify" | "delete";
+const ALERTS_SEARCH_STORAGE_KEY = "portfolio-terminal-alerts-search";
 
 const EMPTY_FORM: AlertFormValues = {
   name: "",
@@ -29,8 +30,12 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [editingUuid, setEditingUuid] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<AlertFormValues>(EMPTY_FORM);
-  const [searchText, setSearchText] = useState("");
+  const [searchText, setSearchText] = useState(() => sessionStorage.getItem(ALERTS_SEARCH_STORAGE_KEY) ?? "");
   const [pendingAction, setPendingAction] = useState<AlertAction | null>(null);
+
+  useEffect(() => {
+    sessionStorage.setItem(ALERTS_SEARCH_STORAGE_KEY, searchText);
+  }, [searchText]);
 
   useEffect(() => {
     setStatusFilter(data?.statusFilter ?? "active");
