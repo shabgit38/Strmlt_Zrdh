@@ -1,6 +1,7 @@
 import json
 import math
 import base64
+import re
 from datetime import date, datetime
 from html import escape
 from typing import Any
@@ -1041,6 +1042,80 @@ def fetch_live_ltp_by_symbol(kite, symbols: list[str]) -> dict[str, float]:
     }
 
 
+def _historic_request_signature(tickers: list[str], benchmark: str) -> tuple[tuple[str, ...], str]:
+    return tuple(tickers), benchmark.strip().upper()
+
+
+def _patch_historic_dashboard_ltp(
+    dashboard_df: pd.DataFrame,
+    live_ltp_by_symbol: dict[str, float],
+) -> pd.DataFrame:
+    updated_df = dashboard_df.copy()
+    for column in updated_df.columns:
+        symbol = str(column).strip().upper()
+        ltp = live_ltp_by_symbol.get(symbol)
+        if ltp is None:
+            continue
+
+        values = updated_df[column].tolist()
+        range_low = None
+        range_high = None
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            range_match = re.fullmatch(r"\[([\d,.]+)\s*-\s*([\d,.]+)\]", value.strip())
+            if range_match:
+                range_low = float(range_match.group(1).replace(",", ""))
+                range_high = float(range_match.group(2).replace(",", ""))
+                break
+
+        for index, value in enumerate(values):
+            if not isinstance(value, str):
+                continue
+            if value.startswith("Rng:") and range_low is not None and range_high is not None:
+                range_pct = (
+                    min(max(((ltp - range_low) / (range_high - range_low)) * 100, 0), 100)
+                    if range_high != range_low
+                    else 0
+                )
+                values[index] = f"Rng:{range_pct:.1f}% [{ltp:.2f}]"
+            elif re.fullmatch(r"LTP:\s*[\d,.]+", value.strip()):
+                values[index] = f"LTP: {ltp:.2f}"
+            elif value.startswith("Position:"):
+                values[index] = re.sub(
+                    r"(\bLTP\s+)[\d,]+(?:\.\d+)?",
+                    lambda match: f"{match.group(1)}{ltp:,.2f}".rstrip("0").rstrip("."),
+                    value,
+                    count=1,
+                )
+        updated_df[column] = values
+    return updated_df
+
+
+def _patch_historic_day_movers_ltp(
+    day_movers_df: pd.DataFrame,
+    live_ltp_by_symbol: dict[str, float],
+) -> pd.DataFrame:
+    if day_movers_df.empty or "Ticker" not in day_movers_df.columns:
+        return day_movers_df
+
+    updated_df = day_movers_df.copy()
+    for index, row in updated_df.iterrows():
+        symbol = str(row.get("Ticker") or "").strip().upper()
+        ltp = live_ltp_by_symbol.get(symbol)
+        previous_close = pd.to_numeric(row.get("Previous Close"), errors="coerce")
+        if ltp is None:
+            continue
+        updated_df.at[index, "LTP"] = ltp
+        if pd.notna(previous_close) and float(previous_close) != 0:
+            updated_df.at[index, "DayChg"] = round(ltp - float(previous_close), 2)
+            updated_df.at[index, "DayChg %"] = round(
+                ((ltp - float(previous_close)) / float(previous_close)) * 100,
+                2,
+            )
+    return updated_df
+
+
 def _apply_live_ltp_to_holdings(holdings_df: pd.DataFrame, ltp_df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     if holdings_df.empty or "tradingsymbol" not in holdings_df.columns or ltp_df.empty:
         return holdings_df, []
@@ -1750,8 +1825,51 @@ if selected_main_tab == "Historic Data":
         elif not benchmark_symbol:
             st.warning("Enter a benchmark symbol.")
         else:
-            st.session_state["historic_pending_tickers"] = raw_tickers
-            st.session_state["historic_pending_benchmark"] = benchmark_symbol
+            request_signature = _historic_request_signature(raw_tickers, benchmark_symbol)
+            has_matching_dashboard = (
+                not st.session_state.get("historic_dashboard_df", pd.DataFrame()).empty
+                and st.session_state.get("historic_loaded_request_signature") == request_signature
+            )
+            if has_matching_dashboard:
+                st.session_state["historic_pending_ltp_tickers"] = raw_tickers
+            else:
+                st.session_state["historic_pending_tickers"] = raw_tickers
+                st.session_state["historic_pending_benchmark"] = benchmark_symbol
+
+    pending_historic_ltp_tickers = st.session_state.get("historic_pending_ltp_tickers")
+    if pending_historic_ltp_tickers:
+        try:
+            historic_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
+            with st.spinner("Refreshing live LTP..."):
+                live_ltp_by_symbol = fetch_live_ltp_by_symbol(
+                    historic_kite,
+                    pending_historic_ltp_tickers,
+                )
+                st.session_state["historic_dashboard_df"] = _patch_historic_dashboard_ltp(
+                    st.session_state.get("historic_dashboard_df", pd.DataFrame()),
+                    live_ltp_by_symbol,
+                )
+                st.session_state["historic_day_movers_df"] = _patch_historic_day_movers_ltp(
+                    st.session_state.get("historic_day_movers_df", pd.DataFrame()),
+                    live_ltp_by_symbol,
+                )
+                st.session_state["historic_live_ltp_by_symbol"] = live_ltp_by_symbol
+                st.session_state["historic_ltp_refreshed_at"] = pd.Timestamp.now().isoformat()
+                missing_ltp_symbols = sorted(
+                    set(pending_historic_ltp_tickers) - set(live_ltp_by_symbol)
+                )
+                if missing_ltp_symbols:
+                    st.session_state["historic_ltp_missing_symbols"] = missing_ltp_symbols
+                else:
+                    st.session_state.pop("historic_ltp_missing_symbols", None)
+        except Exception as exc:
+            if is_token_error(exc):
+                clear_auth_state()
+                st.error("Your session expired. Please login again to refresh live LTP.")
+                st.rerun()
+            st.error(f"Error refreshing live LTP: {exc}")
+        finally:
+            st.session_state.pop("historic_pending_ltp_tickers", None)
 
     pending_historic_tickers = st.session_state.get("historic_pending_tickers")
     if pending_historic_tickers:
@@ -1800,6 +1918,11 @@ if selected_main_tab == "Historic Data":
                     st.session_state["historic_token_rows"] = token_rows
                     st.session_state["historic_as_of_date"] = as_of_date
                     st.session_state["historic_ltp_refreshed_at"] = pd.Timestamp.now().isoformat()
+                    st.session_state["historic_loaded_request_signature"] = _historic_request_signature(
+                        pending_historic_tickers,
+                        pending_benchmark,
+                    )
+                    st.session_state.pop("historic_ltp_missing_symbols", None)
                     st.session_state.pop("historic_returns_df", None)
                     st.session_state.pop("historic_close_prices_df", None)
 
@@ -1841,6 +1964,14 @@ if selected_main_tab == "Historic Data":
     missing_benchmark = st.session_state.get("historic_missing_benchmark")
     if missing_benchmark:
         st.warning(f"Momentum benchmark token not found: {missing_benchmark}")
+
+    historic_ltp_missing_symbols = st.session_state.get("historic_ltp_missing_symbols", [])
+    if historic_ltp_missing_symbols:
+        st.warning(
+            "No live LTP returned for: "
+            + ", ".join(historic_ltp_missing_symbols[:10])
+            + ("..." if len(historic_ltp_missing_symbols) > 10 else "")
+        )
 
     skipped_symbols = st.session_state.get("historic_skipped_symbols", [])
     if skipped_symbols:
