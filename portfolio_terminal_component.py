@@ -138,8 +138,9 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
                 if str(symbol).strip()
             }
         )
-        needs_option_context = bool(symbols or request.get("includeSpots"))
-        raw_positions = _open_positions(kite) if needs_option_context else []
+        include_positions = bool(request.get("includePositions"))
+        needs_option_context = bool(symbols or include_positions)
+        raw_positions = _open_positions(kite) if include_positions else []
         position_symbols = [position["symbol"] for position in raw_positions]
         contract_by_symbol = (
             _option_contracts_by_symbol(kite, set(symbols + position_symbols))
@@ -175,7 +176,7 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
                 _target_option_contracts_for_spots(kite, live_data["spots"]),
                 live_data["spots"],
             )
-        if needs_option_context:
+        if include_positions:
             live_data["positions"] = _positions_with_spot(positions, position_underlying_by_symbol, quotes)
 
         for symbol in equity_symbols:

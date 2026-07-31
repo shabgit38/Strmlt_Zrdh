@@ -141,5 +141,6 @@ export type CalculatorsLiveRequest = {
   requestId: string;
   symbols: string[];
   includeSpots: boolean;
+  includePositions?: boolean;
   equitySymbols?: string[];
 };

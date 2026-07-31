@@ -80,6 +80,30 @@ export function CalculatorsScreen({
       ),
     [optionRows],
   );
+  const mtfSymbols = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          mtfHoldings
+            .map((holding) => holding.symbol.trim().toUpperCase())
+            .filter(Boolean),
+        ),
+      ),
+    [mtfHoldings],
+  );
+  const refreshedMtfHoldings = useMemo(
+    () =>
+      mtfHoldings.map((holding) => {
+        const liveLtp = liveData?.equities?.[holding.symbol.trim().toUpperCase()]?.ltp;
+        if (liveLtp === undefined) return holding;
+        return {
+          ...holding,
+          ltp: liveLtp,
+          pnl: liveLtp * holding.mtfQty - holding.mtfValue,
+        };
+      }),
+    [liveData?.equities, mtfHoldings],
+  );
 
   useEffect(() => {
     if (!liveData) return;
@@ -95,6 +119,18 @@ export function CalculatorsScreen({
     if (liveData.options) {
       const incomingOptions = liveData.options;
       Object.keys(incomingOptions).forEach((symbol) => fetchedSymbolsRef.current.add(symbol));
+      setExistingPositions((positions) =>
+        positions.map((position) => {
+          const quote = incomingOptions[position.symbol.trim().toUpperCase()];
+          if (quote?.ltp === undefined) return position;
+          return {
+            ...position,
+            pnl: position.pnl + (quote.ltp - position.lastPrice) * position.quantity,
+            lastPrice: quote.ltp,
+            spot: quote.spot ?? position.spot,
+          };
+        }),
+      );
       setOptionRows((rows) =>
         rows.map((row) => {
           const symbol = row.symbol.trim().toUpperCase();
@@ -133,6 +169,7 @@ export function CalculatorsScreen({
         requestId,
         symbols: uniqueSymbols,
         includeSpots: shouldFetchSpots,
+        includePositions: existingPositions.length === 0,
       };
       setStreamlitComponentValue(request);
     }, 750);
@@ -271,11 +308,14 @@ export function CalculatorsScreen({
     fetchedSymbolsRef.current.clear();
     const requestId = `${Date.now()}-manual-refresh`;
     lastLiveRequestIdRef.current = requestId;
+    const positionSymbols = existingPositions.map((position) => position.symbol.trim().toUpperCase());
     const request: CalculatorsLiveRequest = {
       type: "marketData",
       requestId,
-      symbols: optionSymbols,
+      symbols: Array.from(new Set([...optionSymbols, ...positionSymbols])),
       includeSpots: true,
+      includePositions: false,
+      equitySymbols: mtfSymbols,
     };
     setStreamlitComponentValue(request);
   }
@@ -304,7 +344,7 @@ export function CalculatorsScreen({
           </div>
         ) : null}
 
-        <MtfHoldingsTable holdings={mtfHoldings} />
+        <MtfHoldingsTable holdings={refreshedMtfHoldings} />
         <PotentialMtfCalculator liveData={liveData} />
 
         {existingPositions.length > 0 ? (
