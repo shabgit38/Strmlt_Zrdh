@@ -151,25 +151,40 @@ def _mtf_summary_by_symbol(holdings_breakdown_df: pd.DataFrame | None) -> dict[s
     if not required_columns.issubset(holdings_breakdown_df.columns):
         return {}
 
-    active_df = _active_breakdown_df(holdings_breakdown_df)
-    if active_df.empty:
-        return {}
-
-    row_type = active_df["row_type"].astype(str).str.upper().str.strip()
-    trade_type = active_df["trade_type"].astype(str).str.upper().str.strip()
-    mtf_summary_df = active_df[row_type.eq("SUMMARY") & trade_type.eq("MTF")].copy()
-    if mtf_summary_df.empty:
+    breakdown_df = holdings_breakdown_df.copy()
+    row_type = breakdown_df["row_type"].astype(str).str.upper().str.strip()
+    trade_type = breakdown_df["trade_type"].astype(str).str.upper().str.strip()
+    holding_status = breakdown_df.get(
+        "holding_status", pd.Series(index=breakdown_df.index, dtype=object)
+    ).astype(str).str.upper().str.strip()
+    summary_qty = pd.to_numeric(
+        breakdown_df.get("total_qty", pd.Series(index=breakdown_df.index, dtype=float)),
+        errors="coerce",
+    ).fillna(0)
+    batch_qty = pd.to_numeric(
+        breakdown_df.get("batch_qty", pd.Series(index=breakdown_df.index, dtype=float)),
+        errors="coerce",
+    ).fillna(0)
+    positive_qty = (row_type.eq("SUMMARY") & summary_qty.gt(0)) | (
+        row_type.eq("BATCH") & batch_qty.gt(0)
+    )
+    mtf_df = breakdown_df[
+        row_type.isin(["SUMMARY", "BATCH"])
+        & trade_type.eq("MTF")
+        & ~holding_status.eq("EXITED")
+        & positive_qty
+    ].copy()
+    if mtf_df.empty:
         return {}
 
     summary_by_symbol: dict[str, dict[str, Any]] = {}
-    for _, row in mtf_summary_df.iterrows():
+    mtf_df["_trade_date"] = pd.to_datetime(mtf_df["trade_date"], errors="coerce")
+    mtf_df = mtf_df.dropna(subset=["_trade_date"]).sort_values("_trade_date")
+    for _, row in mtf_df.iterrows():
         symbol = _normalized_symbol_value(row.get("symbol"))
         if not symbol or symbol in summary_by_symbol:
             continue
-        buy_date = pd.to_datetime(row.get("trade_date"), errors="coerce")
-        if pd.isna(buy_date):
-            continue
-        buy_date_value = buy_date.date()
+        buy_date_value = row["_trade_date"].date()
         summary_by_symbol[symbol] = {
             "buyDate": buy_date_value.isoformat(),
             "holdingDays": max((date.today() - buy_date_value).days, 0),

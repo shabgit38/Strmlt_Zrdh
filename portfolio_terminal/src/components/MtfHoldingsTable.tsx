@@ -21,12 +21,15 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
   const totals = calculatedHoldings.reduce(
     (summary, { holding, metrics }) => ({
       mtfValue: summary.mtfValue + holding.mtfValue,
+      pnl: summary.pnl + holding.pnl,
+      netPnl: summary.netPnl + (metrics.netPnl ?? 0),
+      netPnlCount: summary.netPnlCount + (metrics.netPnl === null ? 0 : 1),
       interest: summary.interest + (metrics.interestSoFar ?? 0),
       charges: summary.charges + metrics.charges,
       initialMargin: summary.initialMargin + holding.initialMargin,
       fundedAmount: summary.fundedAmount + metrics.fundedAmount,
     }),
-    { mtfValue: 0, interest: 0, charges: 0, initialMargin: 0, fundedAmount: 0 },
+    { mtfValue: 0, pnl: 0, netPnl: 0, netPnlCount: 0, interest: 0, charges: 0, initialMargin: 0, fundedAmount: 0 },
   );
 
   return (
@@ -103,7 +106,12 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
             <tr>
               <td colSpan={3} className="px-2 py-2 uppercase tracking-wide">Total</td>
               <td className="px-2 py-2 text-right tabular-nums">{formatMoney(totals.mtfValue)}</td>
-              <td colSpan={7} className="px-2 py-2" />
+              <td colSpan={2} className="px-2 py-2" />
+              <td className={`px-2 py-2 text-right tabular-nums ${signedClass(totals.pnl)}`}>{formatMoney(totals.pnl)}</td>
+              <td className={`px-2 py-2 text-right tabular-nums ${signedClass(totals.netPnl)}`}>
+                {totals.netPnlCount === 0 ? "-" : formatMoney(totals.netPnl)}
+              </td>
+              <td colSpan={3} className="px-2 py-2" />
               <td className="px-2 py-2 text-right tabular-nums text-terminal-near">{formatMoney(totals.interest)}</td>
               <td className="px-2 py-2 text-right tabular-nums">{formatMoney(totals.charges)}</td>
               <td className="px-2 py-2 text-right tabular-nums">{formatMoney(totals.initialMargin)}</td>
