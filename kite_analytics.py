@@ -383,7 +383,11 @@ def compute_volume_gains(analytics_df: pd.DataFrame) -> dict[str, float | None]:
 
 def pivot_points(df: pd.DataFrame) -> dict[str, float]:
     """
-    Return daily classical pivot values from the last completed session.
+    Return daily classical pivot values for the current trading session.
+
+    Daily pivots use the most recent session before today. Keep today's candle
+    excluded after market close as well, so the displayed levels do not advance
+    to the next session while Kite is still showing the current session's pivots.
     """
     required_columns = {"High", "Low", "Close"}
     if df.empty or not required_columns.issubset(df.columns):
@@ -394,10 +398,11 @@ def pivot_points(df: pd.DataFrame) -> dict[str, float]:
     if normalized_df.empty:
         return {}
 
-    completed_df = _completed_daily_rows(normalized_df)
-    if completed_df.empty:
+    today = datetime.now(IST).date()
+    reference_df = normalized_df.loc[pd.Index(normalized_df.index.date) < today]
+    if reference_df.empty:
         return {}
-    reference_row = completed_df.iloc[-1]
+    reference_row = reference_df.iloc[-1]
 
     high = float(reference_row["High"])
     low = float(reference_row["Low"])
