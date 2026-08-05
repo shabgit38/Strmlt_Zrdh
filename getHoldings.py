@@ -1302,12 +1302,14 @@ def _render_price_ladder_summary_card(
     *,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    notes_by_symbol: dict[str, list[str]] | None = None,
     show_positions: bool = False,
 ) -> None:
     summary_html = format_price_ladder_summary_html(
         dashboard_df,
         highlight_symbols=highlight_symbols,
         momentum_labels=momentum_labels,
+        notes_by_symbol=notes_by_symbol,
         show_positions=show_positions,
     )
     if not summary_html:
@@ -1317,6 +1319,24 @@ def _render_price_ladder_summary_card(
         _summary_panel_html("Price Ladder Summary", summary_html, BUTTON_COLOR),
         unsafe_allow_html=True,
     )
+
+
+def _stock_notes_by_symbol(momentum_df: pd.DataFrame) -> dict[str, list[str]]:
+    if momentum_df.empty or "ticker" not in momentum_df.columns:
+        return {}
+
+    notes_df = _merge_stock_notes(momentum_df)
+    notes_by_symbol: dict[str, list[str]] = {}
+    for _, row in notes_df.iterrows():
+        symbol = str(row.get("ticker") or row.get("symbol") or "").strip().upper()
+        notes = [
+            str(row.get(column)).strip()
+            for column in ["why", "risk", "moat"]
+            if pd.notna(row.get(column)) and str(row.get(column)).strip()
+        ]
+        if symbol and notes:
+            notes_by_symbol[symbol] = notes
+    return notes_by_symbol
 
 
 def _render_holdings_momentum_summary(momentum_df: pd.DataFrame, day_movers_df: pd.DataFrame) -> None:
@@ -1369,6 +1389,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
         sorted_dashboard_df,
         highlight_symbols=price_ladder_highlight_symbols,
         momentum_labels=_momentum_label_by_symbol(momentum_df),
+        notes_by_symbol=_stock_notes_by_symbol(momentum_df),
         show_positions=True,
     )
 
@@ -2062,6 +2083,7 @@ if selected_main_tab == "Historic Data":
                 filtered_dashboard_df,
                 highlight_symbols=historic_ladder_highlight_symbols,
                 momentum_labels=_momentum_label_by_symbol(momentum_df),
+                notes_by_symbol=_stock_notes_by_symbol(momentum_df),
                 show_positions=True,
             )
 

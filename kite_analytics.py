@@ -886,6 +886,7 @@ def format_price_ladder_summary_html(
     *,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    notes_by_symbol: dict[str, list[str]] | None = None,
     show_positions: bool = False,
 ) -> str:
     if dashboard_df.empty:
@@ -898,6 +899,7 @@ def format_price_ladder_summary_html(
             dashboard_df=dashboard_df if show_positions else None,
             highlight_symbols=highlight_symbols,
             momentum_labels=momentum_labels,
+            notes_by_symbol=notes_by_symbol,
         )
     return ""
 
@@ -1001,6 +1003,7 @@ def _format_symbol_color_summary(
     dashboard_df: pd.DataFrame | None = None,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    notes_by_symbol: dict[str, list[str]] | None = None,
 ) -> str:
     summary_items = [
         (">= 75", *MOMENTUM_PALETTE["entry"], "rgba(15, 118, 110, 0.18)", color_groups["green"]),
@@ -1016,11 +1019,12 @@ def _format_symbol_color_summary(
                 dashboard_df,
                 highlight_symbols,
                 momentum_labels,
+                notes_by_symbol,
             )
             rows.append(
                 "<div style='display:grid;gap:0.2rem;font-size:0.8rem;'>"
-                f"<div style='font-weight:700;color:{background};padding:0.1rem 0 0.05rem;'>"
-                f"Range {label}</div>"
+                f"<div style='font-size:0.9rem;font-weight:700;color:{background};"
+                f"padding:0.1rem 0 0.05rem;'>RANGE {label}</div>"
                 f"<div style='color:inherit;font-weight:400;padding:0.1rem 0.45rem;'>"
                 f"{symbol_text}</div></div>"
             )
@@ -1045,6 +1049,7 @@ def _format_summary_symbols_with_positions(
     dashboard_df: pd.DataFrame,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    notes_by_symbol: dict[str, list[str]] | None = None,
 ) -> str:
     if not symbols:
         return "-"
@@ -1058,6 +1063,11 @@ def _format_summary_symbols_with_positions(
         str(symbol).strip().upper(): str(label).strip()
         for symbol, label in (momentum_labels or {}).items()
         if str(symbol).strip() and str(label).strip()
+    }
+    normalized_notes = {
+        str(symbol).strip().upper(): [str(note).strip() for note in notes if str(note).strip()]
+        for symbol, notes in (notes_by_symbol or {}).items()
+        if str(symbol).strip()
     }
     label_colors = {
         "Strong Entry": MOMENTUM_PALETTE["entry"][0],
@@ -1095,6 +1105,11 @@ def _format_summary_symbols_with_positions(
             if SHOW_PRICE_POSITION_TEXT
             else ""
         )
+        notes_html = "".join(
+            "<div style='color:#94A3B8;font-size:0.7rem;font-weight:400;line-height:1.25;"
+            f"white-space:normal;overflow-wrap:anywhere;'>{escape(note)}</div>"
+            for note in normalized_notes.get(symbol_text.upper(), [])
+        )
         rows.append(
             "<div style='display:grid;grid-template-columns:9rem 7rem minmax(0,1fr);"
             "column-gap:0.5rem;align-items:center;margin:0.12rem 0 0.35rem;'>"
@@ -1103,7 +1118,14 @@ def _format_summary_symbols_with_positions(
             f"{escape(symbol_text)}</span>"
             f"{position_text_html}"
             f"{position_chart_html}"
-            "</div>"
+            + (
+                "<div style='grid-column:2 / -1;margin-top:-0.2rem;padding-left:0.2rem;"
+                "display:grid;gap:0.08rem;'>"
+                f"{notes_html}</div>"
+                if notes_html
+                else ""
+            )
+            + "</div>"
         )
     return "".join(rows)
 
