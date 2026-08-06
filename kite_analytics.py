@@ -148,11 +148,16 @@ def load_analytics_history(
 def get_high_low_resampled(df: pd.DataFrame) -> dict:
     """
     Return {period: (high, low)} for 1W, 1M, 3M, 6M, 1Y.
-    All windows are trailing from the last completed Friday to avoid
-    counting an open, partial week.
+
+    The 1M, 3M, and 6M windows contain completed calendar months only and
+    end at the final session of the previous month. Weekly and yearly ranges
+    retain the completed-week cutoff.
     """
     df = df.copy()
     df = _normalize_datetime_index(df)
+
+    current_month_start = pd.Timestamp(datetime.now(IST).date()).replace(day=1)
+    completed_months_df = df[df.index < current_month_start]
 
     completed_weeks = df.resample("W-FRI").last().dropna()
     if len(completed_weeks) >= 2:
@@ -163,21 +168,21 @@ def get_high_low_resampled(df: pd.DataFrame) -> dict:
         df = df[df.index <= last_complete_date]
 
     weekly = df.resample("W-FRI").agg({"High": "max", "Low": "min"}).dropna()
-    monthly = df.resample("ME").agg({"High": "max", "Low": "min"}).dropna()
     if df.empty:
         return {}
 
     latest = df.index.max()
-    df_3m = df[df.index >= latest - pd.DateOffset(months=3)]
-    df_6m = df[df.index >= latest - pd.DateOffset(months=6)]
     df_1y = df[df.index >= latest - pd.DateOffset(years=1)]
 
     ranges = {}
     if not weekly.empty:
         ranges["1W"] = (float(weekly.iloc[-1]["High"]), float(weekly.iloc[-1]["Low"]))
-    if not monthly.empty:
-        ranges["1M"] = (float(monthly.iloc[-1]["High"]), float(monthly.iloc[-1]["Low"]))
-    for period, period_df in [("3M", df_3m), ("6M", df_6m), ("1Y", df_1y)]:
+    for period, months in [("1M", 1), ("3M", 3), ("6M", 6)]:
+        period_start = current_month_start - pd.DateOffset(months=months)
+        period_df = completed_months_df[completed_months_df.index >= period_start]
+        if not period_df.empty:
+            ranges[period] = (float(period_df["High"].max()), float(period_df["Low"].min()))
+    for period, period_df in [("1Y", df_1y)]:
         if not period_df.empty:
             ranges[period] = (float(period_df["High"].max()), float(period_df["Low"].min()))
     return ranges
@@ -507,7 +512,8 @@ def _format_price_position(
             {label: metrics.get(label) for label in ["52W Low", "52W High"]},
         )
     surrounding_pivots = _surrounding_position_levels(current_price, pivots)
-    technical_parts.extend(part for part in [nearest_52w, *surrounding_pivots] if part)
+    monthly_levels = _monthly_position_levels(current_price, metrics)
+    technical_parts.extend(part for part in [nearest_52w, *monthly_levels, *surrounding_pivots] if part)
     parts: list[str] = []
     if range_position is not None:
         parts.append(f"Upper Rng {_format_position_number(range_position[2])}")
@@ -516,6 +522,22 @@ def _format_price_position(
     if range_position is not None:
         parts.append(f"Lower Rng {_format_position_number(range_position[1])}")
     return " | ".join(parts) or None
+
+
+def _monthly_position_levels(current_price: float, metrics: dict[str, float]) -> list[str]:
+    labels = [
+        "1M High",
+        "1M Low",
+        "3M High",
+        "3M Low",
+        "6M High",
+        "6M Low",
+    ]
+    return [
+        _format_position_level(label, current_price, metrics.get(label))
+        for label in labels
+        if metrics.get(label) is not None
+    ]
 
 
 def _nearest_position_level(current_price: float, levels: dict[str, Any]) -> str | None:
@@ -1240,6 +1262,20 @@ def _format_position_line_chart_html(position: str) -> str:
         return ""
 
     ordered_points = sorted(parsed_points, key=lambda point: point["value"], reverse=True)
+    current_point = next(
+        (point for point in parsed_points if point["label"] in {"LTP", "Latest Close"}),
+        None,
+    )
+    monthly_points = [point for point in parsed_points if re.fullmatch(r"[136]M (?:High|Low)", str(point["label"]))]
+    nearest_monthly_labels: set[str] = set()
+    if current_point is not None:
+        current_value = float(current_point["value"])
+        above = [point for point in monthly_points if float(point["value"]) >= current_value]
+        below = [point for point in monthly_points if float(point["value"]) <= current_value]
+        if above:
+            nearest_monthly_labels.add(str(min(above, key=lambda point: float(point["value"]) - current_value)["label"]))
+        if below:
+            nearest_monthly_labels.add(str(min(below, key=lambda point: current_value - float(point["value"]))["label"]))
     nodes: list[str] = []
     last_index = len(ordered_points) - 1
     for index, point in enumerate(ordered_points):
@@ -1249,6 +1285,7 @@ def _format_position_line_chart_html(position: str) -> str:
         distance = str(distance) if distance is not None else None
         is_endpoint = label in {"Upper Rng", "Lower Rng"}
         is_current = label in {"LTP", "Latest Close"}
+        is_nearest_monthly = label in nearest_monthly_labels
         distance_color = "#64748B"
         if distance:
             numeric_distance = float(distance.removesuffix("%"))
@@ -1262,6 +1299,8 @@ def _format_position_line_chart_html(position: str) -> str:
         marker_color = (
             MOMENTUM_PALETTE["near"][0]
             if is_current
+            else "#38BDF8"
+            if is_nearest_monthly
             else MOMENTUM_PALETTE["wait"][0]
             if is_endpoint
             else distance_color
@@ -1283,7 +1322,9 @@ def _format_position_line_chart_html(position: str) -> str:
             f"{escape(label)}</span>"
             "<span style='display:flex;align-items:center;width:100%;'>"
             f"<span style='flex:1;height:2px;background:{left_line};opacity:0.75;'></span>"
-            f"<span style='width:0.55rem;height:0.55rem;flex:0 0 0.55rem;border-radius:50%;"
+            f"<span style='width:{'0.72rem' if is_nearest_monthly else '0.55rem'};"
+            f"height:{'0.72rem' if is_nearest_monthly else '0.55rem'};"
+            f"flex:0 0 {'0.72rem' if is_nearest_monthly else '0.55rem'};border-radius:50%;"
             f"background:{marker_color};border:1px solid currentColor;'></span>"
             f"<span style='flex:1;height:2px;background:{right_line};opacity:0.75;'></span>"
             "</span>"
@@ -1334,10 +1375,25 @@ def _position_line_chart_points(position: str) -> list[dict[str, float | str | N
                 )
             )
 
-    return [
+    points = [
         {"label": label, "value": value, "distance": distance}
         for label, value, distance in parsed_points
     ]
+    monthly_best: dict[tuple[str, float], tuple[int, dict[str, float | str | None]]] = {}
+    other_points: list[dict[str, float | str | None]] = []
+    for point in points:
+        monthly_match = re.fullmatch(r"([136])M (High|Low)", str(point["label"]))
+        if monthly_match is None:
+            other_points.append(point)
+            continue
+
+        months = int(monthly_match.group(1))
+        key = (monthly_match.group(2), float(point["value"]))
+        existing = monthly_best.get(key)
+        if existing is None or months > existing[0]:
+            monthly_best[key] = (months, point)
+
+    return other_points + [point for _, point in monthly_best.values()]
 
 
 def position_line_chart_points_from_dashboard_column(
