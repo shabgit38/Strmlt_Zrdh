@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 import pandas as pd
 import streamlit as st
 
-from kite_analytics import build_metric_values, calculate_distance_pct, load_analytics_history, pivot_points
+from kite_analytics import build_metric_values, calculate_distance_pct, load_analytics_history
 from kite_auth import bootstrap_kite_app, clear_auth_state, is_token_error
 from kite_auth import get_secret_value
 from portfolio_terminal_component import render_alerts_terminal
@@ -18,6 +18,7 @@ from portfolio_terminal_component import render_alerts_terminal
 ALERTS_STATE_KEY = "kite_alerts_data"
 ALERTS_LAST_REQUEST_ID_KEY = "kite_alerts_last_request_id"
 ALERTS_LOG_STATE_KEY = "kite_alerts_fetch_log"
+ALERTS_PRICE_CONTEXT_VERSION = 3
 ALERTS_DEFAULT_STATUS = "active"
 KITE_ALERTS_ENDPOINT = "https://api.kite.trade/alerts"
 ALERTS_HTTP_TIMEOUT_SECONDS = 10
@@ -421,6 +422,7 @@ def enrich_alerts_with_price_context(
         str(alert.get("uuid") or "").strip(): alert.get("price_context")
         for alert in previous_alerts or []
         if str(alert.get("uuid") or "").strip()
+        and alert.get("price_context_version") == ALERTS_PRICE_CONTEXT_VERSION
     }
     enriched_alerts: list[dict[str, Any]] = []
     new_alert_indexes: list[int] = []
@@ -466,6 +468,7 @@ def enrich_alerts_with_price_context(
         try:
             analytics_df = load_analytics_history(kite, token, as_of_date)
             next_alert["price_context"] = _format_alert_price_context(analytics_df, next_alert.get("ltp"))
+            next_alert["price_context_version"] = ALERTS_PRICE_CONTEXT_VERSION
         except Exception as exc:
             next_alert["price_context"] = None
             _log_alerts_step(
@@ -548,15 +551,7 @@ def _format_alert_price_context(analytics_df: pd.DataFrame, ltp: Any) -> str | N
     if current_price is None:
         return None
 
-    parts = [
-        *_ema_distance_labels(current_price, metrics),
-        _nearest_distance_label(
-            "52W",
-            current_price,
-            {"52W Low": metrics.get("52W Low"), "52W High": metrics.get("52W High")},
-        ),
-        _nearest_distance_label("Pivot", current_price, pivot_points(analytics_df)),
-    ]
+    parts = _alert_position_distance_labels(current_price, metrics)
     return " | ".join(part for part in parts if part) or None
 
 
@@ -573,32 +568,43 @@ def _nearest_distance_label(_group: str, current_price: Any, levels: dict[str, A
     return f"{label} {signed_distance:+.1f}% {_format_indicator_value(levels[label])}"
 
 
-def _ema_distance_labels(current_price: Any, metrics: dict[str, Any]) -> list[str]:
+def _alert_position_distance_labels(current_price: Any, metrics: dict[str, Any]) -> list[str]:
     current = pd.to_numeric(current_price, errors="coerce")
-    ema_values = {
-        span: pd.to_numeric(metrics.get(f"EMA{span}"), errors="coerce")
-        for span in [20, 50, 100, 200]
-    }
     if pd.isna(current):
         return []
 
     current_value = float(current)
-    ema20, ema50, ema100, ema200 = (ema_values[span] for span in [20, 50, 100, 200])
-    if pd.notna(ema20) and current_value >= float(ema20):
-        spans = [20]
-    elif pd.notna(ema50) and current_value >= float(ema50):
-        spans = [20, 50]
-    elif pd.notna(ema100) and current_value >= float(ema100):
-        spans = [50, 100]
-    elif pd.notna(ema200) and current_value >= float(ema200):
-        spans = [100, 200]
-    else:
-        spans = [200]
+    ema_levels: list[tuple[str, float]] = []
+    for label in ["EMA10", "EMA20", "EMA50", "EMA100", "EMA200"]:
+        level = pd.to_numeric(metrics.get(label), errors="coerce")
+        if pd.notna(level):
+            ema_levels.append((label, float(level)))
+
+    above = min(
+        ((label, level) for label, level in ema_levels if level > current_value),
+        key=lambda item: item[1] - current_value,
+        default=None,
+    )
+    below = min(
+        ((label, level) for label, level in ema_levels if level <= current_value),
+        key=lambda item: current_value - item[1],
+        default=None,
+    )
+
+    if above is None:
+        high_52w = pd.to_numeric(metrics.get("52W High"), errors="coerce")
+        if pd.notna(high_52w):
+            above = ("52W High", float(high_52w))
+    if below is None:
+        low_52w = pd.to_numeric(metrics.get("52W Low"), errors="coerce")
+        if pd.notna(low_52w):
+            below = ("52W Low", float(low_52w))
 
     return [
-        _distance_label_with_value(f"EMA{span}", current_value, float(ema_values[span]))
-        for span in spans
-        if pd.notna(ema_values[span])
+        _distance_label_with_value(label, current_value, level)
+        for item in [above, below]
+        if item is not None
+        for label, level in [item]
     ]
 
 

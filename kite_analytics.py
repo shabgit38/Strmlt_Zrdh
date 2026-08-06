@@ -440,7 +440,9 @@ def build_metric_ladder(
         if range_position is not None and current_price is not None
         else None
     )
-    pivots = pivot_points(analytics_df)
+    # Pivot calculations are intentionally excluded from the UI for now.
+    # Keep pivot_points() available so the feature can be restored later.
+    pivots: dict[str, float] = {}
     ladder: list[tuple[str, float | str | tuple[float, ...] | None]] = [
         ("Range Position", range_with_ltp),
     ]
@@ -458,7 +460,7 @@ def build_metric_ladder(
 
     ladder.append(("Range Used", range_position))
     ladder.append(("Position", _format_price_position(metrics, pivots, range_position)))
-    for span in [20, 50, 100, 200]:
+    for span in [10, 20, 50, 100, 200]:
         label = f"EMA{span}"
         ladder.append((f"__EMA_DISTANCE__{label}", calculate_distance_pct(current_price, metrics.get(label))))
     for label in ["52W High", "52W Low"]:
@@ -477,10 +479,12 @@ def _format_price_position(
         return None
     current_label = "LTP" if metrics.get("LTP") is not None else "Latest Close"
 
-    ema_values = {span: metrics.get(f"EMA{span}") for span in [20, 50, 100, 200]}
-    ema20, ema50, ema100, ema200 = (ema_values[span] for span in [20, 50, 100, 200])
-    if ema20 is not None and current_price >= ema20:
-        ema_spans = [20]
+    ema_values = {span: metrics.get(f"EMA{span}") for span in [10, 20, 50, 100, 200]}
+    ema10, ema20, ema50, ema100, ema200 = (ema_values[span] for span in [10, 20, 50, 100, 200])
+    if ema10 is not None and current_price >= ema10:
+        ema_spans = [10]
+    elif ema20 is not None and current_price >= ema20:
+        ema_spans = [10, 20]
     elif ema50 is not None and current_price >= ema50:
         ema_spans = [20, 50]
     elif ema100 is not None and current_price >= ema100:
@@ -1065,7 +1069,7 @@ def _format_summary_symbols_with_positions(
         if str(symbol).strip() and str(label).strip()
     }
     normalized_notes = {
-        str(symbol).strip().upper(): [str(note).strip() for note in notes if str(note).strip()]
+        str(symbol).strip().upper(): [" ".join(str(note).split()) for note in notes if str(note).strip()]
         for symbol, notes in (notes_by_symbol or {}).items()
         if str(symbol).strip()
     }
@@ -1105,10 +1109,12 @@ def _format_summary_symbols_with_positions(
             if SHOW_PRICE_POSITION_TEXT
             else ""
         )
-        notes_html = "".join(
+        note_parts = normalized_notes.get(symbol_text.upper(), [])
+        notes_html = (
             "<div style='color:#94A3B8;font-size:0.7rem;font-weight:400;line-height:1.25;"
-            f"white-space:normal;overflow-wrap:anywhere;'>{escape(note)}</div>"
-            for note in normalized_notes.get(symbol_text.upper(), [])
+            f"white-space:normal;overflow-wrap:anywhere;'>{' | '.join(escape(note) for note in note_parts)}</div>"
+            if note_parts
+            else ""
         )
         rows.append(
             "<div style='display:grid;grid-template-columns:9rem 7rem minmax(0,1fr);"

@@ -250,6 +250,7 @@ def build_structure_bar_figure(levels: dict[str, Any]) -> go.Figure:
 
     ema_specs: list[tuple[str, float, str]] = []
     for label, color in [
+        ("EMA10", "#0ea5e9"),
         ("EMA20", "#f59e0b"),
         ("EMA50", "#64748b"),
         ("EMA100", "#475569"),
@@ -354,6 +355,7 @@ def render_stock_card(symbol: str, levels: dict[str, Any]) -> None:
     current_price, current_price_label = _current_price(levels)
     trend_label = get_trend_label(levels)
     range_position = calculate_range_position(levels)
+    ema10_distance = calculate_distance_pct(current_price, levels.get("EMA10"))
     ema20_distance = calculate_distance_pct(current_price, levels.get("EMA20"))
     ema200_distance = calculate_distance_pct(current_price, levels.get("EMA200"))
     trend_color = _trend_color(trend_label)
@@ -375,7 +377,10 @@ def render_stock_card(symbol: str, levels: dict[str, Any]) -> None:
             unsafe_allow_html=True,
         )
         st.plotly_chart(build_structure_bar_figure(levels), width="stretch", config={"displayModeBar": False})
-        st.caption(f"EMA20 {_format_pct(ema20_distance)} | EMA200 {_format_pct(ema200_distance)}")
+        st.caption(
+            f"EMA10 {_format_pct(ema10_distance)} | EMA20 {_format_pct(ema20_distance)} | "
+            f"EMA200 {_format_pct(ema200_distance)}"
+        )
         with st.expander("Raw levels"):
             raw_df = pd.DataFrame(
                 [{"Level": key, "Value": value} for key, value in sorted(levels.items())]
