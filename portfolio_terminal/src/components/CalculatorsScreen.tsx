@@ -158,7 +158,8 @@ export function CalculatorsScreen({
 
     const uniqueSymbols = Array.from(new Set(symbols));
     const shouldFetchSpots = displaySpots(spots).some((spot) => spot.spot === null || spot.status !== "Live");
-    if (uniqueSymbols.length === 0 && !shouldFetchSpots) return;
+    const shouldFetchPositions = liveData?.positions === undefined;
+    if (uniqueSymbols.length === 0 && !shouldFetchSpots && !shouldFetchPositions) return;
 
     const requestId = `${Date.now()}-${uniqueSymbols.join(",") || "spots"}`;
     const timeout = window.setTimeout(() => {
@@ -169,13 +170,13 @@ export function CalculatorsScreen({
         requestId,
         symbols: uniqueSymbols,
         includeSpots: shouldFetchSpots,
-        includePositions: existingPositions.length === 0,
+        includePositions: shouldFetchPositions,
       };
       setStreamlitComponentValue(request);
     }, 750);
 
     return () => window.clearTimeout(timeout);
-  }, [optionRows, spots]);
+  }, [liveData?.positions, optionRows, spots]);
 
   function updateOptionRow(id: string, field: OptionField, value: string) {
     setOptionRows((rows) => rows.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
@@ -314,7 +315,7 @@ export function CalculatorsScreen({
       requestId,
       symbols: Array.from(new Set([...optionSymbols, ...positionSymbols])),
       includeSpots: true,
-      includePositions: false,
+      includePositions: true,
       equitySymbols: mtfSymbols,
     };
     setStreamlitComponentValue(request);

@@ -147,6 +147,16 @@ def _fetch_calculators_live_data(request: dict[str, Any]) -> dict[str, Any]:
             if needs_option_context
             else {}
         )
+        missing_position_symbols = set(position_symbols) - set(contract_by_symbol)
+        if missing_position_symbols:
+            fallback_contracts = _load_calculator_option_contracts_from_kite(kite)
+            contract_by_symbol.update(
+                {
+                    contract["symbol"]: contract
+                    for contract in fallback_contracts
+                    if contract["symbol"] in missing_position_symbols
+                }
+            )
         positions = _enrich_open_option_positions(raw_positions, contract_by_symbol)
         instruments: list[str] = []
         if request.get("includeSpots"):
