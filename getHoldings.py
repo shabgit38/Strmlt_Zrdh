@@ -704,7 +704,11 @@ SUMMARY_HIGHLIGHT_ACCENTS = {
 }
 
 
-def _format_summary_symbols(symbols: list[str], highlight_symbols: dict[str, str] | None = None) -> str:
+def _format_summary_symbols(
+    symbols: list[str],
+    highlight_symbols: dict[str, str] | None = None,
+    mtf_symbols: set[str] | None = None,
+) -> str:
     highlight_accents = {
         str(symbol).strip().upper(): str(accent).strip()
         for symbol, accent in (highlight_symbols or {}).items()
@@ -713,19 +717,25 @@ def _format_summary_symbols(symbols: list[str], highlight_symbols: dict[str, str
     if not symbols:
         return "-"
 
+    normalized_mtf_symbols = {str(symbol).strip().upper() for symbol in (mtf_symbols or set())}
     formatted_symbols: list[str] = []
     for symbol in symbols:
         symbol_text = str(symbol).strip()
+        marker = (
+            " <span style='font-size:0.65rem;font-weight:800;color:#F59E0B;vertical-align:super;'>M</span>"
+            if symbol_text.upper() in normalized_mtf_symbols
+            else ""
+        )
         accent = highlight_accents.get(symbol_text.upper())
         if accent:
             formatted_symbols.append(
                 "<span style='display:inline-block;margin:0.05rem 0.08rem 0.05rem 0;"
                 f"padding:0.03rem 0.2rem;border:1px solid {accent};"
                 f"border-left:3px solid {accent};border-radius:0.2rem;'>"
-                f"{escape(symbol_text)}</span>"
+                f"{escape(symbol_text)}{marker}</span>"
             )
         else:
-            formatted_symbols.append(escape(symbol_text))
+            formatted_symbols.append(f"{escape(symbol_text)}{marker}")
     return ", ".join(formatted_symbols)
 
 
@@ -733,6 +743,7 @@ def _format_momentum_label_summary(
     label_groups: dict[str, list[str]],
     *,
     highlight_symbols: dict[str, str] | None = None,
+    mtf_symbols: set[str] | None = None,
 ) -> str:
     summary_items = [
         ("Strong Entry", "#0F766E", "#FFFFFF", "rgba(15, 118, 110, 0.18)", label_groups["Strong Entry"]),
@@ -743,7 +754,7 @@ def _format_momentum_label_summary(
     ]
     rows = []
     for label, background, foreground, tint, symbols in summary_items:
-        symbol_text = _format_summary_symbols(symbols, highlight_symbols)
+        symbol_text = _format_summary_symbols(symbols, highlight_symbols, mtf_symbols)
         rows.append(
             "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:5rem;font-weight:700;color:{background};'>{label}</span>"
@@ -842,6 +853,7 @@ def render_momentum_ranking_table(
     *,
     key: str,
     show_summary: bool = True,
+    mtf_symbols: set[str] | None = None,
 ) -> None:
     if momentum_df.empty:
         st.info("No momentum score data available.")
@@ -856,10 +868,16 @@ def render_momentum_ranking_table(
             momentum_display_df,
             highlight_symbols=momentum_summary_highlight_symbols,
         )
+    table_display_df = momentum_display_df.copy()
+    normalized_mtf_symbols = {str(symbol).strip().upper() for symbol in (mtf_symbols or set())}
+    if "ticker" in table_display_df.columns and normalized_mtf_symbols:
+        table_display_df["ticker"] = table_display_df["ticker"].apply(
+            lambda symbol: f"{symbol} ᴹ" if str(symbol).strip().upper() in normalized_mtf_symbols else symbol
+        )
     table_col, notes_col = st.columns([3, 1], vertical_alignment="top")
     with table_col:
         momentum_selection = st.dataframe(
-            momentum_display_df.style.format(
+            table_display_df.style.format(
                 {
                     "ltp": "{:.2f}",
                     "latest_close": "{:.2f}",
@@ -1305,6 +1323,7 @@ def _render_price_ladder_summary_card(
     momentum_labels: dict[str, str] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     show_positions: bool = False,
+    mtf_symbols: set[str] | None = None,
 ) -> None:
     summary_html = format_price_ladder_summary_html(
         dashboard_df,
@@ -1312,6 +1331,7 @@ def _render_price_ladder_summary_card(
         momentum_labels=momentum_labels,
         notes_by_symbol=notes_by_symbol,
         show_positions=show_positions,
+        mtf_symbols=mtf_symbols,
     )
     if not summary_html:
         st.info("No price ladder summary available.")
@@ -1343,7 +1363,11 @@ def _stock_notes_by_symbol(momentum_df: pd.DataFrame) -> dict[str, list[str]]:
     return notes_by_symbol
 
 
-def _render_holdings_momentum_summary(momentum_df: pd.DataFrame, day_movers_df: pd.DataFrame) -> None:
+def _render_holdings_momentum_summary(
+    momentum_df: pd.DataFrame,
+    day_movers_df: pd.DataFrame,
+    mtf_symbols: set[str] | None = None,
+) -> None:
     if momentum_df.empty:
         st.info("No momentum summary available.")
         return
@@ -1354,7 +1378,11 @@ def _render_holdings_momentum_summary(momentum_df: pd.DataFrame, day_movers_df: 
     st.markdown(
         _summary_panel_html(
             "Momentum Summary",
-            _format_momentum_label_summary(label_groups, highlight_symbols=momentum_summary_highlight_symbols),
+            _format_momentum_label_summary(
+                label_groups,
+                highlight_symbols=momentum_summary_highlight_symbols,
+                mtf_symbols=mtf_symbols,
+            ),
             BUTTON_COLOR,
         ),
         unsafe_allow_html=True,
@@ -1374,6 +1402,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
     price_ladder_highlight_symbols = _summary_ticker_accents(
         build_portfolio_day_movers_summary(kite_holdings_df)
     )
+    mtf_symbol_set = portfolio_streamlit.mtf_symbols(kite_holdings_df)
 
     display_portfolio_day_movers_summary(kite_holdings_df)
 
@@ -1388,13 +1417,14 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
             + ("..." if len(momentum_failed_symbols) > 10 else "")
         )
 
-    _render_holdings_momentum_summary(momentum_df, day_movers_df)
+    _render_holdings_momentum_summary(momentum_df, day_movers_df, mtf_symbol_set)
     _render_price_ladder_summary_card(
         sorted_dashboard_df,
         highlight_symbols=price_ladder_highlight_symbols,
         momentum_labels=_momentum_label_by_symbol(momentum_df),
         notes_by_symbol=_stock_notes_by_symbol(momentum_df),
         show_positions=True,
+        mtf_symbols=mtf_symbol_set,
     )
 
     with st.expander("Momentum Ranking", expanded=False):
@@ -1403,6 +1433,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
             day_movers_df,
             key="kite_holdings_momentum_ranking_table",
             show_summary=False,
+            mtf_symbols=mtf_symbol_set,
         )
 
     with st.expander("Price Ladder", expanded=False):
@@ -1411,6 +1442,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
             max_rows=12,
             highlight_symbols=price_ladder_highlight_symbols,
             show_summary=False,
+            mtf_symbols=mtf_symbol_set,
         )
 
 

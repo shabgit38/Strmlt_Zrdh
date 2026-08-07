@@ -87,6 +87,18 @@ def _non_mtf_holdings_df(df: pd.DataFrame) -> pd.DataFrame:
     return df[_mtf_quantity_series(df).le(0)].copy()
 
 
+def mtf_symbols(holdings_df: pd.DataFrame | None) -> set[str]:
+    """Return normalized symbols with a positive MTF quantity."""
+    if holdings_df is None or holdings_df.empty or "tradingsymbol" not in holdings_df.columns:
+        return set()
+    mtf_rows = holdings_df[_mtf_quantity_series(holdings_df).gt(0)]
+    return {
+        _normalized_symbol_value(symbol)
+        for symbol in mtf_rows["tradingsymbol"]
+        if _normalized_symbol_value(symbol)
+    }
+
+
 def _cache_ltp_by_symbol(df: pd.DataFrame) -> None:
     if {"tradingsymbol", "last_price"}.issubset(df.columns):
         ltp_by_symbol: dict[str, Any] = {}

@@ -31,6 +31,8 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
     }),
     { mtfValue: 0, pnl: 0, netPnl: 0, netPnlCount: 0, interest: 0, charges: 0, initialMargin: 0, fundedAmount: 0 },
   );
+  const totalPnlPct = totals.mtfValue === 0 ? null : (totals.pnl / totals.mtfValue) * 100;
+  const totalCostPct = totals.pnl === 0 ? null : ((totals.interest + totals.charges) / Math.abs(totals.pnl)) * 100;
 
   return (
     <section>
@@ -49,7 +51,7 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
         </div>
       </div>
       <div className="overflow-auto rounded-lg border border-terminal-line bg-terminal-panel shadow-sm">
-        <table className="w-full min-w-[1320px] border-collapse text-left text-xs">
+        <table className="w-full min-w-[1380px] border-collapse text-left text-xs">
           <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
             <tr>
               <th className="px-2 py-2">Symbol</th>
@@ -57,9 +59,22 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
               <th className="px-2 py-2 text-right">MTF Avg</th>
               <th className="px-2 py-2 text-right">MTF Value</th>
               <th className="px-2 py-2 text-right">LTP</th>
+              <th className="px-2 py-2 text-right" title="(LTP - MTF Avg) / MTF Avg x 100">P&L %</th>
               <th className="px-2 py-2 text-right">Day Chng%</th>
               <th className="px-2 py-2 text-right">P&L</th>
-              <th className="px-2 py-2 text-right" title="P&L - Interest - Charges">Net P&L</th>
+              <th className="px-2 py-2 text-right">
+                <span className="inline-flex items-center justify-end gap-1">
+                  Net P&L
+                  <span
+                    aria-label="Net P&L formula: P&L minus accrued interest minus estimated charges"
+                    className="cursor-help text-[0.65rem] normal-case text-terminal-near"
+                    role="img"
+                    title="Net P&L = P&L - accrued interest - estimated charges"
+                  >
+                    ⓘ
+                  </span>
+                </span>
+              </th>
               <th className="px-2 py-2 text-right">Breakeven</th>
               <th className="px-2 py-2 text-right">Days</th>
               <th className="px-2 py-2 text-right" title="Funded amount x Daily Interest %">Int/Day</th>
@@ -75,11 +90,16 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
             {calculatedHoldings.map(({ holding, metrics }) => {
               return (
                 <tr key={holding.symbol} className="border-t border-terminal-line">
-                  <td className="px-2 py-2 font-bold text-terminal-ink">{holding.symbol}</td>
+                  <td className="px-2 py-2 font-bold text-terminal-ink">
+                    {holding.symbol} <sup className="text-[0.6rem] font-extrabold text-amber-400">M</sup>
+                  </td>
                   <td className="px-2 py-2 text-right tabular-nums">{holding.mtfQty}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{formatPrice(holding.mtfAvgPrice)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{formatMoney(holding.mtfValue)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{formatPrice(holding.ltp)}</td>
+                  <td className={`px-2 py-2 text-right tabular-nums ${signedClass(metrics.pnlPct ?? 0)}`}>
+                    {formatNullablePct(metrics.pnlPct)}
+                  </td>
                   <td className={`px-2 py-2 text-right tabular-nums ${signedClass(holding.dayChangePct)}`}>
                     {formatPct(holding.dayChangePct)}
                   </td>
@@ -87,7 +107,7 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
                     {formatMoney(holding.pnl)}
                   </td>
                   <td className={`px-2 py-2 text-right tabular-nums ${signedClass(metrics.netPnl ?? 0)}`}>
-                    {formatNullableMoney(metrics.netPnl)}
+                    {formatNullableMoney(metrics.netPnl)} <span className="text-terminal-muted">({formatNullablePct(metrics.costPct)})</span>
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums text-terminal-near">{formatNullablePrice(metrics.breakeven)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{holding.holdingDays ?? "-"}</td>
@@ -106,10 +126,18 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
             <tr>
               <td colSpan={3} className="px-2 py-2 uppercase tracking-wide">Total</td>
               <td className="px-2 py-2 text-right tabular-nums">{formatMoney(totals.mtfValue)}</td>
-              <td colSpan={2} className="px-2 py-2" />
+              <td className="px-2 py-2" />
+              <td className={`px-2 py-2 text-right tabular-nums ${signedClass(totalPnlPct ?? 0)}`}>
+                {formatNullablePct(totalPnlPct)}
+              </td>
+              <td className="px-2 py-2" />
               <td className={`px-2 py-2 text-right tabular-nums ${signedClass(totals.pnl)}`}>{formatMoney(totals.pnl)}</td>
               <td className={`px-2 py-2 text-right tabular-nums ${signedClass(totals.netPnl)}`}>
-                {totals.netPnlCount === 0 ? "-" : formatMoney(totals.netPnl)}
+                {totals.netPnlCount === 0 ? (
+                  "-"
+                ) : (
+                  <>{formatMoney(totals.netPnl)} <span className="text-terminal-muted">({formatNullablePct(totalCostPct)})</span></>
+                )}
               </td>
               <td colSpan={3} className="px-2 py-2" />
               <td className="px-2 py-2 text-right tabular-nums text-terminal-near">{formatMoney(totals.interest)}</td>
@@ -133,6 +161,8 @@ function mtfInterestMetrics(holding: MtfHolding, dailyInterestRate: number) {
   const interestSoFar = holdingDays === null ? null : interestPerDay * holdingDays;
   const charges = estimatedCurrentCharges(holding.mtfValue);
   const netPnl = interestSoFar === null ? null : holding.pnl - interestSoFar - charges;
+  const costPct = interestSoFar === null || holding.pnl === 0 ? null : ((interestSoFar + charges) / Math.abs(holding.pnl)) * 100;
+  const pnlPct = holding.mtfAvgPrice === 0 ? null : ((holding.ltp - holding.mtfAvgPrice) / holding.mtfAvgPrice) * 100;
   const breakeven = interestSoFar === null || holding.mtfQty === 0 ? null : holding.mtfAvgPrice + interestSoFar / holding.mtfQty;
 
   return {
@@ -142,6 +172,8 @@ function mtfInterestMetrics(holding: MtfHolding, dailyInterestRate: number) {
     interestSoFar,
     charges,
     netPnl,
+    costPct,
+    pnlPct,
     breakeven,
   };
 }

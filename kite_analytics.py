@@ -863,6 +863,7 @@ def display_historic_price_ladder_frame(
     *,
     max_rows: int = 12,
     highlight_symbols: dict[str, str] | None = None,
+    mtf_symbols: set[str] | None = None,
     show_summary: bool = True,
 ) -> None:
     """
@@ -874,7 +875,11 @@ def display_historic_price_ladder_frame(
         return
 
     if show_summary:
-        display_price_ladder_summary(dashboard_df, highlight_symbols=highlight_symbols)
+        display_price_ladder_summary(
+            dashboard_df,
+            highlight_symbols=highlight_symbols,
+            mtf_symbols=mtf_symbols,
+        )
 
     display_df = dashboard_df
     if not SHOW_PRICE_POSITION_TEXT:
@@ -886,6 +891,12 @@ def display_historic_price_ladder_frame(
             axis=1,
         )
         display_df = dashboard_df.loc[~position_rows].reset_index(drop=True)
+
+    normalized_mtf_symbols = {str(symbol).strip().upper() for symbol in (mtf_symbols or set())}
+    if normalized_mtf_symbols:
+        display_df = display_df.rename(
+            columns=lambda symbol: f"{symbol} ᴹ" if str(symbol).strip().upper() in normalized_mtf_symbols else symbol
+        )
 
     st.dataframe(
         display_df.style.map(highlight_ltp_cells),
@@ -899,8 +910,13 @@ def display_price_ladder_summary(
     dashboard_df: pd.DataFrame,
     *,
     highlight_symbols: dict[str, str] | None = None,
+    mtf_symbols: set[str] | None = None,
 ) -> None:
-    summary_html = format_price_ladder_summary_html(dashboard_df, highlight_symbols=highlight_symbols)
+    summary_html = format_price_ladder_summary_html(
+        dashboard_df,
+        highlight_symbols=highlight_symbols,
+        mtf_symbols=mtf_symbols,
+    )
     if summary_html:
         st.markdown(summary_html, unsafe_allow_html=True)
     else:
@@ -914,6 +930,7 @@ def format_price_ladder_summary_html(
     momentum_labels: dict[str, str] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     show_positions: bool = False,
+    mtf_symbols: set[str] | None = None,
 ) -> str:
     if dashboard_df.empty:
         return ""
@@ -926,6 +943,7 @@ def format_price_ladder_summary_html(
             highlight_symbols=highlight_symbols,
             momentum_labels=momentum_labels,
             notes_by_symbol=notes_by_symbol,
+            mtf_symbols=mtf_symbols,
         )
     return ""
 
@@ -998,7 +1016,11 @@ def _get_symbol_range_pct(symbol_values: pd.Series) -> float | None:
     return None
 
 
-def _format_summary_symbols(symbols: list[str], highlight_symbols: dict[str, str] | None = None) -> str:
+def _format_summary_symbols(
+    symbols: list[str],
+    highlight_symbols: dict[str, str] | None = None,
+    mtf_symbols: set[str] | None = None,
+) -> str:
     highlight_accents = {
         str(symbol).strip().upper(): str(accent).strip()
         for symbol, accent in (highlight_symbols or {}).items()
@@ -1007,19 +1029,25 @@ def _format_summary_symbols(symbols: list[str], highlight_symbols: dict[str, str
     if not symbols:
         return "-"
 
+    normalized_mtf_symbols = {str(symbol).strip().upper() for symbol in (mtf_symbols or set())}
     formatted_symbols: list[str] = []
     for symbol in symbols:
         symbol_text = str(symbol).strip()
+        marker = (
+            " <span style='font-size:0.65rem;font-weight:800;color:#F59E0B;vertical-align:super;'>M</span>"
+            if symbol_text.upper() in normalized_mtf_symbols
+            else ""
+        )
         accent = highlight_accents.get(symbol_text.upper())
         if accent:
             formatted_symbols.append(
                 "<span style='display:inline-block;margin:0.05rem 0.08rem 0.05rem 0;"
                 f"padding:0.03rem 0.2rem;border:1px solid {accent};"
                 f"border-left:3px solid {accent};border-radius:0.2rem;'>"
-                f"{escape(symbol_text)}</span>"
+                f"{escape(symbol_text)}{marker}</span>"
             )
         else:
-            formatted_symbols.append(escape(symbol_text))
+            formatted_symbols.append(f"{escape(symbol_text)}{marker}")
     return ", ".join(formatted_symbols)
 
 
@@ -1030,6 +1058,7 @@ def _format_symbol_color_summary(
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
+    mtf_symbols: set[str] | None = None,
 ) -> str:
     summary_items = [
         (">= 75", *MOMENTUM_PALETTE["entry"], "rgba(15, 118, 110, 0.18)", color_groups["green"]),
@@ -1046,6 +1075,7 @@ def _format_symbol_color_summary(
                 highlight_symbols,
                 momentum_labels,
                 notes_by_symbol,
+                mtf_symbols,
             )
             rows.append(
                 "<div style='display:grid;gap:0.2rem;font-size:0.8rem;'>"
@@ -1055,7 +1085,7 @@ def _format_symbol_color_summary(
                 f"{symbol_text}</div></div>"
             )
         else:
-            symbol_text = _format_summary_symbols(symbols, highlight_symbols)
+            symbol_text = _format_summary_symbols(symbols, highlight_symbols, mtf_symbols)
             rows.append(
                 "<div style='display:flex;align-items:flex-start;gap:0.5rem;font-size:0.8rem;'>"
                 f"<span style='min-width:6.5rem;font-weight:700;color:{background};'>{label}</span>"
@@ -1076,6 +1106,7 @@ def _format_summary_symbols_with_positions(
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
+    mtf_symbols: set[str] | None = None,
 ) -> str:
     if not symbols:
         return "-"
@@ -1102,6 +1133,7 @@ def _format_summary_symbols_with_positions(
         "Wait": MOMENTUM_PALETTE["wait"][0],
         "Avoid": MOMENTUM_PALETTE["avoid"][0],
     }
+    normalized_mtf_symbols = {str(symbol).strip().upper() for symbol in (mtf_symbols or set())}
     rows: list[str] = []
     for symbol in symbols:
         symbol_text = str(symbol).strip()
@@ -1143,7 +1175,13 @@ def _format_summary_symbols_with_positions(
             "column-gap:0.5rem;align-items:center;margin:0.12rem 0 0.35rem;'>"
             f"{momentum_badge}"
             f"<span style='{symbol_style}align-self:center;white-space:nowrap;'>"
-            f"{escape(symbol_text)}</span>"
+            f"{escape(symbol_text)}"
+            + (
+                " <span style='font-size:0.65rem;font-weight:800;color:#F59E0B;vertical-align:super;'>M</span>"
+                if symbol_text.upper() in normalized_mtf_symbols
+                else ""
+            )
+            + "</span>"
             f"{position_text_html}"
             f"{position_chart_html}"
             + (
