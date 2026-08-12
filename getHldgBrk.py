@@ -602,7 +602,7 @@ def _style_pnl_columns(df: pd.DataFrame):
         styler = styler.map(lambda value: f"color: {_pnl_color(value)}; font-weight: 600", subset=[column])
     if "Trade Type" in df.columns:
         styler = styler.apply(
-            lambda row: ["font-weight: 700; background-color: #f1f5f9"] * len(row)
+            lambda row: ["font-weight: 700"] * len(row)
             if str(row.get("Trade Type")).upper() == "TOTAL"
             else [""] * len(row),
             axis=1,
