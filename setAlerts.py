@@ -600,12 +600,36 @@ def _alert_position_distance_labels(current_price: Any, metrics: dict[str, Any])
         if pd.notna(low_52w):
             below = ("52W Low", float(low_52w))
 
-    return [
+    ema_and_52w_labels = [
         _distance_label_with_value(label, current_value, level)
         for item in [above, below]
         if item is not None
         for label, level in [item]
     ]
+
+    monthly_levels: list[tuple[str, float]] = []
+    for label in ["1M High", "1M Low", "3M High", "3M Low", "6M High", "6M Low"]:
+        level = pd.to_numeric(metrics.get(label), errors="coerce")
+        if pd.notna(level):
+            monthly_levels.append((label, float(level)))
+
+    nearest_monthly_above = min(
+        ((label, level) for label, level in monthly_levels if level > current_value),
+        key=lambda item: item[1] - current_value,
+        default=None,
+    )
+    nearest_monthly_below = min(
+        ((label, level) for label, level in monthly_levels if level <= current_value),
+        key=lambda item: current_value - item[1],
+        default=None,
+    )
+    monthly_labels = [
+        _distance_label_with_value(label, current_value, level)
+        for item in [nearest_monthly_above, nearest_monthly_below]
+        if item is not None
+        for label, level in [item]
+    ]
+    return ema_and_52w_labels + monthly_labels
 
 
 def _distance_label_with_value(label: str, current_price: float, level: float) -> str:
