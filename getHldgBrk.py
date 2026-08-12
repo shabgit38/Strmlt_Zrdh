@@ -600,6 +600,13 @@ def _style_pnl_columns(df: pd.DataFrame):
     styler = df.style.format(formatters, na_rep="-")
     for column in pnl_columns:
         styler = styler.map(lambda value: f"color: {_pnl_color(value)}; font-weight: 600", subset=[column])
+    if "Trade Type" in df.columns:
+        styler = styler.apply(
+            lambda row: ["font-weight: 700; background-color: #f1f5f9"] * len(row)
+            if str(row.get("Trade Type")).upper() == "TOTAL"
+            else [""] * len(row),
+            axis=1,
+        )
     return styler
 
 
@@ -1410,8 +1417,6 @@ def _exited_holdings_summary_df(df: pd.DataFrame) -> pd.DataFrame:
     row_type = df["row_type"].astype(str).str.upper().str.strip()
     exit_qty = pd.to_numeric(df.get("_exited_summary_qty", pd.Series(index=df.index, dtype=float)), errors="coerce").fillna(0)
     exited_batches = df[row_type.eq("BATCH") & exit_qty.gt(0)].copy()
-    if exited_batches.empty:
-        return pd.DataFrame()
 
     summaries = df[row_type.eq("SUMMARY")].copy()
     sector_by_symbol = {}
@@ -1424,20 +1429,21 @@ def _exited_holdings_summary_df(df: pd.DataFrame) -> pd.DataFrame:
             .to_dict()
         )
 
-    symbol_key = exited_batches["symbol"].astype(str).str.upper().str.strip()
-    exit_qty = pd.to_numeric(exited_batches["_exited_summary_qty"], errors="coerce").fillna(0)
-    entry_price = pd.to_numeric(exited_batches.get("batch_price", pd.Series(dtype=float)), errors="coerce")
-    exit_price = pd.to_numeric(exited_batches.get("exit_price", pd.Series(dtype=float)), errors="coerce")
-    invested = exit_qty * entry_price
-    exit_value = exit_qty * exit_price
-    pnl = exit_value - invested
-    pnl_pct = pnl.where(invested.ne(0)) / invested * 100
-
-    return pd.DataFrame(
-        {
+    frames: list[pd.DataFrame] = []
+    if not exited_batches.empty:
+        symbol_key = exited_batches["symbol"].astype(str).str.upper().str.strip()
+        batch_exit_qty = pd.to_numeric(exited_batches["_exited_summary_qty"], errors="coerce").fillna(0)
+        entry_price = pd.to_numeric(exited_batches.get("batch_price", pd.Series(dtype=float)), errors="coerce")
+        exit_price = pd.to_numeric(exited_batches.get("exit_price", pd.Series(dtype=float)), errors="coerce")
+        invested = batch_exit_qty * entry_price
+        exit_value = batch_exit_qty * exit_price
+        pnl = exit_value - invested
+        pnl_pct = pnl.where(invested.ne(0)) / invested * 100
+        frames.append(pd.DataFrame({
             "Symbol": exited_batches["symbol"],
             "Sector": exited_batches.get("sector", symbol_key.map(sector_by_symbol)).fillna(symbol_key.map(sector_by_symbol)),
-            "Exit Qty": exit_qty,
+            "Trade Type": exited_batches.get("trade_type"),
+            "Exit Qty": batch_exit_qty,
             "Entry Price": entry_price,
             "Exit Price": exit_price,
             "Invested": invested,
@@ -1445,8 +1451,71 @@ def _exited_holdings_summary_df(df: pd.DataFrame) -> pd.DataFrame:
             "P&L": pnl,
             "P&L %": pnl_pct,
             "Exit Date": exited_batches.get("exit_date"),
-        }
-    )
+        }))
+
+    exited_batch_symbols = set(exited_batches.get("symbol", pd.Series(dtype=object)).astype(str).str.upper().str.strip())
+    exited_summary_rows = summaries[
+        summaries.get("holding_status", pd.Series(index=summaries.index, dtype=object)).apply(_is_exited_status)
+        & ~summaries["symbol"].astype(str).str.upper().str.strip().isin(exited_batch_symbols)
+    ].copy()
+    if not exited_summary_rows.empty:
+        summary_exit_qty = pd.to_numeric(
+            exited_summary_rows.get("exit_qty", pd.Series(index=exited_summary_rows.index, dtype=float)),
+            errors="coerce",
+        ).fillna(0)
+        entry_price = pd.to_numeric(
+            exited_summary_rows.get("buy_avg", pd.Series(index=exited_summary_rows.index, dtype=float)),
+            errors="coerce",
+        )
+        exit_price = pd.to_numeric(
+            exited_summary_rows.get("exit_price", pd.Series(index=exited_summary_rows.index, dtype=float)),
+            errors="coerce",
+        )
+        invested = summary_exit_qty * entry_price
+        exit_value = summary_exit_qty * exit_price
+        pnl = exit_value - invested
+        pnl_pct = pnl.where(invested.ne(0)) / invested * 100
+        frames.append(pd.DataFrame({
+            "Symbol": exited_summary_rows["symbol"],
+            "Sector": exited_summary_rows.get("sector"),
+            "Trade Type": exited_summary_rows.get("trade_type"),
+            "Exit Qty": summary_exit_qty,
+            "Entry Price": entry_price,
+            "Exit Price": exit_price,
+            "Invested": invested,
+            "Exit Value": exit_value,
+            "P&L": pnl,
+            "P&L %": pnl_pct,
+            "Exit Date": exited_summary_rows.get("exit_date"),
+        }))
+
+    if not frames:
+        return pd.DataFrame()
+    exited_summary_df = pd.concat(frames, ignore_index=True)
+    exited_summary_df["_symbol_key"] = exited_summary_df["Symbol"].astype(str).str.upper().str.strip()
+    symbol_frames: list[pd.DataFrame] = []
+    for _, symbol_df in exited_summary_df.sort_values("_symbol_key").groupby("_symbol_key", sort=True):
+        symbol_df = symbol_df.drop(columns="_symbol_key")
+        total_invested = pd.to_numeric(symbol_df["Invested"], errors="coerce").sum()
+        total_exit_value = pd.to_numeric(symbol_df["Exit Value"], errors="coerce").sum()
+        total_pnl = pd.to_numeric(symbol_df["P&L"], errors="coerce").sum()
+        total_pnl_pct = total_pnl / total_invested * 100 if total_invested else None
+        total_row = pd.DataFrame([{
+            "Symbol": symbol_df.iloc[0]["Symbol"],
+            "Sector": symbol_df.iloc[0]["Sector"],
+            "Trade Type": "TOTAL",
+            "Exit Qty": pd.to_numeric(symbol_df["Exit Qty"], errors="coerce").sum(),
+            "Entry Price": None,
+            "Exit Price": None,
+            "Invested": total_invested,
+            "Exit Value": total_exit_value,
+            "P&L": total_pnl,
+            "P&L %": total_pnl_pct,
+            "Exit Date": None,
+        }])
+        symbol_frames.extend([symbol_df, total_row])
+
+    return pd.concat(symbol_frames, ignore_index=True)
 
 
 def display_exited_holdings_summary(df: pd.DataFrame, *, show_header: bool = True) -> None:
@@ -1475,6 +1544,7 @@ def display_exited_holdings_summary(df: pd.DataFrame, *, show_header: bool = Tru
         column_config={
             "Symbol": st.column_config.TextColumn("Symbol", width="small"),
             "Sector": st.column_config.TextColumn("Sector", width="medium"),
+            "Trade Type": st.column_config.TextColumn("Trade Type", width="small"),
             "Exit Date": st.column_config.DateColumn("Exit Date", width="small"),
             "Exit Qty": st.column_config.NumberColumn("Exit Qty", width="small", format="%d"),
             "Entry Price": st.column_config.NumberColumn("Entry Price", width="small", format="%.2f"),
@@ -1839,6 +1909,30 @@ def load_holdings_breakdown_from_supabase() -> pd.DataFrame:
         ) from exc
     except URLError as exc:
         raise RuntimeError(f"Supabase holdings breakdown lookup failed: {exc.reason}") from exc
+
+    return _prepare_holdings_breakdown_df(records)
+
+
+def load_active_holdings_breakdown_from_supabase() -> pd.DataFrame:
+    supabase_url, supabase_key, table_name = _get_supabase_holdings_config()
+    encoded_table_name = quote(table_name, safe="")
+    endpoint = (
+        f"{supabase_url}/rest/v1/{encoded_table_name}"
+        "?select=*&or=(holding_status.is.null,holding_status.neq.Exited,row_type.eq.SUMMARY)&order=id.asc"
+    )
+    headers = _supabase_headers(supabase_key)
+
+    request = Request(endpoint, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase active holdings lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase active holdings lookup failed: {exc.reason}") from exc
 
     return _prepare_holdings_breakdown_df(records)
 

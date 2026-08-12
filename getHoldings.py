@@ -49,8 +49,8 @@ from getHldgBrk import (
     display_holdings_breakdown_df,
     display_exited_holdings_summary,
     enrich_holdings_breakdown_with_ltp,
+    load_active_holdings_breakdown_from_supabase,
     load_exited_holdings_breakdown_from_supabase,
-    load_holdings_breakdown_for_holdings,
     upsert_holdings_breakdown_in_supabase,
 )
 
@@ -1235,7 +1235,7 @@ def fetch_and_display_holdings():
             )
             _trigger_csv_download(df, st.session_state["kite_holdings_download_filename"])
             try:
-                _set_holdings_breakdown_state(load_holdings_breakdown_for_holdings(df))
+                _set_holdings_breakdown_state(load_active_holdings_breakdown_from_supabase())
                 st.session_state.pop("kite_holdings_breakdown_error", None)
             except Exception as breakdown_exc:
                 st.session_state.pop(HOLDINGS_BREAKDOWN_DF_STATE_KEY, None)
@@ -1446,16 +1446,78 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
         )
 
 
-def _holding_symbol_options(holdings_df: pd.DataFrame) -> list[str]:
-    if holdings_df.empty or "tradingsymbol" not in holdings_df.columns:
-        return []
-    return sorted(
+def _holding_symbol_options(
+    holdings_df: pd.DataFrame,
+    holdings_breakdown_df: pd.DataFrame | None = None,
+) -> list[str]:
+    kite_symbols = (
         {
             str(symbol).upper().strip()
             for symbol in holdings_df["tradingsymbol"].dropna()
             if str(symbol).strip()
         }
+        if not holdings_df.empty and "tradingsymbol" in holdings_df.columns
+        else set()
     )
+    kite_isins = (
+        {
+            str(isin).upper().strip()
+            for isin in holdings_df["isin"].dropna()
+            if str(isin).strip()
+        }
+        if not holdings_df.empty and "isin" in holdings_df.columns
+        else set()
+    )
+
+    if holdings_breakdown_df is not None and not holdings_breakdown_df.empty:
+        row_type = holdings_breakdown_df.get("row_type", pd.Series(index=holdings_breakdown_df.index, dtype=object)).astype(str).str.upper().str.strip()
+        status = holdings_breakdown_df.get("holding_status", pd.Series(index=holdings_breakdown_df.index, dtype=object)).astype(str).str.upper().str.strip()
+        summary_rows = holdings_breakdown_df[row_type.eq("SUMMARY")]
+        exited_summaries = holdings_breakdown_df[row_type.eq("SUMMARY") & status.eq("EXITED")]
+        active_summaries = summary_rows[~summary_rows.index.isin(exited_summaries.index)]
+
+        def _identity_values(frame: pd.DataFrame, column: str) -> set[str]:
+            if column not in frame.columns:
+                return set()
+            return {str(value).upper().strip() for value in frame[column].dropna() if str(value).strip()}
+
+        exited_symbols = _identity_values(exited_summaries, "symbol")
+        exited_isins = _identity_values(exited_summaries, "isin")
+        active_symbols = _identity_values(active_summaries, "symbol")
+        active_isins = _identity_values(active_summaries, "isin")
+        suppressed_symbols = {
+            str(row.get("tradingsymbol") or "").upper().strip()
+            for _, row in holdings_df.iterrows()
+            if (
+                str(row.get("tradingsymbol") or "").upper().strip() in exited_symbols
+                or str(row.get("isin") or "").upper().strip() in exited_isins
+            )
+            and str(row.get("tradingsymbol") or "").upper().strip() not in active_symbols
+            and str(row.get("isin") or "").upper().strip() not in active_isins
+        }
+        kite_symbols -= suppressed_symbols
+
+    breakdown_symbols: set[str] = set()
+    if holdings_breakdown_df is not None and not holdings_breakdown_df.empty:
+        active_breakdown_df = _active_breakdown_df(holdings_breakdown_df)
+        if "symbol" in active_breakdown_df.columns:
+            active_breakdown_df = active_breakdown_df.assign(
+                _symbol_key=active_breakdown_df["symbol"].astype(str).str.upper().str.strip()
+            )
+            for symbol, symbol_rows in active_breakdown_df.groupby("_symbol_key"):
+                symbol_isins = (
+                    {
+                        str(isin).upper().strip()
+                        for isin in symbol_rows["isin"].dropna()
+                        if str(isin).strip()
+                    }
+                    if "isin" in symbol_rows.columns
+                    else set()
+                )
+                if symbol and symbol not in kite_symbols and not (symbol_isins & kite_isins):
+                    breakdown_symbols.add(symbol)
+
+    return sorted(kite_symbols | breakdown_symbols)
 
 
 def _filter_breakdown_for_holding(
@@ -1683,7 +1745,9 @@ if selected_main_tab == "Holdings":
         if kite_holdings_df is None:
             st.info("Fetch holdings to display holdings breakdown.")
         else:
-            holding_symbols = _holding_symbol_options(kite_holdings_df)
+            holdings_breakdown_state_df = _holdings_breakdown_state_df()
+            holding_symbols = _holding_symbol_options(kite_holdings_df, holdings_breakdown_state_df)
+            kite_holding_symbols = set(_holding_symbol_options(kite_holdings_df))
             if not holding_symbols:
                 st.info("No holding symbols found.")
             else:
@@ -1693,14 +1757,17 @@ if selected_main_tab == "Holdings":
                     index=None,
                     placeholder="Select a holding",
                     key="holdings_breakdown_selected_symbol",
+                    format_func=lambda symbol: (
+                        symbol if symbol in kite_holding_symbols else f"{symbol} — not in Kite"
+                    ),
                 )
                 if not selected_breakdown_symbol:
                     pass
-                elif _holdings_breakdown_state_df().empty:
+                elif holdings_breakdown_state_df.empty:
                     st.info("No holdings breakdown found in Supabase.")
                 else:
                     selected_breakdown_df = _filter_breakdown_for_holding(
-                        _holdings_breakdown_state_df(),
+                        holdings_breakdown_state_df,
                         kite_holdings_df,
                         selected_breakdown_symbol,
                     )
