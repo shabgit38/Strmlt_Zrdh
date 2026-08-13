@@ -66,7 +66,7 @@ export function calculateOptionRows(rows: OptionCalculatorRow[]): CalculatedOpti
     const expiry = row.expiry ? new Date(row.expiry) : parsed?.expiry;
     const effectiveAvgPrice = avgPrice ?? ltp;
     const valuationPrice = exitPrice ?? ltp;
-    const invested = openQty !== null && ltp !== null ? Math.abs(openQty) * ltp : null;
+    const invested = openQty !== null && effectiveAvgPrice !== null ? Math.abs(openQty) * effectiveAvgPrice : null;
     const current = openQty !== null && valuationPrice !== null ? openQty * valuationPrice : null;
     const pnl =
       openQty !== null && valuationPrice !== null && effectiveAvgPrice !== null

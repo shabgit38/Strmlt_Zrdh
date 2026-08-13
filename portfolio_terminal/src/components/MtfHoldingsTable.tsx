@@ -1,12 +1,14 @@
 import type { MtfHolding } from "../types";
 import { formatMoney, formatPct, formatPrice, signedClass } from "../format";
 import { useState } from "react";
+import { Plus } from "lucide-react";
 
 type MtfHoldingsTableProps = {
   holdings: MtfHolding[];
+  onAddToCalculator?: (holding: MtfHolding) => void;
 };
 
-export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
+export function MtfHoldingsTable({ holdings, onAddToCalculator }: MtfHoldingsTableProps) {
   const [dailyInterestPct, setDailyInterestPct] = useState("0.04");
 
   if (holdings.length === 0) {
@@ -91,7 +93,20 @@ export function MtfHoldingsTable({ holdings }: MtfHoldingsTableProps) {
               return (
                 <tr key={holding.symbol} className="border-t border-terminal-line">
                   <td className="px-2 py-2 font-bold text-terminal-ink">
-                    {holding.symbol} <sup className="text-[0.6rem] font-extrabold text-amber-400">M</sup>
+                    <span className="inline-flex items-center gap-1.5">
+                      {onAddToCalculator ? (
+                        <button
+                          aria-label={`Add ${holding.symbol} to MTF calculator`}
+                          className="inline-flex rounded border border-terminal-line p-0.5 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink"
+                          onClick={() => onAddToCalculator(holding)}
+                          title={`Add ${holding.symbol} to MTF calculator`}
+                          type="button"
+                        >
+                          <Plus className="h-3 w-3" />
+                        </button>
+                      ) : null}
+                      <span>{holding.symbol} <sup className="text-[0.6rem] font-extrabold text-amber-400">M</sup></span>
+                    </span>
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums">{holding.mtfQty}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{formatPrice(holding.mtfAvgPrice)}</td>

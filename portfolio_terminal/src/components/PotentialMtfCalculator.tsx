@@ -3,17 +3,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatMoney, formatPct, formatPrice, signedClass } from "../format";
 import { setStreamlitComponentValue } from "../streamlitBridge";
 import type { CalculatorsLiveData, CalculatorsLiveRequest } from "../calculators/types";
+import type { MtfHolding } from "../types";
 
 const DAILY_INTEREST_RATE = 0.0004;
 const INITIAL_MARGIN_RATE = 0.2;
 const DAY_MS = 86_400_000;
 
-export function PotentialMtfCalculator({ liveData }: { liveData?: CalculatorsLiveData | null }) {
+export function PotentialMtfCalculator({ liveData, selectedHolding }: { liveData?: CalculatorsLiveData | null; selectedHolding?: MtfHolding | null }) {
   const defaults = useMemo(defaultDates, []);
   const [symbol, setSymbol] = useState("");
   const [quantity, setQuantity] = useState("");
   const [price, setPrice] = useState("");
   const [expectedReturn, setExpectedReturn] = useState("");
+  const [exitPrice, setExitPrice] = useState("");
   const [entryDate, setEntryDate] = useState(defaults.entry);
   const [exitDate, setExitDate] = useState(defaults.exit);
   const requestedSymbol = useRef("");
@@ -21,8 +23,20 @@ export function PotentialMtfCalculator({ liveData }: { liveData?: CalculatorsLiv
   const livePrice = normalizedSymbol ? liveData?.equities?.[normalizedSymbol]?.ltp : undefined;
 
   useEffect(() => {
-    if (livePrice !== undefined) setPrice(String(livePrice));
-  }, [livePrice]);
+    if (!selectedHolding) return;
+    setSymbol(selectedHolding.symbol.toUpperCase());
+    setQuantity(String(selectedHolding.mtfQty));
+    setPrice(String(selectedHolding.mtfAvgPrice));
+    setExitPrice(String(selectedHolding.ltp));
+    setExpectedReturn(String(returnFromPrices(selectedHolding.mtfAvgPrice, selectedHolding.ltp)));
+    if (selectedHolding.buyDate) setEntryDate(selectedHolding.buyDate);
+    setExitDate(localDate(new Date()));
+    requestedSymbol.current = selectedHolding.symbol.toUpperCase();
+  }, [selectedHolding]);
+
+  useEffect(() => {
+    if (livePrice !== undefined && normalizedSymbol !== selectedHolding?.symbol.trim().toUpperCase()) setPrice(String(livePrice));
+  }, [livePrice, normalizedSymbol, selectedHolding]);
 
   useEffect(() => {
     if (!normalizedSymbol || requestedSymbol.current === normalizedSymbol) return;
@@ -40,7 +54,22 @@ export function PotentialMtfCalculator({ liveData }: { liveData?: CalculatorsLiv
     return () => window.clearTimeout(timeout);
   }, [normalizedSymbol]);
 
-  const metrics = calculatePotentialMtf(quantity, price, expectedReturn, entryDate, exitDate);
+  const activeExistingHolding = normalizedSymbol === selectedHolding?.symbol.trim().toUpperCase() ? selectedHolding : null;
+  const metrics = calculatePotentialMtf(quantity, price, exitPrice, entryDate, exitDate, activeExistingHolding);
+
+  function updateExpectedReturn(value: string) {
+    setExpectedReturn(value);
+    const entry = positiveNumber(price);
+    const returnPct = finiteNumber(value);
+    setExitPrice(entry !== null && returnPct !== null ? String(entry * (1 + returnPct / 100)) : "");
+  }
+
+  function updateExitPrice(value: string) {
+    setExitPrice(value);
+    const entry = positiveNumber(price);
+    const projectedExit = positiveNumber(value);
+    setExpectedReturn(entry !== null && projectedExit !== null ? String(returnFromPrices(entry, projectedExit)) : "");
+  }
 
   return (
     <section className="space-y-3">
@@ -49,11 +78,12 @@ export function PotentialMtfCalculator({ liveData }: { liveData?: CalculatorsLiv
         <span className="text-xs normal-case font-normal">20% margin · 0.04% daily interest</span>
       </div>
       <div className="rounded-lg border border-terminal-line bg-terminal-panel p-3 shadow-sm">
-        <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid gap-2 sm:grid-cols-4 lg:grid-cols-7">
           <Field label="Symbol"><input value={symbol} onChange={(event) => { setSymbol(event.target.value.toUpperCase()); requestedSymbol.current = ""; }} placeholder="e.g. INFY" /></Field>
           <Field label="MTF Qty"><input type="number" min="0" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></Field>
-          <Field label="MTF Avg"><input type="number" min="0" step="0.05" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="Live / editable" /></Field>
-          <Field label="Exp Ret%"><input type="number" step="0.1" value={expectedReturn} onChange={(event) => setExpectedReturn(event.target.value)} /></Field>
+          <Field label="MTF Avg"><input type="number" min="0" step="0.05" value={price} onChange={(event) => { setPrice(event.target.value); setExpectedReturn(""); setExitPrice(""); }} placeholder="Live / editable" /></Field>
+          <Field label="Exp Ret%"><input type="number" step="0.1" value={expectedReturn} onChange={(event) => updateExpectedReturn(event.target.value)} /></Field>
+          <Field label="Exit Price"><input type="number" min="0" step="0.05" value={exitPrice} onChange={(event) => updateExitPrice(event.target.value)} /></Field>
           <Field label="Buy Date"><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} /></Field>
           <Field label="Exit Date"><input type="date" value={exitDate} onChange={(event) => setExitDate(event.target.value)} /></Field>
         </div>
@@ -85,25 +115,33 @@ function Metric({ label, value, tone = "text-terminal-ink" }: { label: string; v
   return <div className="min-w-0 rounded-md border border-terminal-line bg-terminal-panel-alt px-1.5 py-2"><div className="truncate text-[9px] font-semibold uppercase tracking-wide text-terminal-muted" title={label}>{label}</div><div className={`mt-0.5 truncate text-xs font-bold tabular-nums ${tone}`} title={value}>{value}</div></div>;
 }
 
-function calculatePotentialMtf(qtyText: string, priceText: string, returnText: string, entry: string, exit: string) {
+function calculatePotentialMtf(qtyText: string, priceText: string, exitPriceText: string, entry: string, exit: string, existing?: MtfHolding | null) {
   const qty = positiveNumber(qtyText);
   const entryPrice = positiveNumber(priceText);
-  const returnPct = finiteNumber(returnText);
+  const projectedExitPrice = positiveNumber(exitPriceText);
   const days = calendarDays(entry, exit);
-  const ready = qty !== null && entryPrice !== null && returnPct !== null && days !== null;
+  const ready = qty !== null && entryPrice !== null && projectedExitPrice !== null && days !== null;
   if (!ready) return emptyMetrics(days);
   const buyValue = qty * entryPrice;
-  const initialMargin = buyValue * INITIAL_MARGIN_RATE;
+  const initialMargin = existing ? existing.initialMargin : buyValue * INITIAL_MARGIN_RATE;
   const fundedAmount = buyValue - initialMargin;
   const interestPerDay = fundedAmount * DAILY_INTEREST_RATE;
   const interest = interestPerDay * days;
-  const exitPrice = entryPrice * (1 + returnPct / 100);
-  const grossPnl = buyValue * returnPct / 100;
-  const charges = estimatedRoundTripCharges(buyValue, qty * exitPrice);
+  const exitPrice = projectedExitPrice;
+  const grossPnl = qty * (exitPrice - entryPrice);
+  const charges = existing ? estimatedExistingPositionCharges(buyValue) : estimatedRoundTripCharges(buyValue, qty * exitPrice);
   const netPnl = grossPnl - interest - charges;
   const netReturnPct = initialMargin === 0 ? null : netPnl / initialMargin * 100;
   const breakeven = qty === 0 ? null : entryPrice + (interest + charges) / qty;
   return { days, buyValue, initialMargin, fundedAmount, interestPerDay, interest, exitPrice, grossPnl, charges, netPnl, netReturnPct, breakeven };
+}
+
+function estimatedExistingPositionCharges(buyValue: number) {
+  return Math.min(buyValue * 0.003, 20) + 15 * 1.18;
+}
+
+function returnFromPrices(entryPrice: number, exitPrice: number) {
+  return entryPrice === 0 ? 0 : ((exitPrice - entryPrice) / entryPrice) * 100;
 }
 
 function estimatedRoundTripCharges(buyValue: number, sellValue: number) {

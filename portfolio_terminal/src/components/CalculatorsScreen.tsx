@@ -47,6 +47,7 @@ export function CalculatorsScreen({
   const [avgRows, setAvgRows] = useState<AvgCalculatorRow[]>(() => [emptyAvgRow()]);
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
   const [avgEnabled, setAvgEnabled] = useState(false);
+  const [selectedMtfHolding, setSelectedMtfHolding] = useState<MtfHolding | null>(null);
   const [spots, setSpots] = useState<IndexSpot[]>([]);
   const [targetOptions, setTargetOptions] = useState<Record<string, TargetOptionContracts[]>>({});
   const [existingPositions, setExistingPositions] = useState<ExistingOptionPosition[]>([]);
@@ -345,8 +346,8 @@ export function CalculatorsScreen({
           </div>
         ) : null}
 
-        <MtfHoldingsTable holdings={refreshedMtfHoldings} />
-        <PotentialMtfCalculator liveData={liveData} />
+        <MtfHoldingsTable holdings={refreshedMtfHoldings} onAddToCalculator={setSelectedMtfHolding} />
+        <PotentialMtfCalculator liveData={liveData} selectedHolding={selectedMtfHolding} />
 
         {existingPositions.length > 0 ? (
           <ExistingPositionsSection
