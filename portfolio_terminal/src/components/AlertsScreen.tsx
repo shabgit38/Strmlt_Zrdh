@@ -187,7 +187,21 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
               <tbody>
                 {sortedAlerts.map((alert) => (
                   <tr key={alert.uuid} className={`border-t border-terminal-line ${editingUuid === alert.uuid ? "bg-terminal-selected" : ""}`}>
-                    <td className="w-[7.5rem] max-w-[7.5rem] whitespace-normal break-words px-3 py-2 text-xs font-semibold text-terminal-ink">{alert.lhs_tradingsymbol}</td>
+                    <td className="w-[7.5rem] max-w-[7.5rem] whitespace-normal break-words px-3 py-2 text-xs font-semibold text-terminal-ink">
+                      <span className="inline-flex items-center gap-1.5">
+                        <button
+                          aria-label={`Edit ${alert.lhs_tradingsymbol} alert`}
+                          className="rounded border border-terminal-line p-0.5 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
+                          type="button"
+                          title={alert.type === "simple" ? "Edit" : "ATO edit disabled in phase 1"}
+                          disabled={alert.type !== "simple" || pendingAction !== null}
+                          onClick={() => startEdit(alert)}
+                        >
+                          <Edit3 className="h-3 w-3" />
+                        </button>
+                        <span>{alert.lhs_tradingsymbol}</span>
+                      </span>
+                    </td>
                     <td className="w-32 max-w-32 whitespace-normal break-words px-3 py-2 text-xs text-terminal-ink" title={alert.name}>{alert.name}</td>
                     <td className="w-20 max-w-20 whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink">{alert.ltp === null || alert.ltp === undefined ? "-" : formatPrice(Number(alert.ltp))}</td>
                     <td className="w-32 max-w-32 whitespace-normal break-words px-2 py-2 text-xs leading-4 text-terminal-muted" title={alert.price_context || "-"}>
@@ -202,15 +216,6 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                     <td className={`w-20 max-w-20 truncate whitespace-nowrap px-2 py-2 text-xs font-semibold ${statusClass(alert.status)}`} title={alert.status}>{alert.status}</td>
                     <td className="w-20 max-w-20 whitespace-nowrap px-2 py-2 text-right">
                       <div className="inline-flex items-center gap-1">
-                        <button
-                          className="rounded-md border border-terminal-line p-2 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
-                          type="button"
-                          title={alert.type === "simple" ? "Edit" : "ATO edit disabled in phase 1"}
-                          disabled={alert.type !== "simple" || pendingAction !== null}
-                          onClick={() => startEdit(alert)}
-                        >
-                          <Edit3 className="h-4 w-4" />
-                        </button>
                         <button className="rounded-md border border-terminal-line p-2 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-avoid disabled:cursor-default disabled:opacity-40" type="button" title="Delete" disabled={pendingAction !== null} onClick={() => window.confirm(`Delete alert "${alert.name}"?`) && sendAction("delete", { uuid: alert.uuid })}>
                           <Trash2 className={`h-4 w-4 ${pendingAction === "delete" ? "animate-pulse text-terminal-near" : ""}`} />
                         </button>
