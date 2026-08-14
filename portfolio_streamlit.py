@@ -83,8 +83,17 @@ def _mtf_quantity_series(df: pd.DataFrame) -> pd.Series:
     ).fillna(0).set_axis(df.index)
 
 
-def _non_mtf_holdings_df(df: pd.DataFrame) -> pd.DataFrame:
-    return df[_mtf_quantity_series(df).le(0)].copy()
+def _delivery_holdings_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Return the delivery portion of each row, retaining mixed MTF holdings."""
+    if df.empty:
+        return df.copy()
+
+    delivery_df = df.copy()
+    delivery_quantity = pd.to_numeric(
+        delivery_df.get("quantity", pd.Series(0, index=delivery_df.index, dtype=float)),
+        errors="coerce",
+    ).fillna(0)
+    return delivery_df[delivery_quantity.gt(0)].copy()
 
 
 def mtf_symbols(holdings_df: pd.DataFrame | None) -> set[str]:
@@ -329,9 +338,7 @@ def build_portfolio_terminal_snapshot(
     if holdings_df.empty:
         return empty_snapshot
 
-    df = _non_mtf_holdings_df(holdings_df.copy())
-    if df.empty:
-        return empty_snapshot
+    df = _delivery_holdings_df(holdings_df.copy())
 
     df["invested"] = pd.to_numeric(df.get("average_price"), errors="coerce") * pd.to_numeric(df.get("quantity"), errors="coerce")
     df["current_value"] = pd.to_numeric(df.get("last_price"), errors="coerce") * pd.to_numeric(df.get("quantity"), errors="coerce")

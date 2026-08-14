@@ -364,9 +364,11 @@ def build_live_portfolio_snapshot() -> dict[str, Any]:
                     "dayChangePct": _float(holding.get("day_change_percentage")),
                 }
             )
-            continue
 
         quantity = _int(holding.get("quantity"))
+        if quantity <= 0:
+            continue
+
         average_price = _float(holding.get("average_price"))
         ltp = _float(holding.get("last_price"))
         invested = average_price * quantity
