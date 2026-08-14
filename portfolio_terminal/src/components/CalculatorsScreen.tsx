@@ -601,7 +601,6 @@ function ExistingPositionsSection({
               <HeaderCell align="right">P&L %</HeaderCell>
               <HeaderCell align="right">Balance</HeaderCell>
               <HeaderCell>Alert</HeaderCell>
-              <HeaderCell align="right"></HeaderCell>
             </tr>
           </thead>
           <tbody>
@@ -611,7 +610,21 @@ function ExistingPositionsSection({
               const metrics = existingPositionMetrics(position);
               return (
                 <tr key={symbol} className="border-t border-terminal-line">
-                  <ValueCell value={symbol} />
+                  <td className="px-3 py-2 text-terminal-ink">
+                    <span className="inline-flex items-center gap-1.5">
+                      <button
+                        aria-label={`Add ${symbol} to option calculator`}
+                        className="inline-flex rounded border border-terminal-line p-0.5 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
+                        disabled={alreadyAdded}
+                        onClick={() => onAdd(position)}
+                        title={alreadyAdded ? `${symbol} already added` : `Add ${symbol} to option calculator`}
+                        type="button"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                      <span>{symbol}</span>
+                    </span>
+                  </td>
                   <ValueCell align="right" value={position.quantity.toString()} />
                   <ValueCell align="right" value={formatPrice(position.averagePrice)} />
                   <ValueCell align="right" value={formatPrice(position.lastPrice)} />
@@ -626,16 +639,6 @@ function ExistingPositionsSection({
                   <td className={`px-3 py-2 text-xs font-semibold ${alertClass(metrics.alert.tone)}`}>
                     {metrics.alert.label}
                   </td>
-                  <td className="px-3 py-2 text-right">
-                    <button
-                      className="rounded-md border border-terminal-line px-3 py-1 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover disabled:cursor-default disabled:opacity-40"
-                      disabled={alreadyAdded}
-                      type="button"
-                      onClick={() => onAdd(position)}
-                    >
-                      {alreadyAdded ? "Added" : "Add"}
-                    </button>
-                  </td>
                 </tr>
               );
             })}
@@ -644,7 +647,7 @@ function ExistingPositionsSection({
               <ValueCell align="right" value={formatMoney(totals.invested)} />
               <ValueCell align="right" value={formatMoney(totals.pnl)} tone={totals.pnl} />
               <ValueCell align="right" value={formatNullablePct(totalPnlPct)} tone={totalPnlPct} />
-              <td colSpan={3}></td>
+              <td colSpan={2}></td>
             </tr>
           </tbody>
         </table>
