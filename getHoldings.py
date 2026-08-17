@@ -1907,7 +1907,14 @@ if selected_main_tab == "Historic Data":
                 st.session_state["historic_previous_selected_index"] = selected_index
                 st.rerun()
         else:
-            selected_constituents = indices[selected_index]
+            constituent_tickers = [
+                ticker.strip()
+                for ticker in indices[selected_index].split(",")
+                if ticker.strip()
+            ]
+            selected_constituents = ", ".join(
+                dict.fromkeys([selected_index, *constituent_tickers])
+            )
             if st.session_state["historic_tickers_input"] != selected_constituents:
                 st.session_state["historic_tickers_input"] = selected_constituents
                 st.session_state["historic_saved_tickers_input"] = selected_constituents
