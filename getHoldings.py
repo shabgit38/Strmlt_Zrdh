@@ -1912,8 +1912,18 @@ if selected_main_tab == "Historic Data":
                 for ticker in indices[selected_index].split(",")
                 if ticker.strip()
             ]
+            prepend_index_names = {
+                ticker.strip().upper()
+                for group_name, group_constituents in indices.items()
+                if group_name.strip().lower() in {"main indices", "indices2"}
+                for ticker in group_constituents.split(",")
+                if ticker.strip()
+            }
+            selected_tickers = constituent_tickers
+            if selected_index.strip().upper() in prepend_index_names:
+                selected_tickers = [selected_index, *selected_tickers]
             selected_constituents = ", ".join(
-                dict.fromkeys([selected_index, *constituent_tickers])
+                dict.fromkeys(selected_tickers)
             )
             if st.session_state["historic_tickers_input"] != selected_constituents:
                 st.session_state["historic_tickers_input"] = selected_constituents
