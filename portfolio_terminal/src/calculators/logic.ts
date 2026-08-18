@@ -93,9 +93,9 @@ export function calculateOptionRows(rows: OptionCalculatorRow[]): CalculatedOpti
     return {
       ...row,
       symbol,
-      avgPrice: row.avgPrice || (ltp === null ? "" : String(ltp)),
+      avgPrice: row.avgPrice || (ltp === null ? "" : ltp.toFixed(2)),
       optionType: row.optionType || parsed?.type || "",
-      strike: row.strike || (parsed?.strike === undefined ? "" : String(parsed.strike)),
+      strike: row.strike || (parsed?.strike === undefined ? "" : parsed.strike.toFixed(0)),
       expiry: row.expiry || dateToInputValue(parsed?.expiry ?? null),
       daysExpiry,
       breakeven,

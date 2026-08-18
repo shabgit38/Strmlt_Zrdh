@@ -4,6 +4,13 @@ export function formatMoney(value: number): string {
   }).format(value);
 }
 
+export function formatMoneyWithDecimals(value: number): string {
+  return new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
 export function formatPrice(value: number): string {
   return new Intl.NumberFormat("en-IN", {
     minimumFractionDigits: 2,

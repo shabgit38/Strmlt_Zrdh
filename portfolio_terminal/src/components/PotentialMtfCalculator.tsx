@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { formatMoney, formatPct, formatPrice, signedClass } from "../format";
+import { formatMoneyWithDecimals, formatPct, formatPrice, signedClass } from "../format";
 import { setStreamlitComponentValue } from "../streamlitBridge";
 import type { CalculatorsLiveData, CalculatorsLiveRequest } from "../calculators/types";
 import type { MtfHolding } from "../types";
@@ -26,16 +26,18 @@ export function PotentialMtfCalculator({ liveData, selectedHolding }: { liveData
     if (!selectedHolding) return;
     setSymbol(selectedHolding.symbol.toUpperCase());
     setQuantity(String(selectedHolding.mtfQty));
-    setPrice(String(selectedHolding.mtfAvgPrice));
-    setExitPrice(String(selectedHolding.ltp));
-    setExpectedReturn(String(returnFromPrices(selectedHolding.mtfAvgPrice, selectedHolding.ltp)));
-    if (selectedHolding.buyDate) setEntryDate(selectedHolding.buyDate);
+    setPrice(decimalInput(selectedHolding.mtfAvgPrice));
+    setExitPrice(decimalInput(selectedHolding.ltp));
+    setExpectedReturn(decimalInput(returnFromPrices(selectedHolding.mtfAvgPrice, selectedHolding.ltp)));
+    setEntryDate(selectedHolding.buyDate || defaults.entry);
     setExitDate(localDate(new Date()));
     requestedSymbol.current = selectedHolding.symbol.toUpperCase();
-  }, [selectedHolding]);
+  }, [defaults.entry, selectedHolding]);
 
   useEffect(() => {
-    if (livePrice !== undefined && normalizedSymbol !== selectedHolding?.symbol.trim().toUpperCase()) setPrice(String(livePrice));
+    const selectedSymbol = selectedHolding?.symbol.trim().toUpperCase();
+    if (livePrice === undefined || (selectedSymbol && requestedSymbol.current === selectedSymbol)) return;
+    setPrice(decimalInput(livePrice));
   }, [livePrice, normalizedSymbol, selectedHolding]);
 
   useEffect(() => {
@@ -61,14 +63,14 @@ export function PotentialMtfCalculator({ liveData, selectedHolding }: { liveData
     setExpectedReturn(value);
     const entry = positiveNumber(price);
     const returnPct = finiteNumber(value);
-    setExitPrice(entry !== null && returnPct !== null ? String(entry * (1 + returnPct / 100)) : "");
+    setExitPrice(entry !== null && returnPct !== null ? decimalInput(entry * (1 + returnPct / 100)) : "");
   }
 
   function updateExitPrice(value: string) {
     setExitPrice(value);
     const entry = positiveNumber(price);
     const projectedExit = positiveNumber(value);
-    setExpectedReturn(entry !== null && projectedExit !== null ? String(returnFromPrices(entry, projectedExit)) : "");
+    setExpectedReturn(entry !== null && projectedExit !== null ? decimalInput(returnFromPrices(entry, projectedExit)) : "");
   }
 
   return (
@@ -172,8 +174,9 @@ function localDate(date: Date) {
 
 function finiteNumber(value: string) { const parsed = Number(value); return value.trim() && Number.isFinite(parsed) ? parsed : null; }
 function positiveNumber(value: string) { const parsed = finiteNumber(value); return parsed !== null && parsed > 0 ? parsed : null; }
+function decimalInput(value: number) { return value.toFixed(2); }
 function emptyMetrics(days: number | null) { return { days, buyValue: null, initialMargin: null, fundedAmount: null, interestPerDay: null, interest: null, exitPrice: null, grossPnl: null, charges: null, netPnl: null, netReturnPct: null, breakeven: null }; }
-function money(value: number | null) { return value === null ? "-" : formatMoney(value); }
+function money(value: number | null) { return value === null ? "-" : formatMoneyWithDecimals(value); }
 function priceValue(value: number | null) { return value === null ? "-" : formatPrice(value); }
 function pct(value: number | null) { return value === null ? "-" : formatPct(value); }
 function tone(value: number | null) { return value === null ? "text-terminal-ink" : signedClass(value); }

@@ -1,7 +1,7 @@
 import { Calculator, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { formatMoney, formatPct, formatPrice, signedClass } from "../format";
+import { formatMoneyWithDecimals, formatPct, formatPrice, signedClass } from "../format";
 import { setStreamlitComponentValue } from "../streamlitBridge";
 import {
   calculateAvgRows,
@@ -139,11 +139,11 @@ export function CalculatorsScreen({
           if (!quote) return row;
           return {
             ...row,
-            ltp: quote.ltp === undefined ? row.ltp : String(quote.ltp),
-            avgPrice: row.avgPrice || (quote.ltp === undefined ? "" : String(quote.ltp)),
-            spot: quote.spot === undefined ? row.spot : String(quote.spot),
+            ltp: quote.ltp === undefined ? row.ltp : decimalInput(quote.ltp),
+            avgPrice: row.avgPrice || (quote.ltp === undefined ? "" : decimalInput(quote.ltp)),
+            spot: quote.spot === undefined ? row.spot : wholeNumberInput(quote.spot),
             expiry: row.expiry || quote.expiry || "",
-            strike: row.strike || (quote.strike === undefined ? "" : String(quote.strike)),
+            strike: row.strike || (quote.strike === undefined ? "" : wholeNumberInput(quote.strike)),
             optionType: row.optionType || quote.optionType || "",
             openQty: row.openQty || (quote.lotSize === undefined ? "" : String(quote.lotSize)),
           };
@@ -223,9 +223,9 @@ export function CalculatorsScreen({
           ...emptyOptionRow(),
           symbol,
           openQty: String(contract.lotSize),
-          spot: String(spot),
+          spot: wholeNumberInput(spot),
           expiry: contract.expiry,
-          strike: String(contract.strike),
+          strike: wholeNumberInput(contract.strike),
           optionType: contract.optionType,
         },
         symbol,
@@ -245,11 +245,11 @@ export function CalculatorsScreen({
       ...emptyOptionRow(),
       symbol: position.symbol,
       openQty: String(position.quantity),
-      avgPrice: position.averagePrice ? String(position.averagePrice) : "",
-      ltp: position.lastPrice ? String(position.lastPrice) : "",
-      spot: position.spot === undefined ? "" : String(position.spot),
+      avgPrice: position.averagePrice ? decimalInput(position.averagePrice) : "",
+      ltp: position.lastPrice ? decimalInput(position.lastPrice) : "",
+      spot: position.spot === undefined ? "" : wholeNumberInput(position.spot),
       expiry: position.expiry ?? "",
-      strike: position.strike === undefined ? "" : String(position.strike),
+      strike: position.strike === undefined ? "" : wholeNumberInput(position.strike),
       optionType: position.optionType ?? "",
     });
   }
@@ -490,7 +490,7 @@ export function CalculatorsScreen({
                 row.symbol,
                 row.qty.toString(),
                 formatPrice(row.avgBuy),
-                formatMoney(row.totalInvested),
+                formatMoneyWithDecimals(row.totalInvested),
                 formatNullableMoney(row.profit),
                 formatNullablePct(row.profitPct),
               ])}
@@ -540,7 +540,7 @@ export function CalculatorsScreen({
                   row.totalQty.toString(),
                   formatNullablePrice(row.totalAveragePrice),
                   formatNullablePrice(row.breakeven),
-                  formatMoney(row.totalInvested),
+                  formatMoneyWithDecimals(row.totalInvested),
                   formatNullableMoney(row.profit),
                   formatNullablePct(row.profitPct),
                 ])}
@@ -632,10 +632,10 @@ function ExistingPositionsSection({
                   <ValueCell align="right" highlight="amber" value={formatNullablePrice(metrics.breakeven)} />
                   <ValueCell align="right" highlight="amber" value={metrics.distSpot || "-"} />
                   <ValueCell align="right" highlight="amber" value={metrics.dte === null ? "-" : String(metrics.dte)} />
-                  <ValueCell align="right" value={formatMoney(metrics.invested)} />
-                  <ValueCell align="right" value={formatMoney(position.pnl)} tone={position.pnl} />
+                  <ValueCell align="right" value={formatMoneyWithDecimals(metrics.invested)} />
+                  <ValueCell align="right" value={formatMoneyWithDecimals(position.pnl)} tone={position.pnl} />
                   <ValueCell align="right" value={formatNullablePct(metrics.pnlPct)} tone={metrics.pnlPct} />
-                  <ValueCell align="right" value={formatMoney(metrics.balance)} tone={metrics.balance} />
+                  <ValueCell align="right" value={formatMoneyWithDecimals(metrics.balance)} tone={metrics.balance} />
                   <td className={`px-3 py-2 text-xs font-semibold ${alertClass(metrics.alert.tone)}`}>
                     {metrics.alert.label}
                   </td>
@@ -644,8 +644,8 @@ function ExistingPositionsSection({
             })}
             <tr className="border-t-2 border-terminal-line bg-terminal-panel-alt font-semibold">
               <td className="px-3 py-2 text-terminal-ink" colSpan={8}>Total</td>
-              <ValueCell align="right" value={formatMoney(totals.invested)} />
-              <ValueCell align="right" value={formatMoney(totals.pnl)} tone={totals.pnl} />
+              <ValueCell align="right" value={formatMoneyWithDecimals(totals.invested)} />
+              <ValueCell align="right" value={formatMoneyWithDecimals(totals.pnl)} tone={totals.pnl} />
               <ValueCell align="right" value={formatNullablePct(totalPnlPct)} tone={totalPnlPct} />
               <td colSpan={2}></td>
             </tr>
@@ -987,7 +987,7 @@ function SummaryTable({
 }
 
 function formatNullableMoney(value: number | null): string {
-  return value === null ? "-" : formatMoney(value);
+  return value === null ? "-" : formatMoneyWithDecimals(value);
 }
 
 function formatNullablePrice(value: number | null): string {
@@ -1000,6 +1000,14 @@ function formatNullablePct(value: number | null): string {
 
 function formatInteger(value: number | null): string {
   return value === null ? "-" : value.toString();
+}
+
+function decimalInput(value: number): string {
+  return value.toFixed(2);
+}
+
+function wholeNumberInput(value: number): string {
+  return value.toFixed(0);
 }
 
 function formatStrikeWithSpotDistance(strike: number, spot: number | null): string {
@@ -1025,7 +1033,7 @@ function spotSummary(spots: IndexSpot[]): string {
 function spotForSymbol(symbol: string, spots: IndexSpot[]): string | null {
   const normalizedSymbol = symbol.trim().toUpperCase();
   const spot = displaySpots(spots).find((item) => normalizedSymbol.startsWith(item.symbol));
-  return spot?.spot === null || spot?.spot === undefined ? null : String(spot.spot);
+  return spot?.spot === null || spot?.spot === undefined ? null : wholeNumberInput(spot.spot);
 }
 
 function alertClass(tone: "normal" | "review" | "warning" | "exit" | "hardExit"): string {
