@@ -66,6 +66,23 @@ export function CalculatorsScreen({
     [optionRows, spots],
   );
   const calculatedOptionRows = useMemo(() => calculateOptionRows(effectiveOptionRows), [effectiveOptionRows]);
+  const selectedOptionAverageRows = useMemo(
+    () =>
+      calculatedOptionRows
+        .filter((row) => row.avgSelected && row.symbol.trim())
+        .map((row) => ({
+          id: row.id,
+          symbol: row.symbol,
+          qty: row.openQty,
+          avgPrice: row.avgPrice,
+          ltp: row.exitPrice || row.ltp,
+        })),
+    [calculatedOptionRows],
+  );
+  const selectedOptionAverageSummaryRows = useMemo(
+    () => summarizeAverage(selectedOptionAverageRows),
+    [selectedOptionAverageRows],
+  );
   const calculatedTradeRows = useMemo(() => calculateTradeRows(tradeRows), [tradeRows]);
   const tradeSummaryRows = useMemo(() => summarizeTrades(tradeRows), [tradeRows]);
   const calculatedAvgRows = useMemo(() => calculateAvgRows(avgRows), [avgRows]);
@@ -183,9 +200,12 @@ export function CalculatorsScreen({
     setOptionRows((rows) => rows.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
   }
 
+  function toggleOptionAverage(id: string, avgSelected: boolean) {
+    setOptionRows((rows) => rows.map((row) => (row.id === id ? { ...row, avgSelected } : row)));
+  }
+
   function addOptionRow(row: OptionCalculatorRow, generatedSymbol?: string) {
     setOptionRows((rows) => {
-      if (rows.some((existingRow) => existingRow.symbol.trim().toUpperCase() === row.symbol.trim().toUpperCase())) return rows;
       const blankRowIndex = rows.findIndex(isBlankOptionRow);
       if (blankRowIndex >= 0) {
         if (generatedSymbol) {
@@ -227,6 +247,7 @@ export function CalculatorsScreen({
           expiry: contract.expiry,
           strike: wholeNumberInput(contract.strike),
           optionType: contract.optionType,
+          avgSelected: true,
         },
         symbol,
       );
@@ -251,6 +272,7 @@ export function CalculatorsScreen({
       expiry: position.expiry ?? "",
       strike: position.strike === undefined ? "" : wholeNumberInput(position.strike),
       optionType: position.optionType ?? "",
+      avgSelected: true,
     });
   }
 
@@ -350,9 +372,7 @@ export function CalculatorsScreen({
         <PotentialMtfCalculator liveData={liveData} selectedHolding={selectedMtfHolding} />
 
         {existingPositions.length > 0 ? (
-          <ExistingPositionsSection
-            existingSymbols={new Set(optionRows.map((row) => row.symbol.trim().toUpperCase()).filter(Boolean))}
-            onAdd={addExistingPosition}
+          <ExistingPositionsSection onAdd={addExistingPosition}
             positions={existingPositions}
           />
         ) : null}
@@ -388,12 +408,12 @@ export function CalculatorsScreen({
                   <HeaderCell align="right" highlight="amber">DTE</HeaderCell>
                   <HeaderCell align="right" highlight="amber">Breakeven</HeaderCell>
                   <HeaderCell align="right" highlight="amber">Dist Spot</HeaderCell>
-                  <HeaderCell>Alert</HeaderCell>
                   <HeaderCell align="right">Invested</HeaderCell>
                   <HeaderCell align="right">Exit</HeaderCell>
                   <HeaderCell align="right">Current</HeaderCell>
                   <HeaderCell align="right">P&L</HeaderCell>
                   <HeaderCell align="right">P&L %</HeaderCell>
+                  <HeaderCell align="right">Avg</HeaderCell>
                   <HeaderCell align="right"></HeaderCell>
                 </tr>
               </thead>
@@ -407,12 +427,20 @@ export function CalculatorsScreen({
                     <ValueCell align="right" highlight="amber" value={formatInteger(row.daysExpiry)} />
                     <ValueCell align="right" highlight="amber" value={formatNullablePrice(row.breakeven)} />
                     <ValueCell align="right" highlight="amber" value={row.distSpot || "-"} />
-                    <td className={`px-3 py-2 text-xs font-semibold ${alertClass(row.alertTone)}`}>{row.alert}</td>
                     <ValueCell align="right" value={formatNullableMoney(row.invested)} />
                     <InputCell align="right" widthClass="w-20" value={row.exitPrice} onChange={(value) => updateOptionRow(row.id, "exitPrice", value)} />
                     <ValueCell align="right" value={formatNullableMoney(row.current)} />
                     <ValueCell align="right" value={formatNullableMoney(row.pnl)} tone={row.pnl} />
                     <ValueCell align="right" value={formatNullablePct(row.pnlPct)} tone={row.pnlPct} />
+                    <td className="px-3 py-2 text-right">
+                      <input
+                        aria-label={`Include ${row.symbol || "option"} in average`}
+                        checked={row.avgSelected}
+                        className="h-4 w-4 accent-terminal-watch"
+                        onChange={(event) => toggleOptionAverage(row.id, event.target.checked)}
+                        type="checkbox"
+                      />
+                    </td>
                     <ActionCell onRemove={() => removeOptionRow(row.id)} disabled={optionRows.length <= 1} />
                   </tr>
                 ))}
@@ -420,6 +448,26 @@ export function CalculatorsScreen({
             </table>
           </div>
         </section>
+
+        {selectedOptionAverageSummaryRows.length > 0 ? (
+          <section className="space-y-3">
+            <SectionHeader title="Selected Averages" />
+            <SummaryTable
+              headers={["Symbol", "Total Qty", "Total Avg", "Breakeven", "Invested", "P&L", "P&L %"]}
+              rows={selectedOptionAverageSummaryRows.map((row) => [
+                row.symbol,
+                row.totalQty.toString(),
+                formatNullablePrice(row.totalAveragePrice),
+                formatNullablePrice(row.breakeven),
+                formatMoneyWithDecimals(row.totalInvested),
+                formatNullableMoney(row.profit),
+                formatNullablePct(row.profitPct),
+              ])}
+              toneColumns={[5, 6]}
+              toneValues={selectedOptionAverageSummaryRows.map((row) => [row.profit, row.profitPct])}
+            />
+          </section>
+        ) : null}
 
         <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -556,11 +604,9 @@ export function CalculatorsScreen({
 }
 
 function ExistingPositionsSection({
-  existingSymbols,
   onAdd,
   positions,
 }: {
-  existingSymbols: Set<string>;
   onAdd: (position: ExistingOptionPosition) => void;
   positions: ExistingOptionPosition[];
 }) {
@@ -600,13 +646,11 @@ function ExistingPositionsSection({
               <HeaderCell align="right">P&L</HeaderCell>
               <HeaderCell align="right">P&L %</HeaderCell>
               <HeaderCell align="right">Balance</HeaderCell>
-              <HeaderCell>Alert</HeaderCell>
             </tr>
           </thead>
           <tbody>
             {positions.map((position) => {
               const symbol = position.symbol.trim().toUpperCase();
-              const alreadyAdded = existingSymbols.has(symbol);
               const metrics = existingPositionMetrics(position);
               return (
                 <tr key={symbol} className="border-t border-terminal-line">
@@ -614,10 +658,9 @@ function ExistingPositionsSection({
                     <span className="inline-flex items-center gap-1.5">
                       <button
                         aria-label={`Add ${symbol} to option calculator`}
-                        className="inline-flex rounded border border-terminal-line p-0.5 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink disabled:cursor-default disabled:opacity-40"
-                        disabled={alreadyAdded}
+                        className="inline-flex rounded border border-terminal-line p-0.5 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-ink"
                         onClick={() => onAdd(position)}
-                        title={alreadyAdded ? `${symbol} already added` : `Add ${symbol} to option calculator`}
+                        title={`Add ${symbol} to option calculator`}
                         type="button"
                       >
                         <Plus className="h-3 w-3" />
@@ -636,9 +679,6 @@ function ExistingPositionsSection({
                   <ValueCell align="right" value={formatMoneyWithDecimals(position.pnl)} tone={position.pnl} />
                   <ValueCell align="right" value={formatNullablePct(metrics.pnlPct)} tone={metrics.pnlPct} />
                   <ValueCell align="right" value={formatMoneyWithDecimals(metrics.balance)} tone={metrics.balance} />
-                  <td className={`px-3 py-2 text-xs font-semibold ${alertClass(metrics.alert.tone)}`}>
-                    {metrics.alert.label}
-                  </td>
                 </tr>
               );
             })}
@@ -831,21 +871,23 @@ function ContractPicker({
   );
 }
 
-function SectionHeader({ title, meta = "", onAdd }: { title: string; meta?: string; onAdd: () => void }) {
+function SectionHeader({ title, meta = "", onAdd }: { title: string; meta?: string; onAdd?: () => void }) {
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="flex flex-wrap items-center gap-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-terminal-muted">{title}</h2>
         {meta ? <span className="text-sm font-semibold tabular-nums text-terminal-ink">{meta}</span> : null}
       </div>
-      <button
-        className="inline-flex items-center gap-1 rounded-md border border-terminal-line px-3 py-2 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover"
-        type="button"
-        onClick={onAdd}
-      >
-        <Plus className="h-4 w-4" />
-        Add
-      </button>
+      {onAdd ? (
+        <button
+          className="inline-flex items-center gap-1 rounded-md border border-terminal-line px-3 py-2 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover"
+          type="button"
+          onClick={onAdd}
+        >
+          <Plus className="h-4 w-4" />
+          Add
+        </button>
+      ) : null}
     </div>
   );
 }

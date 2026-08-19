@@ -34,6 +34,7 @@ export function emptyOptionRow(): OptionCalculatorRow {
     strike: "",
     optionType: "",
     exitPrice: "",
+    avgSelected: false,
   };
 }
 

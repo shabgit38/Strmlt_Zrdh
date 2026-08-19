@@ -9,6 +9,7 @@ export type OptionCalculatorRow = {
   strike: string;
   optionType: string;
   exitPrice: string;
+  avgSelected: boolean;
 };
 
 export type CalculatedOptionRow = OptionCalculatorRow & {
