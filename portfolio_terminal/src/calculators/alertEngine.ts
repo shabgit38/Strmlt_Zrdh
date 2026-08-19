@@ -19,9 +19,16 @@ export function generateExitAlert({
   thesisValid?: boolean;
 }): AlertResult {
   const alerts: AlertResult[] = [];
+  const hasPremiumValues =
+    entryPrice !== null &&
+    entryPrice > 0 &&
+    Number.isFinite(entryPrice) &&
+    currentLtp !== null &&
+    Number.isFinite(currentLtp);
+  const premiumChangePct = hasPremiumValues ? ((currentLtp - entryPrice) / entryPrice) * 100 : null;
 
-  if (entryPrice !== null && entryPrice > 0 && currentLtp !== null) {
-    const lossPct = ((entryPrice - currentLtp) / entryPrice) * 100;
+  if (premiumChangePct !== null) {
+    const lossPct = -premiumChangePct;
     if (lossPct >= 50) alerts.push({ label: "Exit: Premium down 50%", tone: "exit" });
     else if (lossPct >= 35) alerts.push({ label: "Warning: Premium down 35%", tone: "warning" });
     else if (lossPct >= 25) alerts.push({ label: "Review: Premium down 25%", tone: "review" });
@@ -32,5 +39,15 @@ export function generateExitAlert({
 
   if (!thesisValid) alerts.push({ label: "Exit: Thesis invalidated", tone: "exit" });
 
-  return alerts[0] ?? { label: "Normal", tone: "normal" };
+  return {
+    label: formatPremiumChange(premiumChangePct),
+    tone: alerts[0]?.tone ?? "normal",
+  };
+}
+
+function formatPremiumChange(changePct: number | null): string {
+  if (changePct === null) return "-";
+  if (changePct > 0) return `↑ ${changePct.toFixed(2)}%`;
+  if (changePct < 0) return `↓ ${Math.abs(changePct).toFixed(2)}%`;
+  return "0.00%";
 }

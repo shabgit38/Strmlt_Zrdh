@@ -928,6 +928,7 @@ def format_price_ladder_summary_html(
     *,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    early_entry_labels: dict[str, list[str]] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     show_positions: bool = False,
     mtf_symbols: set[str] | None = None,
@@ -942,6 +943,7 @@ def format_price_ladder_summary_html(
             dashboard_df=dashboard_df if show_positions else None,
             highlight_symbols=highlight_symbols,
             momentum_labels=momentum_labels,
+            early_entry_labels=early_entry_labels,
             notes_by_symbol=notes_by_symbol,
             mtf_symbols=mtf_symbols,
         )
@@ -1057,6 +1059,7 @@ def _format_symbol_color_summary(
     dashboard_df: pd.DataFrame | None = None,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    early_entry_labels: dict[str, list[str]] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     mtf_symbols: set[str] | None = None,
 ) -> str:
@@ -1074,6 +1077,7 @@ def _format_symbol_color_summary(
                 dashboard_df,
                 highlight_symbols,
                 momentum_labels,
+                early_entry_labels,
                 notes_by_symbol,
                 mtf_symbols,
             )
@@ -1105,6 +1109,7 @@ def _format_summary_symbols_with_positions(
     dashboard_df: pd.DataFrame,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    early_entry_labels: dict[str, list[str]] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     mtf_symbols: set[str] | None = None,
 ) -> str:
@@ -1124,6 +1129,11 @@ def _format_summary_symbols_with_positions(
     normalized_notes = {
         str(symbol).strip().upper(): [" ".join(str(note).split()) for note in notes if str(note).strip()]
         for symbol, notes in (notes_by_symbol or {}).items()
+        if str(symbol).strip()
+    }
+    normalized_early_entry_labels = {
+        str(symbol).strip().upper(): [str(label).strip() for label in labels if str(label).strip()]
+        for symbol, labels in (early_entry_labels or {}).items()
         if str(symbol).strip()
     }
     label_colors = {
@@ -1146,6 +1156,15 @@ def _format_summary_symbols_with_positions(
             f"{escape(momentum_label)}</span>"
             if momentum_label
             else "<span></span>"
+        )
+        early_entry_badge = " · ".join(
+            escape(label) for label in normalized_early_entry_labels.get(symbol_text.upper(), [])
+        )
+        early_entry_html = (
+            "<div style='grid-column:1 / -1;color:#64748B;font-size:0.68rem;font-weight:600;"
+            f"line-height:1.2;margin-top:-0.15rem;'>{early_entry_badge}</div>"
+            if early_entry_badge
+            else ""
         )
         symbol_style = "font-weight:400;"
         if accent:
@@ -1184,6 +1203,7 @@ def _format_summary_symbols_with_positions(
             + "</span>"
             f"{position_text_html}"
             f"{position_chart_html}"
+            f"{early_entry_html}"
             + (
                 "<div style='grid-column:2 / -1;margin-top:-0.2rem;padding-left:0.2rem;"
                 "display:grid;gap:0.08rem;'>"

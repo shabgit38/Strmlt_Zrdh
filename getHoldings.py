@@ -21,8 +21,10 @@ from kite_analytics import (
     display_historic_returns_frame,
     format_price_ladder_summary_html,
     highlight_numeric_scale_cells,
+    load_analytics_history,
 )
 from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is_token_error
+from momentum_early_entry import calculate_early_entry_frame
 from momentum_score import calculate_momentum_scores_from_kite
 from portfolio_terminal_component import render_calculators_terminal, render_portfolio_terminal
 from setAlerts import render_alerts_tab
@@ -63,6 +65,16 @@ BUTTON_HOVER_COLOR = "#f2b766"
 BUTTON_TEXT_COLOR = "#1f2937"
 LTP_REFRESH_INTERVAL_MS = 60 * 60 * 1000
 HOLDINGS_BREAKDOWN_ADD_MESSAGE_KEY = "holdings_breakdown_add_message"
+
+PRICE_LADDER_EARLY_ENTRY_LABELS = (
+    ("recent_pullback", "Recent pullback"),
+    ("weekly_breakout", "Weekly breakout"),
+    ("monthly_breakout", "Monthly breakout"),
+    ("high20_breakout", "20D high breakout"),
+    ("high60_breakout", "60D high breakout"),
+    ("ema20_bounce", "EMA20 bounce"),
+    ("ema50_reclaim", "EMA50 reclaim"),
+)
 
 
 def _live_ltp_refreshed_caption(state_key: str) -> None:
@@ -1212,6 +1224,14 @@ def fetch_and_display_holdings():
                 df.to_dict(orient="records"),
                 as_of_date,
             )
+            early_entry_labels = _price_ladder_early_entry_labels_by_symbol(
+                kite,
+                df.to_dict(orient="records"),
+                as_of_date,
+                momentum_df,
+                symbol_key="tradingsymbol",
+                live_ltp_by_symbol=_holdings_live_ltp_by_symbol(df),
+            )
             st.session_state["kite_holdings_df"] = df
             st.session_state["kite_holdings_dashboard_df"] = dashboard_df
             st.session_state["kite_holdings_day_movers_df"] = day_movers_df
@@ -1220,6 +1240,7 @@ def fetch_and_display_holdings():
             st.session_state["kite_holdings_as_of_date"] = as_of_date
             st.session_state.pop("kite_holdings_returns_df", None)
             st.session_state["kite_holdings_momentum_df"] = momentum_df
+            st.session_state["kite_holdings_early_entry_labels"] = early_entry_labels
             st.session_state["kite_holdings_momentum_failed_symbols"] = momentum_failed_symbols
             st.session_state["kite_holdings_momentum_benchmark_used"] = DEFAULT_MOMENTUM_BENCHMARK
             if momentum_error:
@@ -1245,6 +1266,7 @@ def fetch_and_display_holdings():
             st.session_state.pop("kite_holdings_df", None)
             st.session_state.pop("kite_holdings_returns_df", None)
             st.session_state.pop("kite_holdings_momentum_df", None)
+            st.session_state.pop("kite_holdings_early_entry_labels", None)
             st.session_state.pop("kite_holdings_momentum_failed_symbols", None)
             st.session_state.pop("kite_holdings_momentum_error", None)
             st.session_state.pop("kite_holdings_momentum_benchmark_used", None)
@@ -1316,11 +1338,52 @@ def _calculate_holdings_momentum_data(
         return pd.DataFrame(), [], str(exc)
 
 
+def _price_ladder_early_entry_labels_by_symbol(
+    kite: Any,
+    token_rows: list[dict[str, Any]],
+    as_of_date: str,
+    momentum_df: pd.DataFrame,
+    *,
+    symbol_key: str = "Ticker",
+    token_key: str = "instrument_token",
+    live_ltp_by_symbol: dict[str, float] | None = None,
+) -> dict[str, list[str]]:
+    """Format existing early-entry features as non-scoring price-ladder labels."""
+    stock_data: dict[str, pd.DataFrame] = {}
+    for row in token_rows:
+        symbol = str(row.get(symbol_key) or "").strip().upper()
+        token = row.get(token_key)
+        if not symbol or pd.isna(token):
+            continue
+        stock_data[symbol] = load_analytics_history(kite, token, as_of_date)
+
+    early_entry_df = calculate_early_entry_frame(
+        stock_data,
+        momentum_df,
+        live_ltp_by_symbol=live_ltp_by_symbol,
+    )
+    labels_by_symbol: dict[str, list[str]] = {}
+    for _, row in early_entry_df.iterrows():
+        labels = [
+            label
+            for field, label in PRICE_LADDER_EARLY_ENTRY_LABELS
+            if bool(row.get(field, False))
+        ]
+        if bool(row.get("recent_pullback", False)):
+            days = pd.to_numeric(row.get("days_since_pullback"), errors="coerce")
+            if pd.notna(days):
+                labels[0] = f"Recent pullback ({int(days)}d)"
+        if labels:
+            labels_by_symbol[str(row.get("ticker") or "").strip().upper()] = labels
+    return labels_by_symbol
+
+
 def _render_price_ladder_summary_card(
     dashboard_df: pd.DataFrame,
     *,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    early_entry_labels: dict[str, list[str]] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     show_positions: bool = False,
     mtf_symbols: set[str] | None = None,
@@ -1329,6 +1392,7 @@ def _render_price_ladder_summary_card(
         dashboard_df,
         highlight_symbols=highlight_symbols,
         momentum_labels=momentum_labels,
+        early_entry_labels=early_entry_labels,
         notes_by_symbol=notes_by_symbol,
         show_positions=show_positions,
         mtf_symbols=mtf_symbols,
@@ -1399,6 +1463,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
     )
     day_movers_df = st.session_state.get("kite_holdings_day_movers_df", pd.DataFrame())
     momentum_df = st.session_state.get("kite_holdings_momentum_df", pd.DataFrame())
+    early_entry_labels = st.session_state.get("kite_holdings_early_entry_labels", {})
     price_ladder_highlight_symbols = _summary_ticker_accents(
         build_portfolio_day_movers_summary(kite_holdings_df)
     )
@@ -1422,6 +1487,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
         sorted_dashboard_df,
         highlight_symbols=price_ladder_highlight_symbols,
         momentum_labels=_momentum_label_by_symbol(momentum_df),
+        early_entry_labels=early_entry_labels,
         notes_by_symbol=_stock_notes_by_symbol(momentum_df),
         show_positions=True,
         mtf_symbols=mtf_symbol_set,
@@ -2088,6 +2154,14 @@ if selected_main_tab == "Historic Data":
                         st.session_state.pop("historic_momentum_failed_symbols", None)
                         st.session_state.pop("historic_momentum_error", None)
 
+                    st.session_state["historic_early_entry_labels"] = _price_ladder_early_entry_labels_by_symbol(
+                        historic_kite,
+                        token_rows,
+                        as_of_date,
+                        st.session_state.get("historic_momentum_df", pd.DataFrame()),
+                        live_ltp_by_symbol=live_ltp_by_symbol,
+                    )
+
         except Exception as exc:
             if is_token_error(exc):
                 clear_auth_state()
@@ -2141,6 +2215,7 @@ if selected_main_tab == "Historic Data":
         returns_df = st.session_state.get("historic_returns_df", pd.DataFrame())
         day_movers_df = st.session_state.get("historic_day_movers_df", pd.DataFrame())
         momentum_df = st.session_state.get("historic_momentum_df", pd.DataFrame())
+        early_entry_labels = st.session_state.get("historic_early_entry_labels", {})
         benchmark_used = st.session_state.get("historic_momentum_benchmark_used")
         #if benchmark_used and not momentum_df.empty:
         #    st.caption(f"Relative strength benchmark: {benchmark_used}")
@@ -2205,6 +2280,7 @@ if selected_main_tab == "Historic Data":
                 filtered_dashboard_df,
                 highlight_symbols=historic_ladder_highlight_symbols,
                 momentum_labels=_momentum_label_by_symbol(momentum_df),
+                early_entry_labels=early_entry_labels,
                 notes_by_symbol=_stock_notes_by_symbol(momentum_df),
                 show_positions=True,
             )
