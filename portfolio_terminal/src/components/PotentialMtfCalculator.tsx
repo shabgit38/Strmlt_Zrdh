@@ -76,7 +76,7 @@ export function PotentialMtfCalculator({ liveData, selectedHolding }: { liveData
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold uppercase tracking-wide text-terminal-muted">
-        <span>Potential MTF Trade Calculator</span>
+        <span>MTF Trade Calculator</span>
         <span className="text-xs normal-case font-normal">20% margin · 0.04% daily interest</span>
       </div>
       <div className="rounded-lg border border-terminal-line bg-terminal-panel p-3 shadow-sm">

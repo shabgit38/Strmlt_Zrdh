@@ -14,6 +14,8 @@ from kite_auth import get_secret_value
 
 
 HOLDINGS_TABLE_NAME = "holdings_breakdown"
+INDICES_TABLE_NAME = "Indices_constituents"
+EXITED_HOLDINGS_INDEX_NAME = "Exited Holdings"
 HOLDINGS_BREAKDOWN_DF_STATE_KEY = "holdings_breakdown_df"
 HOLDINGS_BREAKDOWN_VIEW_STATE_KEY = "holdings_breakdown_view_enabled"
 HOLDINGS_COLUMN_MAP = {
@@ -109,6 +111,84 @@ def _supabase_headers(supabase_key: str, *, write: bool = False) -> dict[str, st
         headers["Content-Type"] = "application/json"
         headers["Prefer"] = "return=minimal"
     return headers
+
+
+def _get_supabase_indices_config() -> tuple[str, str, str]:
+    supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
+    supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
+    table_name = get_secret_value("SUPABASE_INDICES_TABLE_NAME").strip() or INDICES_TABLE_NAME
+
+    if not supabase_url or not supabase_key:
+        raise ValueError(
+            "Missing Supabase config. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
+            "in .streamlit/secrets.toml or environment variables."
+        )
+
+    return supabase_url, supabase_key, table_name
+
+
+def sync_exited_holdings_index(symbols: set[str] | None = None) -> int:
+    """Merge exited symbols into the single `Exited Holdings` index row."""
+    supabase_url, supabase_key, table_name = _get_supabase_indices_config()
+    encoded_table_name = quote(table_name, safe="")
+    index_filter = quote(EXITED_HOLDINGS_INDEX_NAME, safe="")
+    endpoint = (
+        f"{supabase_url}/rest/v1/{encoded_table_name}"
+        f"?select=Index,Constituents&Index=eq.{index_filter}"
+    )
+    request = Request(endpoint, headers=_supabase_headers(supabase_key), method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            existing_records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Supabase exited holdings index lookup failed - HTTP {exc.code}: {body or exc.reason}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase exited holdings index lookup failed: {exc.reason}") from exc
+
+    existing_symbols = {
+        symbol.strip().upper()
+        for record in existing_records
+        for symbol in str(record.get("Constituents") or "").split(",")
+        if symbol.strip()
+    }
+    exited_holdings_df = load_exited_holdings_breakdown_from_supabase()
+    historical_symbols = {
+        str(symbol or "").strip().upper()
+        for symbol in exited_holdings_df.get("symbol", pd.Series(dtype=object))
+        if str(symbol or "").strip()
+    }
+    requested_symbols = {
+        str(symbol or "").strip().upper()
+        for symbol in (symbols or set())
+        if str(symbol or "").strip()
+    }
+    all_symbols = sorted(existing_symbols | historical_symbols | requested_symbols)
+    if not all_symbols:
+        return 0
+
+    payload = json.dumps(
+        {"Index": EXITED_HOLDINGS_INDEX_NAME, "Constituents": ", ".join(all_symbols)}
+        if existing_records
+        else [{"Index": EXITED_HOLDINGS_INDEX_NAME, "Constituents": ", ".join(all_symbols)}]
+    ).encode("utf-8")
+    write_endpoint = endpoint if existing_records else f"{supabase_url}/rest/v1/{encoded_table_name}"
+    request = Request(
+        write_endpoint,
+        data=payload,
+        headers=_supabase_headers(supabase_key, write=True),
+        method="PATCH" if existing_records else "POST",
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            response.read()
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Supabase exited holdings index write failed - HTTP {exc.code}: {body or exc.reason}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase exited holdings index write failed: {exc.reason}") from exc
+
+    return len(all_symbols)
 
 
 def _record_numeric_value(value: Any) -> float | None:
@@ -1059,6 +1139,10 @@ def _render_exit_form(
         }
         if summary is not None and str(summary.get("symbol") or "").strip():
             affected_symbols.add(str(summary.get("symbol")).upper().strip())
+        try:
+            sync_exited_holdings_index(affected_symbols)
+        except Exception as exc:
+            st.warning(f"Holding exit saved, but the Exited Holdings index could not be updated: {exc}")
         _refresh_holdings_breakdown_state_for_symbols(sorted(affected_symbols))
         st.session_state[HOLDINGS_BREAKDOWN_VIEW_STATE_KEY] = True
         st.session_state.pop("holdings_breakdown_editor", None)
