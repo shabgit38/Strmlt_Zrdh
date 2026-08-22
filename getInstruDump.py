@@ -1,9 +1,11 @@
 import json
 import math
+import hashlib
 from pathlib import Path
 from datetime import date, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -15,6 +17,7 @@ from kite_auth import bootstrap_kite_app, clear_auth_state, get_secret_value, is
 
 
 SUPABASE_BATCH_SIZE = 500
+SUPABASE_READ_PAGE_SIZE = 1000
 REQUIRED_INSTRUMENT_COLUMNS = {"instrument_token", "tradingsymbol", "name"}
 MIN_COMPLETE_DUMP_ROWS = 10000
 COMPLETE_DUMP_REQUIRED_EXCHANGES = {"NSE", "BSE", "NFO", "BFO"}
@@ -116,26 +119,27 @@ def _json_safe_value(value: Any) -> Any:
     """Convert pandas/numpy values into JSON-safe primitives for Supabase."""
     if value is None:
         return None
-    if isinstance(value, str) and not value.strip():
-        return None
-    if isinstance(value, pd.Timestamp):
-        if pd.isna(value):
-            return None
-        return value.isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if hasattr(value, "item"):
-        value = value.item()
+
     try:
-        missing = pd.isna(value)
-        if isinstance(missing, bool) and missing:
+        if pd.isna(value):
             return None
     except (TypeError, ValueError):
         pass
+
+    if isinstance(value, np.generic):
+        return _json_safe_value(value.item())
+
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return value.isoformat()
+
     if isinstance(value, float) and not math.isfinite(value):
         return None
+
+    if isinstance(value, str) and not value.strip():
+        return None
+    if isinstance(value, str):
+        return value.strip()
+
     return value
 
 
@@ -213,6 +217,69 @@ def _build_supabase_payloads(indexed_records: list[tuple[Any, dict[str, Any]]]) 
             payloads.append((len(chunk_rows), payload))
     return payloads
 
+
+def _instrument_source_hash(record: dict[str, Any]) -> str:
+    """Return a stable checksum of all instrument fields, including token and symbol."""
+    comparable_record = {
+        key: _json_safe_value(value)
+        for key, value in record.items()
+        if key != "source_hash"
+    }
+    payload = json.dumps(
+        comparable_record,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _add_source_hashes(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["source_hash"] = [
+        _instrument_source_hash(record)
+        for record in df.to_dict(orient="records")
+    ]
+    return df
+
+
+def _fetch_existing_source_hashes(supabase_url: str, supabase_key: str, table_name: str) -> dict[int, str | None]:
+    """Fetch only the fields needed to determine which records require an upsert."""
+    endpoint = (
+        f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
+        "?select=instrument_token,source_hash&order=instrument_token.asc"
+    )
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Range-Unit": "items",
+    }
+    existing: dict[int, str | None] = {}
+    start = 0
+
+    while True:
+        page_headers = {**headers, "Range": f"{start}-{start + SUPABASE_READ_PAGE_SIZE - 1}"}
+        request = Request(endpoint, headers=page_headers, method="GET")
+        try:
+            with urlopen(request, timeout=60) as response:
+                page = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(
+                f"Failed to fetch existing instrument hashes — HTTP {exc.code}: {body or exc.reason}"
+            ) from exc
+        except URLError as exc:
+            raise RuntimeError(f"Failed to fetch existing instrument hashes: {exc.reason}") from exc
+
+        for row in page:
+            token = row.get("instrument_token")
+            if token is not None:
+                existing[int(token)] = row.get("source_hash")
+
+        if len(page) < SUPABASE_READ_PAGE_SIZE:
+            return existing
+        start += SUPABASE_READ_PAGE_SIZE
+
 def clean_dataframe_for_supabase(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
@@ -245,7 +312,7 @@ def clean_dataframe_for_supabase(df: pd.DataFrame) -> pd.DataFrame:
 
 def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
     """
-    Write the full instrument dump to Supabase using an upsert keyed by instrument_token.
+    Upsert only new or changed instruments, keyed by instrument_token.
     """
     supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
     supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
@@ -258,34 +325,24 @@ def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
         )
 
     _validate_complete_instrument_dump(df)
-    indexed_records = _supabase_indexed_records(df)
+    hashed_df = _add_source_hashes(df)
+    existing_hashes = _fetch_existing_source_hashes(supabase_url, supabase_key, table_name)
+    existing_hash_series = hashed_df["instrument_token"].map(existing_hashes)
+    changed_df = hashed_df[existing_hash_series != hashed_df["source_hash"]]
+    unchanged_count = len(hashed_df) - len(changed_df)
+
+    indexed_records = _supabase_indexed_records(changed_df)
     payloads = _build_supabase_payloads(indexed_records)
     prepared_count = sum(row_count for row_count, _ in payloads)
     if prepared_count == 0:
-        raise ValueError("No rows were prepared for Supabase upload.")
-    st.info(f"Upload preflight passed: {prepared_count:,} rows JSON-safe, 0 payload errors.")
-   
-    # Clear existing records before inserting fresh data
-    delete_endpoint = f"{supabase_url}/rest/v1/{table_name}?instrument_token=gte.0"
-    delete_headers = {
-        "apikey": supabase_key,
-        "Authorization": f"Bearer {supabase_key}",
-        "Prefer": "return=minimal",
-    }
-    try:
-        delete_request = Request(delete_endpoint, headers=delete_headers, method="DELETE")
-        with urlopen(delete_request, timeout=60) as resp:
-            resp.read()
-        st.info("Existing records cleared from Supabase table.")
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(
-            f"Failed to clear Supabase table before insert — HTTP {exc.code}: {body or exc.reason}"
-        ) from exc
-    except URLError as exc:
-        raise RuntimeError(f"Failed to clear Supabase table before insert: {exc.reason}") from exc
+        st.success(f"Supabase sync complete: 0 new or changed rows; {unchanged_count:,} unchanged.")
+        return
+    st.info(
+        f"Upload preflight passed: {prepared_count:,} new or changed rows JSON-safe; "
+        f"{unchanged_count:,} unchanged rows skipped."
+    )
 
-    endpoint = f"{supabase_url}/rest/v1/{table_name}?on_conflict=instrument_token"
+    endpoint = f"{supabase_url}/rest/v1/{quote(table_name, safe='')}?on_conflict=instrument_token"
     headers = {
         "apikey": supabase_key,
         "Authorization": f"Bearer {supabase_key}",
@@ -316,7 +373,8 @@ def upsert_instruments_to_supabase(df: pd.DataFrame) -> None:
             ) from exc
 
     st.success(
-        f"Supabase upload complete: {prepared_count:,} prepared, {uploaded_count:,} uploaded, 0 failed."
+        f"Supabase sync complete: {prepared_count:,} new or changed rows uploaded, "
+        f"{unchanged_count:,} unchanged rows skipped, 0 failed."
     )
 
 
