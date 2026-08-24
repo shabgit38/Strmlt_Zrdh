@@ -273,6 +273,14 @@ def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame
         if matches.empty:
             missing.append(ticker)
             continue
+        # The instrument dump can contain the same symbol for multiple exchanges.
+        # Historic Data requests NSE quotes/LTP, so prefer the matching NSE token.
+        if "exchange" in matches.columns:
+            nse_matches = matches[
+                matches["exchange"].astype(str).str.strip().str.upper() == "NSE"
+            ]
+            if not nse_matches.empty:
+                matches = nse_matches
         resolved[ticker] = int(matches.iloc[0]["instrument_token"])
     return resolved, missing
 
@@ -1355,7 +1363,13 @@ def _price_ladder_early_entry_labels_by_symbol(
         token = row.get(token_key)
         if not symbol or pd.isna(token):
             continue
-        stock_data[symbol] = load_analytics_history(kite, token, as_of_date)
+        try:
+            stock_data[symbol] = load_analytics_history(kite, token, as_of_date)
+        except Exception as exc:
+            # A stale instrument token should not prevent labels for the rest of
+            # the selected basket. Authentication failures still surface above.
+            if "invalid token" not in str(exc).strip().lower():
+                raise
 
     early_entry_df = calculate_early_entry_frame(
         stock_data,

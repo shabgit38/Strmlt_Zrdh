@@ -686,7 +686,15 @@ def build_historic_dashboard_frames(
         if not symbol or pd.isna(token):
             continue
 
-        analytics_df = load_analytics_history(_kite, token, as_of_date)
+        try:
+            analytics_df = load_analytics_history(_kite, token, as_of_date)
+        except Exception as exc:
+            # One stale instrument token must not abort the complete dashboard.
+            # Let authentication and transport failures reach the caller.
+            if "invalid token" not in str(exc).strip().lower():
+                raise
+            skipped_symbols.append(symbol)
+            continue
         if analytics_df.empty:
             skipped_symbols.append(symbol)
             continue
@@ -807,7 +815,15 @@ def build_price_ladder_and_day_movers_frames(
         if not symbol or pd.isna(token):
             continue
 
-        analytics_df = load_analytics_history(_kite, token, as_of_date)
+        try:
+            analytics_df = load_analytics_history(_kite, token, as_of_date)
+        except Exception as exc:
+            # One stale instrument token must not abort the complete dashboard.
+            # Let authentication and transport failures reach the caller.
+            if "invalid token" not in str(exc).strip().lower():
+                raise
+            skipped_symbols.append(symbol)
+            continue
         if analytics_df.empty:
             skipped_symbols.append(symbol)
             continue
