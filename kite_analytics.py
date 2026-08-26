@@ -880,6 +880,7 @@ def display_historic_price_ladder_frame(
     max_rows: int = 12,
     highlight_symbols: dict[str, str] | None = None,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
     show_summary: bool = True,
 ) -> None:
     """
@@ -895,6 +896,7 @@ def display_historic_price_ladder_frame(
             dashboard_df,
             highlight_symbols=highlight_symbols,
             mtf_symbols=mtf_symbols,
+            exited_symbols=exited_symbols,
         )
 
     display_df = dashboard_df
@@ -909,9 +911,18 @@ def display_historic_price_ladder_frame(
         display_df = dashboard_df.loc[~position_rows].reset_index(drop=True)
 
     normalized_mtf_symbols = {str(symbol).strip().upper() for symbol in (mtf_symbols or set())}
+    normalized_exited_symbols = {str(symbol).strip().upper() for symbol in (exited_symbols or set())}
     if normalized_mtf_symbols:
         display_df = display_df.rename(
-            columns=lambda symbol: f"{symbol} ᴹ" if str(symbol).strip().upper() in normalized_mtf_symbols else symbol
+            columns=lambda symbol: (
+                f"{symbol} ᴹ" if str(symbol).strip().upper() in normalized_mtf_symbols
+                else f"{symbol} E" if str(symbol).strip().upper() in normalized_exited_symbols
+                else symbol
+            )
+        )
+    elif normalized_exited_symbols:
+        display_df = display_df.rename(
+            columns=lambda symbol: f"{symbol} E" if str(symbol).strip().upper() in normalized_exited_symbols else symbol
         )
 
     st.dataframe(
@@ -927,11 +938,13 @@ def display_price_ladder_summary(
     *,
     highlight_symbols: dict[str, str] | None = None,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> None:
     summary_html = format_price_ladder_summary_html(
         dashboard_df,
         highlight_symbols=highlight_symbols,
         mtf_symbols=mtf_symbols,
+        exited_symbols=exited_symbols,
     )
     if summary_html:
         st.markdown(summary_html, unsafe_allow_html=True)
@@ -948,6 +961,7 @@ def format_price_ladder_summary_html(
     notes_by_symbol: dict[str, list[str]] | None = None,
     show_positions: bool = False,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> str:
     if dashboard_df.empty:
         return ""
@@ -962,6 +976,7 @@ def format_price_ladder_summary_html(
             early_entry_labels=early_entry_labels,
             notes_by_symbol=notes_by_symbol,
             mtf_symbols=mtf_symbols,
+            exited_symbols=exited_symbols,
         )
     return ""
 
@@ -1038,6 +1053,7 @@ def _format_summary_symbols(
     symbols: list[str],
     highlight_symbols: dict[str, str] | None = None,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> str:
     highlight_accents = {
         str(symbol).strip().upper(): str(accent).strip()
@@ -1048,14 +1064,15 @@ def _format_summary_symbols(
         return "-"
 
     normalized_mtf_symbols = {str(symbol).strip().upper() for symbol in (mtf_symbols or set())}
+    normalized_exited_symbols = {str(symbol).strip().upper() for symbol in (exited_symbols or set())}
     formatted_symbols: list[str] = []
     for symbol in symbols:
         symbol_text = str(symbol).strip()
-        marker = (
-            " <span style='font-size:0.65rem;font-weight:800;color:#F59E0B;vertical-align:super;'>M</span>"
-            if symbol_text.upper() in normalized_mtf_symbols
-            else ""
-        )
+        marker = ""
+        if symbol_text.upper() in normalized_mtf_symbols:
+            marker = " <span style='font-size:0.65rem;font-weight:800;color:#F59E0B;vertical-align:super;'>M</span>"
+        elif symbol_text.upper() in normalized_exited_symbols:
+            marker = " <span style='font-size:0.65rem;font-weight:800;color:#DC2626;vertical-align:super;'>E</span>"
         accent = highlight_accents.get(symbol_text.upper())
         if accent:
             formatted_symbols.append(
@@ -1078,6 +1095,7 @@ def _format_symbol_color_summary(
     early_entry_labels: dict[str, list[str]] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> str:
     summary_items = [
         (">= 75", *MOMENTUM_PALETTE["entry"], "rgba(15, 118, 110, 0.18)", color_groups["green"]),
@@ -1096,6 +1114,7 @@ def _format_symbol_color_summary(
                 early_entry_labels,
                 notes_by_symbol,
                 mtf_symbols,
+                exited_symbols,
             )
             rows.append(
                 "<div style='display:grid;gap:0.2rem;font-size:0.8rem;'>"
@@ -1105,7 +1124,7 @@ def _format_symbol_color_summary(
                 f"{symbol_text}</div></div>"
             )
         else:
-            symbol_text = _format_summary_symbols(symbols, highlight_symbols, mtf_symbols)
+            symbol_text = _format_summary_symbols(symbols, highlight_symbols, mtf_symbols, exited_symbols)
             rows.append(
                 "<div style='display:flex;align-items:flex-start;gap:0.5rem;font-size:0.8rem;'>"
                 f"<span style='min-width:6.5rem;font-weight:700;color:{background};'>{label}</span>"
@@ -1128,6 +1147,7 @@ def _format_summary_symbols_with_positions(
     early_entry_labels: dict[str, list[str]] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> str:
     if not symbols:
         return "-"
@@ -1160,6 +1180,7 @@ def _format_summary_symbols_with_positions(
         "Avoid": MOMENTUM_PALETTE["avoid"][0],
     }
     normalized_mtf_symbols = {str(symbol).strip().upper() for symbol in (mtf_symbols or set())}
+    normalized_exited_symbols = {str(symbol).strip().upper() for symbol in (exited_symbols or set())}
     rows: list[str] = []
     for symbol in symbols:
         symbol_text = str(symbol).strip()
@@ -1182,6 +1203,12 @@ def _format_summary_symbols_with_positions(
             if early_entry_badge
             else ""
         )
+        symbol_key = symbol_text.upper()
+        marker_html = ""
+        if symbol_key in normalized_mtf_symbols:
+            marker_html = " <span style='font-size:0.65rem;font-weight:800;color:#F59E0B;vertical-align:super;'>M</span>"
+        elif symbol_key in normalized_exited_symbols:
+            marker_html = " <span style='font-size:0.65rem;font-weight:800;color:#DC2626;vertical-align:super;'>E</span>"
         symbol_style = "font-weight:400;"
         if accent:
             symbol_style += (
@@ -1198,7 +1225,7 @@ def _format_summary_symbols_with_positions(
             if SHOW_PRICE_POSITION_TEXT
             else ""
         )
-        note_parts = normalized_notes.get(symbol_text.upper(), [])
+        note_parts = normalized_notes.get(symbol_key, [])
         notes_html = (
             "<div style='color:#94A3B8;font-size:0.7rem;font-weight:400;line-height:1.25;"
             f"white-space:normal;overflow-wrap:anywhere;'>{' | '.join(escape(note) for note in note_parts)}</div>"
@@ -1211,11 +1238,7 @@ def _format_summary_symbols_with_positions(
             f"{momentum_badge}"
             f"<span style='{symbol_style}align-self:center;white-space:nowrap;'>"
             f"{escape(symbol_text)}"
-            + (
-                " <span style='font-size:0.65rem;font-weight:800;color:#F59E0B;vertical-align:super;'>M</span>"
-                if symbol_text.upper() in normalized_mtf_symbols
-                else ""
-            )
+            + marker_html
             + "</span>"
             f"{position_text_html}"
             f"{position_chart_html}"

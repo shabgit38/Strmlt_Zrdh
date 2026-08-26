@@ -728,6 +728,7 @@ def _format_summary_symbols(
     symbols: list[str],
     highlight_symbols: dict[str, str] | None = None,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> str:
     highlight_accents = {
         str(symbol).strip().upper(): str(accent).strip()
@@ -738,14 +739,15 @@ def _format_summary_symbols(
         return "-"
 
     normalized_mtf_symbols = {str(symbol).strip().upper() for symbol in (mtf_symbols or set())}
+    normalized_exited_symbols = {str(symbol).strip().upper() for symbol in (exited_symbols or set())}
     formatted_symbols: list[str] = []
     for symbol in symbols:
         symbol_text = str(symbol).strip()
-        marker = (
-            " <span style='font-size:0.65rem;font-weight:800;color:#F59E0B;vertical-align:super;'>M</span>"
-            if symbol_text.upper() in normalized_mtf_symbols
-            else ""
-        )
+        marker = ""
+        if symbol_text.upper() in normalized_mtf_symbols:
+            marker = " <span style='font-size:0.65rem;font-weight:800;color:#F59E0B;vertical-align:super;'>M</span>"
+        elif symbol_text.upper() in normalized_exited_symbols:
+            marker = " <span style='font-size:0.65rem;font-weight:800;color:#DC2626;vertical-align:super;'>E</span>"
         accent = highlight_accents.get(symbol_text.upper())
         if accent:
             formatted_symbols.append(
@@ -764,6 +766,7 @@ def _format_momentum_label_summary(
     *,
     highlight_symbols: dict[str, str] | None = None,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> str:
     summary_items = [
         ("Strong Entry", "#0F766E", "#FFFFFF", "rgba(15, 118, 110, 0.18)", label_groups["Strong Entry"]),
@@ -774,7 +777,7 @@ def _format_momentum_label_summary(
     ]
     rows = []
     for label, background, foreground, tint, symbols in summary_items:
-        symbol_text = _format_summary_symbols(symbols, highlight_symbols, mtf_symbols)
+        symbol_text = _format_summary_symbols(symbols, highlight_symbols, mtf_symbols, exited_symbols)
         rows.append(
             "<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;'>"
             f"<span style='min-width:5rem;font-weight:700;color:{background};'>{label}</span>"
@@ -793,11 +796,16 @@ def display_momentum_label_summary(
     momentum_df: pd.DataFrame,
     *,
     highlight_symbols: dict[str, str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> None:
     label_groups = _group_momentum_symbols_by_label(momentum_df)
     if any(label_groups.values()):
         st.markdown(
-            _format_momentum_label_summary(label_groups, highlight_symbols=highlight_symbols),
+            _format_momentum_label_summary(
+                label_groups,
+                highlight_symbols=highlight_symbols,
+                exited_symbols=exited_symbols,
+            ),
             unsafe_allow_html=True,
         )
 
@@ -874,6 +882,7 @@ def render_momentum_ranking_table(
     key: str,
     show_summary: bool = True,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> None:
     if momentum_df.empty:
         st.info("No momentum score data available.")
@@ -890,9 +899,14 @@ def render_momentum_ranking_table(
         )
     table_display_df = momentum_display_df.copy()
     normalized_mtf_symbols = {str(symbol).strip().upper() for symbol in (mtf_symbols or set())}
-    if "ticker" in table_display_df.columns and normalized_mtf_symbols:
+    normalized_exited_symbols = {str(symbol).strip().upper() for symbol in (exited_symbols or set())}
+    if "ticker" in table_display_df.columns and (normalized_mtf_symbols or normalized_exited_symbols):
         table_display_df["ticker"] = table_display_df["ticker"].apply(
-            lambda symbol: f"{symbol} ᴹ" if str(symbol).strip().upper() in normalized_mtf_symbols else symbol
+            lambda symbol: (
+                f"{symbol} ᴹ" if str(symbol).strip().upper() in normalized_mtf_symbols
+                else f"{symbol} E" if str(symbol).strip().upper() in normalized_exited_symbols
+                else symbol
+            )
         )
     table_col, notes_col = st.columns([3, 1], vertical_alignment="top")
     with table_col:
@@ -1207,49 +1221,155 @@ def refresh_live_ltp_for_holdings(holdings_df: pd.DataFrame) -> pd.DataFrame:
     return updated_df
 
 
+def _build_exited_analytics_rows(
+    exited_breakdown_df: pd.DataFrame,
+    current_symbols: set[str],
+    token_map: dict[str, int],
+    live_ltp_by_symbol: dict[str, float],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    if exited_breakdown_df.empty or "symbol" not in exited_breakdown_df.columns:
+        return [], set()
+
+    row_type = exited_breakdown_df.get(
+        "row_type", pd.Series(index=exited_breakdown_df.index, dtype=object)
+    ).astype(str).str.upper().str.strip()
+    status = exited_breakdown_df.get(
+        "holding_status", pd.Series(index=exited_breakdown_df.index, dtype=object)
+    ).astype(str).str.upper().str.strip()
+    sector = exited_breakdown_df.get(
+        "sector", pd.Series(index=exited_breakdown_df.index, dtype=object)
+    ).astype(str).str.upper().str.strip()
+    exited_df = exited_breakdown_df[status.eq("EXITED") & ~sector.eq("OPTIONS")].copy()
+    if exited_df.empty:
+        return [], set()
+
+    exited_rows: list[dict[str, Any]] = []
+    exited_symbols: set[str] = set()
+    for symbol, symbol_df in exited_df.groupby(
+        exited_df["symbol"].map(_normalized_symbol_value), sort=False
+    ):
+        if not symbol or symbol in current_symbols or symbol not in token_map:
+            continue
+        summary_rows = symbol_df[row_type.loc[symbol_df.index].eq("SUMMARY")]
+        row = summary_rows.iloc[0] if not summary_rows.empty else symbol_df.iloc[0]
+        ltp = pd.to_numeric(live_ltp_by_symbol.get(symbol, row.get("ltp")), errors="coerce")
+        average_price = pd.to_numeric(row.get("buy_avg"), errors="coerce")
+        quantity = pd.to_numeric(row.get("total_qty"), errors="coerce")
+        if pd.isna(quantity) or quantity <= 0:
+            exited_quantity = symbol_df.get("exit_qty")
+            if exited_quantity is None:
+                exited_quantity = symbol_df.get("batch_qty")
+            quantity = (
+                pd.to_numeric(exited_quantity, errors="coerce").fillna(0).sum()
+                if exited_quantity is not None
+                else 0
+            )
+        if pd.isna(average_price):
+            average_price = pd.to_numeric(symbol_df.get("batch_price"), errors="coerce").mean()
+        exited_rows.append(
+            {
+                "tradingsymbol": symbol,
+                "instrument_token": token_map[symbol],
+                "last_price": float(ltp) if pd.notna(ltp) else None,
+                "average_price": float(average_price) if pd.notna(average_price) else None,
+                "quantity": float(quantity) if pd.notna(quantity) else None,
+            }
+        )
+        exited_symbols.add(symbol)
+    return exited_rows, exited_symbols
+
+
 def fetch_and_display_holdings():
     try:
         kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
         holdings = kite.holdings()
-        if holdings:
-            df = pd.DataFrame(holdings)
+        df = pd.DataFrame(holdings)
+        try:
+            exited_breakdown_df = load_exited_holdings_breakdown_from_supabase()
+        except Exception as breakdown_exc:
+            exited_breakdown_df = pd.DataFrame()
+            st.session_state["kite_holdings_exited_error"] = str(breakdown_exc)
+        else:
+            st.session_state.pop("kite_holdings_exited_error", None)
+
+        current_symbols = {
+            _normalized_symbol_value(symbol)
+            for symbol in df.get("tradingsymbol", pd.Series(dtype=object))
+            if _normalized_symbol_value(symbol)
+        }
+        exited_status = exited_breakdown_df.get(
+            "holding_status", pd.Series(index=exited_breakdown_df.index, dtype=object)
+        ).astype(str).str.upper().str.strip()
+        exited_sector = exited_breakdown_df.get(
+            "sector", pd.Series(index=exited_breakdown_df.index, dtype=object)
+        ).astype(str).str.upper().str.strip()
+        exited_symbols_requested = {
+            _normalized_symbol_value(symbol)
+            for symbol in exited_breakdown_df.loc[
+                exited_status.eq("EXITED") & ~exited_sector.eq("OPTIONS"),
+                "symbol",
+            ]
+            if _normalized_symbol_value(symbol)
+        } if not exited_breakdown_df.empty and "symbol" in exited_breakdown_df.columns else set()
+        exited_symbols_requested -= current_symbols
+
+        instruments_df = load_instrument_token_from_supabase(sorted(current_symbols | exited_symbols_requested))
+        token_map, _ = resolve_tokens_from_tickers(
+            sorted(current_symbols | exited_symbols_requested), instruments_df
+        )
+        exited_ltp_by_symbol = fetch_live_ltp_by_symbol(kite, sorted(exited_symbols_requested))
+        analytics_rows = df.to_dict(orient="records")
+        exited_rows, exited_symbols = _build_exited_analytics_rows(
+            exited_breakdown_df,
+            current_symbols,
+            token_map,
+            exited_ltp_by_symbol,
+        )
+        analytics_rows.extend(exited_rows)
+        analytics_ltp_by_symbol = _holdings_live_ltp_by_symbol(df)
+        analytics_ltp_by_symbol.update(exited_ltp_by_symbol)
+
+        if analytics_rows:
             _cache_ltp_by_symbol(df)
-            #print("Fetched holdings:\n", df.head())
+            st.session_state.setdefault("ltp_by_symbol", {}).update(exited_ltp_by_symbol)
             as_of_date = datetime.now().date().isoformat()
             dashboard_df, day_movers_df, failed_symbols = build_price_ladder_and_day_movers_frames(
                 kite,
-                df.to_dict(orient="records"),
+                analytics_rows,
                 as_of_date,
                 symbol_key="tradingsymbol",
                 token_key="instrument_token",
-                ltp_key="last_price",
+                live_ltp_by_symbol=analytics_ltp_by_symbol,
                 buy_avg_key="average_price",
                 quantity_key="quantity",
             )
             momentum_df, momentum_failed_symbols, momentum_error = _calculate_holdings_momentum_data(
                 kite,
                 df,
-                df.to_dict(orient="records"),
+                analytics_rows,
                 as_of_date,
+                live_ltp_by_symbol=analytics_ltp_by_symbol,
             )
             early_entry_labels = _price_ladder_early_entry_labels_by_symbol(
                 kite,
-                df.to_dict(orient="records"),
+                analytics_rows,
                 as_of_date,
                 momentum_df,
                 symbol_key="tradingsymbol",
-                live_ltp_by_symbol=_holdings_live_ltp_by_symbol(df),
+                live_ltp_by_symbol=analytics_ltp_by_symbol,
             )
             st.session_state["kite_holdings_df"] = df
             st.session_state["kite_holdings_dashboard_df"] = dashboard_df
             st.session_state["kite_holdings_day_movers_df"] = day_movers_df
             st.session_state["kite_holdings_dashboard_failed_symbols"] = failed_symbols
             st.session_state["kite_holdings_token_rows"] = df.to_dict(orient="records")
+            st.session_state["kite_holdings_analytics_token_rows"] = analytics_rows
             st.session_state["kite_holdings_as_of_date"] = as_of_date
             st.session_state.pop("kite_holdings_returns_df", None)
             st.session_state["kite_holdings_momentum_df"] = momentum_df
             st.session_state["kite_holdings_early_entry_labels"] = early_entry_labels
             st.session_state["kite_holdings_momentum_failed_symbols"] = momentum_failed_symbols
+            st.session_state["kite_holdings_exited_symbols"] = exited_symbols
             st.session_state["kite_holdings_momentum_benchmark_used"] = DEFAULT_MOMENTUM_BENCHMARK
             if momentum_error:
                 st.session_state["kite_holdings_momentum_error"] = momentum_error
@@ -1283,12 +1403,15 @@ def fetch_and_display_holdings():
             st.session_state.pop("kite_holdings_day_movers_df", None)
             st.session_state.pop("kite_holdings_dashboard_failed_symbols", None)
             st.session_state.pop("kite_holdings_token_rows", None)
+            st.session_state.pop("kite_holdings_analytics_token_rows", None)
             st.session_state.pop("kite_holdings_as_of_date", None)
             st.session_state.pop("kite_holdings_fetched_at", None)
             st.session_state.pop("kite_holdings_ltp_refreshed_at", None)
             st.session_state.pop("kite_holdings_ltp_refresh_error", None)
             st.session_state.pop("kite_holdings_ltp_missing_symbols", None)
             st.session_state.pop("kite_holdings_ltp_refresh_count", None)
+            st.session_state.pop("kite_holdings_exited_symbols", None)
+            st.session_state.pop("kite_holdings_exited_error", None)
             st.session_state.pop("kite_holdings_download_filename", None)
             st.session_state.pop(HOLDINGS_BREAKDOWN_DF_STATE_KEY, None)
             st.session_state.pop("kite_holdings_breakdown_error", None)
@@ -1320,6 +1443,7 @@ def _calculate_holdings_momentum_data(
     holdings_df: pd.DataFrame,
     token_rows: list[dict[str, Any]],
     as_of_date: str,
+    live_ltp_by_symbol: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, list[str], str | None]:
     benchmark_symbol = DEFAULT_MOMENTUM_BENCHMARK
     try:
@@ -1335,7 +1459,7 @@ def _calculate_holdings_momentum_data(
             as_of_date,
             symbol_key="tradingsymbol",
             token_key="instrument_token",
-            live_ltp_by_symbol=_holdings_live_ltp_by_symbol(holdings_df),
+            live_ltp_by_symbol=live_ltp_by_symbol or _holdings_live_ltp_by_symbol(holdings_df),
         )
         return momentum_df, momentum_failed_symbols, None
     except Exception as exc:
@@ -1401,6 +1525,7 @@ def _render_price_ladder_summary_card(
     notes_by_symbol: dict[str, list[str]] | None = None,
     show_positions: bool = False,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> None:
     summary_html = format_price_ladder_summary_html(
         dashboard_df,
@@ -1410,6 +1535,7 @@ def _render_price_ladder_summary_card(
         notes_by_symbol=notes_by_symbol,
         show_positions=show_positions,
         mtf_symbols=mtf_symbols,
+        exited_symbols=exited_symbols,
     )
     if not summary_html:
         st.info("No price ladder summary available.")
@@ -1445,6 +1571,7 @@ def _render_holdings_momentum_summary(
     momentum_df: pd.DataFrame,
     day_movers_df: pd.DataFrame,
     mtf_symbols: set[str] | None = None,
+    exited_symbols: set[str] | None = None,
 ) -> None:
     if momentum_df.empty:
         st.info("No momentum summary available.")
@@ -1460,6 +1587,7 @@ def _render_holdings_momentum_summary(
                 label_groups,
                 highlight_symbols=momentum_summary_highlight_symbols,
                 mtf_symbols=mtf_symbols,
+                exited_symbols=exited_symbols,
             ),
             BUTTON_COLOR,
         ),
@@ -1478,12 +1606,17 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
     day_movers_df = st.session_state.get("kite_holdings_day_movers_df", pd.DataFrame())
     momentum_df = st.session_state.get("kite_holdings_momentum_df", pd.DataFrame())
     early_entry_labels = st.session_state.get("kite_holdings_early_entry_labels", {})
+    exited_symbols = st.session_state.get("kite_holdings_exited_symbols", set())
     price_ladder_highlight_symbols = _summary_ticker_accents(
         build_portfolio_day_movers_summary(kite_holdings_df)
     )
     mtf_symbol_set = portfolio_streamlit.mtf_symbols(kite_holdings_df)
 
     display_portfolio_day_movers_summary(kite_holdings_df)
+
+    exited_error = st.session_state.get("kite_holdings_exited_error")
+    if exited_error:
+        st.warning(f"Could not load exited holdings for analytics: {exited_error}")
 
     momentum_error = st.session_state.get("kite_holdings_momentum_error")
     if momentum_error:
@@ -1496,7 +1629,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
             + ("..." if len(momentum_failed_symbols) > 10 else "")
         )
 
-    _render_holdings_momentum_summary(momentum_df, day_movers_df, mtf_symbol_set)
+    _render_holdings_momentum_summary(momentum_df, day_movers_df, mtf_symbol_set, exited_symbols)
     _render_price_ladder_summary_card(
         sorted_dashboard_df,
         highlight_symbols=price_ladder_highlight_symbols,
@@ -1505,6 +1638,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
         notes_by_symbol=_stock_notes_by_symbol(momentum_df),
         show_positions=True,
         mtf_symbols=mtf_symbol_set,
+        exited_symbols=exited_symbols,
     )
 
     with st.expander("Momentum Ranking", expanded=False):
@@ -1514,6 +1648,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
             key="kite_holdings_momentum_ranking_table",
             show_summary=False,
             mtf_symbols=mtf_symbol_set,
+            exited_symbols=exited_symbols,
         )
 
     with st.expander("Price Ladder", expanded=False):
@@ -1523,6 +1658,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
             highlight_symbols=price_ladder_highlight_symbols,
             show_summary=False,
             mtf_symbols=mtf_symbol_set,
+            exited_symbols=exited_symbols,
         )
 
 
