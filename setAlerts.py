@@ -428,8 +428,12 @@ def enrich_alerts_with_price_context(
     new_alert_indexes: list[int] = []
     for alert in alerts:
         next_alert = dict(alert)
+        is_disabled = str(next_alert.get("status") or "").strip().lower() == "disabled"
         uuid = str(next_alert.get("uuid") or "").strip()
-        if uuid and uuid in previous_context_by_uuid:
+        if not is_disabled:
+            next_alert["price_context"] = None
+            next_alert.pop("price_context_version", None)
+        elif uuid and uuid in previous_context_by_uuid:
             next_alert["price_context"] = previous_context_by_uuid[uuid]
         else:
             next_alert["price_context"] = None
