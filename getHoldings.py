@@ -1379,10 +1379,10 @@ def fetch_and_display_holdings():
             st.session_state["kite_holdings_ltp_refreshed_at"] = st.session_state["kite_holdings_fetched_at"]
             st.session_state.pop("kite_holdings_ltp_refresh_error", None)
             st.session_state.pop("kite_holdings_ltp_missing_symbols", None)
-            st.session_state["kite_holdings_download_filename"] = (
-                f"holdings_{pd.Timestamp.now().strftime('%Y-%m-%d_%H.%M.%S')}.csv"
-            )
-            _trigger_csv_download(df, st.session_state["kite_holdings_download_filename"])
+            # st.session_state["kite_holdings_download_filename"] = (
+            #     f"holdings_{pd.Timestamp.now().strftime('%Y-%m-%d_%H.%M.%S')}.csv"
+            # )
+            # _trigger_csv_download(df, st.session_state["kite_holdings_download_filename"])
             try:
                 _set_holdings_breakdown_state(load_active_holdings_breakdown_from_supabase())
                 st.session_state.pop("kite_holdings_breakdown_error", None)
