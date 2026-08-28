@@ -190,7 +190,7 @@ def get_high_low_resampled(df: pd.DataFrame) -> dict:
 
 def build_metric_values(analytics_df: pd.DataFrame, live_ltp: float | None = None) -> dict[str, float]:
     """
-    Build the shared 2Y daily metric values used by dashboards and holdings.
+    Build the shared 5Y daily metric values used by dashboards and holdings.
     """
     if analytics_df.empty:
         return {}
@@ -224,8 +224,8 @@ def build_metric_values(analytics_df: pd.DataFrame, live_ltp: float | None = Non
         metrics["52W Low"] = float(df_52w["Low"].min())
         metrics["52W High"] = float(df_52w["High"].max())
 
-    metrics["2Y Low"] = float(analytics_df["Low"].min())
-    metrics["2Y High"] = float(analytics_df["High"].max())
+    metrics["5Y Low"] = float(analytics_df["Low"].min())
+    metrics["5Y High"] = float(analytics_df["High"].max())
 
     for span in [10, 20, 50,100, 200]:
         metrics[f"EMA{span}"] = float(latest[f"EMA{span}"])
@@ -435,7 +435,7 @@ def build_metric_ladder(
     invested: float | None = None,
 ) -> list[tuple[str, float | str | tuple[float, ...] | None]]:
     """
-    Build an ascending price ladder from the cached 2Y daily dataframe.
+    Build an ascending price ladder from the cached 5Y daily dataframe.
     """
     metrics = build_metric_values(analytics_df, live_ltp=live_ltp)
     range_position = calculate_range_position(metrics)
