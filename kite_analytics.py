@@ -130,12 +130,12 @@ def load_analytics_history(
     to_date: str,
 ) -> pd.DataFrame:
     """
-    Load one cached 2Y daily dataframe for levels and EMAs.
+    Load one cached 5Y daily dataframe for levels and EMAs.
     """
     # Define the end point as today
     end = datetime.combine(pd.to_datetime(to_date).date(), time(23, 59, 59))
-    # Calculate the start point two years prior at midnight
-    start = datetime.combine((pd.Timestamp(end) - pd.DateOffset(years=2)).date(), time.min)
+    # Calculate the start point five years prior at midnight
+    start = datetime.combine((pd.Timestamp(end) - pd.DateOffset(years=5)).date(), time.min)
     return get_kite_historical_data(
         kite=_kite,
         instrument_token=instrument_token,
