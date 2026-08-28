@@ -54,6 +54,7 @@ from getHldgBrk import (
     load_active_holdings_breakdown_from_supabase,
     load_exited_holdings_breakdown_from_supabase,
     upsert_holdings_breakdown_in_supabase,
+    update_holdings_breakdown_from_orders,
 )
 
 st.set_page_config(layout="wide") 
@@ -65,6 +66,10 @@ BUTTON_HOVER_COLOR = "#f2b766"
 BUTTON_TEXT_COLOR = "#1f2937"
 LTP_REFRESH_INTERVAL_MS = 60 * 60 * 1000
 HOLDINGS_BREAKDOWN_ADD_MESSAGE_KEY = "holdings_breakdown_add_message"
+TODAY_ORDERS_STATE_KEY = "kite_today_orders"
+TODAY_ORDERS_DATE_STATE_KEY = "kite_today_orders_date"
+TODAY_ORDERS_ERROR_STATE_KEY = "kite_today_orders_error"
+TODAY_ORDERS_SYNC_ERROR_STATE_KEY = "kite_today_orders_sync_error"
 
 PRICE_LADDER_EARLY_ENTRY_LABELS = (
     ("recent_pullback", "Recent pullback"),
@@ -1762,6 +1767,90 @@ def _filter_breakdown_for_holding(
     return holdings_breakdown_df[selected_rows].copy()
 
 
+def _today_orders_display_df(
+    orders: list[dict[str, Any]],
+    holdings_breakdown_df: pd.DataFrame,
+) -> pd.DataFrame:
+    database_symbols = (
+        {
+            str(symbol).upper().strip()
+            for symbol in holdings_breakdown_df.get("symbol", pd.Series(dtype=object)).dropna()
+            if str(symbol).strip()
+        }
+        if not holdings_breakdown_df.empty
+        else set()
+    )
+    display_rows = []
+    for order in orders:
+        symbol = str(order.get("tradingsymbol") or "").upper().strip()
+        display_rows.append(
+            {
+                "Order ID": order.get("order_id"),
+                "Timestamp": order.get("order_timestamp"),
+                "Symbol": symbol,
+                "Exchange": order.get("exchange"),
+                "Side": order.get("transaction_type"),
+                "Status": order.get("status"),
+                "Order Type": order.get("order_type"),
+                "Product": order.get("product"),
+                "Quantity": order.get("quantity"),
+                "Filled Qty": order.get("filled_quantity"),
+                "Price": order.get("price"),
+                "Avg Price": order.get("average_price"),
+                "Trigger Price": order.get("trigger_price"),
+                "Validity": order.get("validity"),
+                "Database Match": symbol in database_symbols if symbol else False,
+            }
+        )
+    return pd.DataFrame(display_rows)
+
+
+def _render_today_orders_for_breakdown() -> None:
+    today = datetime.now().date().isoformat()
+    if st.session_state.get(TODAY_ORDERS_DATE_STATE_KEY) != today:
+        try:
+            orders_kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
+            complete_orders = [
+                order
+                for order in orders_kite.orders()
+                if str(order.get("status") or "").upper().strip() == "COMPLETE"
+            ]
+            st.session_state[TODAY_ORDERS_STATE_KEY] = complete_orders
+            st.session_state[TODAY_ORDERS_DATE_STATE_KEY] = today
+            st.session_state.pop(TODAY_ORDERS_ERROR_STATE_KEY, None)
+        except Exception as exc:
+            st.session_state[TODAY_ORDERS_STATE_KEY] = []
+            st.session_state[TODAY_ORDERS_ERROR_STATE_KEY] = str(exc)
+        else:
+            try:
+                affected_symbols = update_holdings_breakdown_from_orders(complete_orders)
+                if affected_symbols:
+                    _load_holdings_breakdown_state()
+                st.session_state.pop(TODAY_ORDERS_SYNC_ERROR_STATE_KEY, None)
+            except Exception as exc:
+                st.session_state[TODAY_ORDERS_SYNC_ERROR_STATE_KEY] = str(exc)
+
+    orders_error = st.session_state.get(TODAY_ORDERS_ERROR_STATE_KEY)
+    if orders_error:
+        st.warning(f"Could not load today's Kite orders: {orders_error}")
+        return
+
+    sync_error = st.session_state.get(TODAY_ORDERS_SYNC_ERROR_STATE_KEY)
+    if sync_error:
+        st.warning(f"Could not update holdings breakdown from today's orders: {sync_error}")
+
+    breakdown_df = _holdings_breakdown_state_df()
+    orders_df = _today_orders_display_df(
+        st.session_state.get(TODAY_ORDERS_STATE_KEY, []),
+        breakdown_df,
+    )
+    st.subheader("Today's Kite Orders")
+    if orders_df.empty:
+        st.info("No orders placed today.")
+    else:
+        st.dataframe(orders_df, use_container_width=True, hide_index=True)
+
+
 if "access_token" not in st.session_state:
     bootstrap_kite_app("Zerodha Holdings")
 
@@ -1955,6 +2044,14 @@ if selected_main_tab == "Holdings":
             )
 
     with tab_holdings_breakdown:
+        if HOLDINGS_BREAKDOWN_DF_STATE_KEY not in st.session_state:
+            try:
+                _load_holdings_breakdown_state()
+                st.session_state.pop("kite_holdings_breakdown_error", None)
+            except Exception as breakdown_exc:
+                st.session_state["kite_holdings_breakdown_error"] = str(breakdown_exc)
+
+        _render_today_orders_for_breakdown()
         breakdown_error = st.session_state.get("kite_holdings_breakdown_error")
         if breakdown_error:
             st.warning(f"Could not load holdings breakdown from Supabase: {breakdown_error}")

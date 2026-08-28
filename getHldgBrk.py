@@ -1440,6 +1440,92 @@ def _render_add_holdings_breakdown_entries_form(ltp_by_symbol: dict[str, float])
     return _insert_added_breakdown_entries(entries_df, ltp_by_symbol)
 
 
+def update_holdings_breakdown_from_orders(orders: list[dict[str, Any]]) -> list[str]:
+    buy_rows: list[dict[str, Any]] = []
+    sell_orders: list[dict[str, Any]] = []
+    for order in orders:
+        if str(order.get("status") or "").upper().strip() != "COMPLETE":
+            continue
+
+        symbol = _normalized_symbol_value(order.get("tradingsymbol"))
+        quantity = _record_integer_value(order.get("filled_quantity"))
+        price = _record_numeric_value(order.get("average_price"))
+        trade_date = _normalize_trade_date(order.get("order_timestamp"))
+        if not symbol or quantity is None or quantity <= 0 or price is None or trade_date is None:
+            continue
+
+        transaction_type = str(order.get("transaction_type") or "").upper().strip()
+        if transaction_type == "BUY":
+            buy_rows.append(
+                {
+                    "Symbol": symbol,
+                    "Qty": quantity,
+                    "Price": price,
+                    "Date": trade_date,
+                    "Exit?": False,
+                    "MTF?": False,
+                    "Bonus?": False,
+                }
+            )
+        elif transaction_type == "SELL":
+            sell_orders.append(
+                {
+                    "symbol": symbol,
+                    "quantity": quantity,
+                    "price": price,
+                    "date": trade_date,
+                }
+            )
+
+    affected_symbols: set[str] = set()
+    if buy_rows:
+        affected_symbols.update(_insert_added_breakdown_entries(pd.DataFrame(buy_rows), {}))
+
+    for order in sell_orders:
+        symbol = order["symbol"]
+        symbol_df = load_holdings_breakdown_for_symbols([symbol])
+        if symbol_df.empty or "row_type" not in symbol_df.columns:
+            continue
+
+        summary_rows = symbol_df[
+            symbol_df["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY")
+        ]
+        if summary_rows.empty:
+            continue
+
+        allocations = _fifo_exit_allocations(
+            [row for _, row in symbol_df.iterrows()],
+            order["quantity"],
+        )
+        allocated_quantity = sum(quantity for _, quantity in allocations)
+        if allocated_quantity <= 0:
+            continue
+
+        exit_date = _parse_trade_date(order["date"]) or date.today()
+        for batch, exit_quantity in allocations:
+            _apply_batch_exit(
+                batch,
+                exit_date=exit_date,
+                exit_price=order["price"],
+                exit_qty=exit_quantity,
+                ltp_by_symbol={},
+            )
+
+        refreshed_symbol_df = load_holdings_breakdown_for_symbols([symbol])
+        refreshed_summaries = refreshed_symbol_df[
+            refreshed_symbol_df["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY")
+        ]
+        for _, summary in refreshed_summaries.iterrows():
+            _recalculate_summary_from_supabase_batches(summary, {})
+        sync_exited_holdings_index({symbol})
+        affected_symbols.add(symbol)
+
+    if not buy_rows and not sell_orders:
+        return []
+
+    return sorted(affected_symbols)
+
+
 def _batch_display_df(batch_df: pd.DataFrame) -> pd.DataFrame:
     batch_columns = ["trade_date", "batch_qty", "batch_price", "present_value"]
     batch_columns.extend(["batch_pnl", "batch_pnl_pct", "present_age"])
