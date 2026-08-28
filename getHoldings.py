@@ -1848,7 +1848,7 @@ def _render_today_orders_for_breakdown() -> None:
     if orders_df.empty:
         st.info("No orders placed today.")
     else:
-        st.dataframe(orders_df, use_container_width=True, hide_index=True)
+        st.dataframe(orders_df, width="stretch", hide_index=True)
 
 
 if "access_token" not in st.session_state:
@@ -1876,7 +1876,7 @@ for main_nav_label in MAIN_NAV_OPTIONS:
     if st.sidebar.button(
         f"{active_prefix}{main_nav_label}",
         key=f"main_nav_{main_nav_label}",
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state["main_navigation"] = main_nav_label
         st.rerun()
