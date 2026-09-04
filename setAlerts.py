@@ -18,7 +18,7 @@ from portfolio_terminal_component import render_alerts_terminal
 ALERTS_STATE_KEY = "kite_alerts_data"
 ALERTS_LAST_REQUEST_ID_KEY = "kite_alerts_last_request_id"
 ALERTS_LOG_STATE_KEY = "kite_alerts_fetch_log"
-ALERTS_PRICE_CONTEXT_VERSION = 3
+ALERTS_PRICE_CONTEXT_VERSION = 4
 ALERTS_DEFAULT_STATUS = "active"
 KITE_ALERTS_ENDPOINT = "https://api.kite.trade/alerts"
 ALERTS_HTTP_TIMEOUT_SECONDS = 10
@@ -584,56 +584,49 @@ def _alert_position_distance_labels(current_price: Any, metrics: dict[str, Any])
         if pd.notna(level):
             ema_levels.append((label, float(level)))
 
-    above = min(
+    nearest_higher_ema = min(
         ((label, level) for label, level in ema_levels if level > current_value),
         key=lambda item: item[1] - current_value,
         default=None,
     )
-    below = min(
+    nearest_lower_ema = min(
         ((label, level) for label, level in ema_levels if level <= current_value),
         key=lambda item: current_value - item[1],
         default=None,
     )
 
-    if above is None:
-        high_52w = pd.to_numeric(metrics.get("52W High"), errors="coerce")
-        if pd.notna(high_52w):
-            above = ("52W High", float(high_52w))
-    if below is None:
-        low_52w = pd.to_numeric(metrics.get("52W Low"), errors="coerce")
-        if pd.notna(low_52w):
-            below = ("52W Low", float(low_52w))
-
-    ema_and_52w_labels = [
-        _distance_label_with_value(label, current_value, level)
-        for item in [above, below]
-        if item is not None
-        for label, level in [item]
-    ]
-
-    monthly_levels: list[tuple[str, float]] = []
-    for label in ["1M High", "1M Low", "3M High", "3M Low", "6M High", "6M Low"]:
+    monthly_highs: list[tuple[str, float]] = []
+    monthly_lows: list[tuple[str, float]] = []
+    for label in ["1M High", "3M High", "6M High", "1M Low", "3M Low", "6M Low"]:
         level = pd.to_numeric(metrics.get(label), errors="coerce")
         if pd.notna(level):
-            monthly_levels.append((label, float(level)))
+            (monthly_highs if label.endswith("High") else monthly_lows).append((label, float(level)))
 
-    nearest_monthly_above = min(
-        ((label, level) for label, level in monthly_levels if level > current_value),
+    nearest_monthly_high = min(
+        ((label, level) for label, level in monthly_highs if level > current_value),
         key=lambda item: item[1] - current_value,
         default=None,
     )
-    nearest_monthly_below = min(
-        ((label, level) for label, level in monthly_levels if level <= current_value),
+    nearest_monthly_low = min(
+        ((label, level) for label, level in monthly_lows if level <= current_value),
         key=lambda item: current_value - item[1],
         default=None,
     )
-    monthly_labels = [
+
+    surrounding_labels = [
         _distance_label_with_value(label, current_value, level)
-        for item in [nearest_monthly_above, nearest_monthly_below]
+        for item in [nearest_higher_ema, nearest_monthly_high]
         if item is not None
         for label, level in [item]
     ]
-    return ema_and_52w_labels + monthly_labels
+    surrounding_labels.append(f"LTP {_format_indicator_value(current_value)}")
+    surrounding_labels.extend(
+        _distance_label_with_value(label, current_value, level)
+        for item in [nearest_lower_ema, nearest_monthly_low]
+        if item is not None
+        for label, level in [item]
+    )
+    return surrounding_labels
 
 
 def _distance_label_with_value(label: str, current_price: float, level: float) -> str:
