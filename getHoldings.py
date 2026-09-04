@@ -728,6 +728,27 @@ def _momentum_label_by_symbol(momentum_df: pd.DataFrame) -> dict[str, str]:
     }
 
 
+def _momentum_context_by_symbol(momentum_df: pd.DataFrame) -> dict[str, str]:
+    if momentum_df.empty or "ticker" not in momentum_df.columns:
+        return {}
+
+    context_by_symbol: dict[str, str] = {}
+    for _, row in momentum_df.iterrows():
+        symbol = str(row.get("ticker") or "").strip().upper()
+        if not symbol:
+            continue
+        entry_range = _format_entry_range(row)
+        atr14 = pd.to_numeric(row.get("atr14"), errors="coerce")
+        context_parts = []
+        if entry_range:
+            context_parts.append(f"Entry {entry_range}")
+        if pd.notna(atr14):
+            context_parts.append(f"ATR {float(atr14):,.2f}")
+        if context_parts:
+            context_by_symbol[symbol] = " | ".join(context_parts)
+    return context_by_symbol
+
+
 SUMMARY_HIGHLIGHT_ACCENTS = {
     "Top Gainer": "#7DCE9B",
     "Top Gainers": "#7DCE9B",
@@ -1585,6 +1606,7 @@ def _render_price_ladder_summary_card(
     *,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    momentum_context_by_symbol: dict[str, str] | None = None,
     early_entry_labels: dict[str, list[str]] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     show_positions: bool = False,
@@ -1595,6 +1617,7 @@ def _render_price_ladder_summary_card(
         dashboard_df,
         highlight_symbols=highlight_symbols,
         momentum_labels=momentum_labels,
+        momentum_context_by_symbol=momentum_context_by_symbol,
         early_entry_labels=early_entry_labels,
         notes_by_symbol=notes_by_symbol,
         show_positions=show_positions,
@@ -1698,6 +1721,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
         sorted_dashboard_df,
         highlight_symbols=price_ladder_highlight_symbols,
         momentum_labels=_momentum_label_by_symbol(momentum_df),
+        momentum_context_by_symbol=_momentum_context_by_symbol(momentum_df),
         early_entry_labels=early_entry_labels,
         notes_by_symbol=_stock_notes_by_symbol(momentum_df),
         show_positions=True,
@@ -2597,6 +2621,7 @@ if selected_main_tab == "Historic Data":
                 filtered_dashboard_df,
                 highlight_symbols=historic_ladder_highlight_symbols,
                 momentum_labels=_momentum_label_by_symbol(momentum_df),
+                momentum_context_by_symbol=_momentum_context_by_symbol(momentum_df),
                 early_entry_labels=early_entry_labels,
                 notes_by_symbol=_stock_notes_by_symbol(momentum_df),
                 show_positions=True,

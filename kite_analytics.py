@@ -957,6 +957,7 @@ def format_price_ladder_summary_html(
     *,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    momentum_context_by_symbol: dict[str, str] | None = None,
     early_entry_labels: dict[str, list[str]] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     show_positions: bool = False,
@@ -973,6 +974,7 @@ def format_price_ladder_summary_html(
             dashboard_df=dashboard_df if show_positions else None,
             highlight_symbols=highlight_symbols,
             momentum_labels=momentum_labels,
+            momentum_context_by_symbol=momentum_context_by_symbol,
             early_entry_labels=early_entry_labels,
             notes_by_symbol=notes_by_symbol,
             mtf_symbols=mtf_symbols,
@@ -1092,6 +1094,7 @@ def _format_symbol_color_summary(
     dashboard_df: pd.DataFrame | None = None,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    momentum_context_by_symbol: dict[str, str] | None = None,
     early_entry_labels: dict[str, list[str]] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     mtf_symbols: set[str] | None = None,
@@ -1111,6 +1114,7 @@ def _format_symbol_color_summary(
                 dashboard_df,
                 highlight_symbols,
                 momentum_labels,
+                momentum_context_by_symbol,
                 early_entry_labels,
                 notes_by_symbol,
                 mtf_symbols,
@@ -1144,6 +1148,7 @@ def _format_summary_symbols_with_positions(
     dashboard_df: pd.DataFrame,
     highlight_symbols: dict[str, str] | None = None,
     momentum_labels: dict[str, str] | None = None,
+    momentum_context_by_symbol: dict[str, str] | None = None,
     early_entry_labels: dict[str, list[str]] | None = None,
     notes_by_symbol: dict[str, list[str]] | None = None,
     mtf_symbols: set[str] | None = None,
@@ -1161,6 +1166,11 @@ def _format_summary_symbols_with_positions(
         str(symbol).strip().upper(): str(label).strip()
         for symbol, label in (momentum_labels or {}).items()
         if str(symbol).strip() and str(label).strip()
+    }
+    normalized_momentum_context = {
+        str(symbol).strip().upper(): str(context).strip()
+        for symbol, context in (momentum_context_by_symbol or {}).items()
+        if str(symbol).strip() and str(context).strip()
     }
     normalized_notes = {
         str(symbol).strip().upper(): [" ".join(str(note).split()) for note in notes if str(note).strip()]
@@ -1187,18 +1197,31 @@ def _format_summary_symbols_with_positions(
         accent = highlight_accents.get(symbol_text.upper())
         momentum_label = normalized_momentum_labels.get(symbol_text.upper())
         momentum_color = label_colors.get(momentum_label or "", "#64748B")
+        momentum_context = normalized_momentum_context.get(symbol_text.upper())
         momentum_badge = (
-            "<span style='display:inline-block;"
-            f"color:{momentum_color};font-size:0.72rem;font-weight:700;white-space:nowrap;'>"
+            "<span style='display:grid;gap:0.08rem;align-self:center;min-width:0;'>"
+            f"<span style='color:{momentum_color};font-size:0.72rem;font-weight:700;white-space:nowrap;'>"
             f"{escape(momentum_label)}</span>"
+            + (
+                f"<span style='color:#94A3B8;font-size:0.64rem;font-weight:500;line-height:1.15;"
+                f"white-space:normal;overflow-wrap:anywhere;'>{escape(momentum_context)}</span>"
+                if momentum_context
+                else ""
+            )
+            + "</span>"
             if momentum_label
-            else "<span></span>"
+            else (
+                f"<span style='color:#94A3B8;font-size:0.64rem;font-weight:500;line-height:1.15;"
+                f"white-space:normal;overflow-wrap:anywhere;'>{escape(momentum_context)}</span>"
+                if momentum_context
+                else "<span></span>"
+            )
         )
         early_entry_badge = " · ".join(
             escape(label) for label in normalized_early_entry_labels.get(symbol_text.upper(), [])
         )
         early_entry_html = (
-            "<div style='grid-column:1 / -1;color:#64748B;font-size:0.68rem;font-weight:600;"
+            "<div style='grid-column:1 / -1;color:#94A3B8;font-size:0.68rem;font-weight:600;"
             f"line-height:1.2;margin-top:-0.15rem;'>{early_entry_badge}</div>"
             if early_entry_badge
             else ""
