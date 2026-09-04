@@ -264,7 +264,11 @@ def load_indices_from_supabase() -> dict[str, str]:
     return indices
 
 
-def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame) -> tuple[dict[str, int], list[str]]:
+def resolve_tokens_from_tickers(
+    tickers: list[str],
+    instruments_df: pd.DataFrame,
+    exchange_by_symbol: dict[str, str] | None = None,
+) -> tuple[dict[str, int], list[str]]:
     """
     Map comma-separated tickers to instrument tokens using the instrument dump.
     """
@@ -279,13 +283,18 @@ def resolve_tokens_from_tickers(tickers: list[str], instruments_df: pd.DataFrame
             missing.append(ticker)
             continue
         # The instrument dump can contain the same symbol for multiple exchanges.
-        # Historic Data requests NSE quotes/LTP, so prefer the matching NSE token.
         if "exchange" in matches.columns:
-            nse_matches = matches[
+            requested_exchange = (exchange_by_symbol or {}).get(_ltp_match_symbol(ticker), "NSE")
+            exchange_matches = matches[
                 matches["exchange"].astype(str).str.strip().str.upper() == "NSE"
             ]
-            if not nse_matches.empty:
-                matches = nse_matches
+            requested_matches = matches[
+                matches["exchange"].astype(str).str.strip().str.upper() == requested_exchange
+            ]
+            if not requested_matches.empty:
+                matches = requested_matches
+            elif not exchange_matches.empty:
+                matches = exchange_matches
         resolved[ticker] = int(matches.iloc[0]["instrument_token"])
     return resolved, missing
 
@@ -1068,18 +1077,57 @@ def _cache_ltp_by_symbol(df: pd.DataFrame) -> None:
         st.session_state["ltp_by_symbol"] = {}
 
 
-def fetch_live_ltp(kite, symbols: list[str]) -> pd.DataFrame:
-    normalized_symbols = sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
+def _historic_alert_exchange_by_symbol() -> dict[str, str]:
+    alerts_data = st.session_state.get("kite_alerts_data", {})
+    alerts = alerts_data.get("alerts", []) if isinstance(alerts_data, dict) else []
+    exchange_by_symbol: dict[str, str] = {}
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            continue
+        symbol = _ltp_match_symbol(alert.get("lhs_tradingsymbol"))
+        exchange = str(alert.get("lhs_exchange") or "").strip().upper()
+        if symbol and exchange:
+            exchange_by_symbol[symbol] = exchange
+    return exchange_by_symbol
+
+
+def _historic_quote_instrument(symbol: str, exchange: str) -> str:
+    if exchange == "INDICES":
+        index_symbols = {
+            "NIFTY 50": "NSE:NIFTY 50",
+            "NIFTY BANK": "NSE:NIFTY BANK",
+            "SENSEX": "BSE:SENSEX",
+        }
+        return index_symbols.get(symbol, f"NSE:{symbol}")
+    return f"{exchange}:{symbol}"
+
+
+def fetch_live_ltp(
+    kite,
+    symbols: list[str],
+    exchange_by_symbol: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    normalized_symbols = sorted(
+        {_ltp_match_symbol(symbol) for symbol in symbols if _ltp_match_symbol(symbol)}
+    )
     if not normalized_symbols:
         return pd.DataFrame(columns=["Symbol", "LTP"])
 
-    instruments = [f"NSE:{symbol}" for symbol in normalized_symbols]
+    normalized_exchanges = {
+        _ltp_match_symbol(symbol): str(exchange).strip().upper()
+        for symbol, exchange in (exchange_by_symbol or {}).items()
+        if _ltp_match_symbol(symbol) and str(exchange).strip()
+    }
+    instruments = [
+        _historic_quote_instrument(symbol, normalized_exchanges.get(symbol, "NSE"))
+        for symbol in normalized_symbols
+    ]
     data = kite.ltp(*instruments)
     rows: list[dict[str, Any]] = []
     for instrument, quote_data in data.items():
         if not isinstance(quote_data, dict) or quote_data.get("last_price") is None:
             continue
-        symbol = str(instrument).split(":", 1)[-1].strip().upper()
+        symbol = _ltp_match_symbol(str(instrument).split(":", 1)[-1])
         rows.append(
             {
                 "Symbol": symbol,
@@ -1089,15 +1137,26 @@ def fetch_live_ltp(kite, symbols: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["Symbol", "LTP"])
 
 
-def fetch_live_ltp_by_symbol(kite, symbols: list[str]) -> dict[str, float]:
-    ltp_df = fetch_live_ltp(kite, symbols)
+def fetch_live_ltp_by_symbol(
+    kite,
+    symbols: list[str],
+    exchange_by_symbol: dict[str, str] | None = None,
+) -> dict[str, float]:
+    ltp_df = fetch_live_ltp(kite, symbols, exchange_by_symbol=exchange_by_symbol)
     if ltp_df.empty:
         return {}
-    return {
+    normalized_ltp_by_symbol = {
         str(row["Symbol"]).strip().upper(): float(row["LTP"])
         for _, row in ltp_df.iterrows()
         if pd.notna(row.get("LTP"))
     }
+    ltp_by_symbol = dict(normalized_ltp_by_symbol)
+    for symbol in symbols:
+        original_symbol = str(symbol).strip().upper()
+        normalized_symbol = _ltp_match_symbol(original_symbol)
+        if original_symbol and normalized_symbol in normalized_ltp_by_symbol:
+            ltp_by_symbol[original_symbol] = normalized_ltp_by_symbol[normalized_symbol]
+    return ltp_by_symbol
 
 
 def _historic_request_signature(tickers: list[str], benchmark: str) -> tuple[tuple[str, ...], str]:
@@ -2294,10 +2353,12 @@ if selected_main_tab == "Historic Data":
     if pending_historic_ltp_tickers:
         try:
             historic_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
+            alert_exchange_by_symbol = _historic_alert_exchange_by_symbol()
             with st.spinner("Refreshing live LTP..."):
                 live_ltp_by_symbol = fetch_live_ltp_by_symbol(
                     historic_kite,
                     pending_historic_ltp_tickers,
+                    exchange_by_symbol=alert_exchange_by_symbol,
                 )
                 st.session_state["historic_dashboard_df"] = _patch_historic_dashboard_ltp(
                     st.session_state.get("historic_dashboard_df", pd.DataFrame()),
@@ -2331,12 +2392,17 @@ if selected_main_tab == "Historic Data":
             as_of_date = datetime.now().date().isoformat()
             historic_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
             pending_benchmark = st.session_state.get("historic_pending_benchmark", DEFAULT_MOMENTUM_BENCHMARK)
+            alert_exchange_by_symbol = _historic_alert_exchange_by_symbol()
 
             with st.spinner("Fetching historic dashboard..."):
                 instruments_df = load_instrument_token_from_supabase(
                     pending_historic_tickers + [pending_benchmark]
                 )
-                token_map, missing_tickers = resolve_tokens_from_tickers(pending_historic_tickers, instruments_df)
+                token_map, missing_tickers = resolve_tokens_from_tickers(
+                    pending_historic_tickers,
+                    instruments_df,
+                    exchange_by_symbol=alert_exchange_by_symbol,
+                )
                 benchmark_token_map, missing_benchmark = resolve_tokens_from_tickers([pending_benchmark], instruments_df)
 
                 if missing_tickers:
@@ -2357,7 +2423,11 @@ if selected_main_tab == "Historic Data":
                         {"Ticker": ticker, "instrument_token": token}
                         for ticker, token in token_map.items()
                     ]
-                    live_ltp_by_symbol = fetch_live_ltp_by_symbol(historic_kite, pending_historic_tickers)
+                    live_ltp_by_symbol = fetch_live_ltp_by_symbol(
+                        historic_kite,
+                        pending_historic_tickers,
+                        exchange_by_symbol=alert_exchange_by_symbol,
+                    )
                     dashboard_df, day_movers_df, skipped_symbols = build_price_ladder_and_day_movers_frames(
                         historic_kite,
                         token_rows,
