@@ -102,7 +102,12 @@ export function PotentialMtfCalculator({ liveData, selectedHolding }: { liveData
           <Metric label="Charges" value={money(metrics.charges)} />
           <Metric label="Net P&L" value={money(metrics.netPnl)} tone={tone(metrics.netPnl)} />
           <Metric label="Net Ret%" value={pct(metrics.netReturnPct)} tone={tone(metrics.netReturnPct)} />
-          <Metric label="Breakeven" value={priceValue(metrics.breakeven)} tone="text-terminal-near" />
+          <Metric
+            label="Breakeven"
+            value={priceValue(metrics.breakeven)}
+            tone="text-terminal-near"
+            title="Breakeven = entry price + (interest + estimated charges) / quantity. Charges include brokerage, pledge or unpledge charges, and GST."
+          />
         </div>
       </div>
     </section>
@@ -113,8 +118,8 @@ function Field({ label, children }: { label: string; children: ReactElement<{ cl
   return <label className="min-w-0 space-y-0.5 text-[11px] font-semibold uppercase tracking-wide text-terminal-muted"><span>{label}</span><span className="block [&>input]:w-full [&>input]:min-w-0 [&>input]:rounded-md [&>input]:border [&>input]:border-terminal-line [&>input]:bg-terminal-panel-alt [&>input]:px-2 [&>input]:py-1.5 [&>input]:text-xs [&>input]:text-terminal-ink [&>input]:outline-none focus:[&>input]:border-terminal-watch">{children}</span></label>;
 }
 
-function Metric({ label, value, tone = "text-terminal-ink" }: { label: string; value: string; tone?: string }) {
-  return <div className="min-w-0 rounded-md border border-terminal-line bg-terminal-panel-alt px-1.5 py-2"><div className="truncate text-[9px] font-semibold uppercase tracking-wide text-terminal-muted" title={label}>{label}</div><div className={`mt-0.5 truncate text-xs font-bold tabular-nums ${tone}`} title={value}>{value}</div></div>;
+function Metric({ label, value, tone = "text-terminal-ink", title }: { label: string; value: string; tone?: string; title?: string }) {
+  return <div className="min-w-0 rounded-md border border-terminal-line bg-terminal-panel-alt px-1.5 py-2"><div className="flex items-center gap-1 truncate text-[9px] font-semibold uppercase tracking-wide text-terminal-muted" title={label}><span className="truncate">{label}</span>{title ? <span aria-label={title} className="cursor-help text-[0.6rem] normal-case text-terminal-near" role="img" title={title}>ⓘ</span> : null}</div><div className={`mt-0.5 truncate text-xs font-bold tabular-nums ${tone}`} title={value}>{value}</div></div>;
 }
 
 function calculatePotentialMtf(qtyText: string, priceText: string, exitPriceText: string, entry: string, exit: string, existing?: MtfHolding | null) {

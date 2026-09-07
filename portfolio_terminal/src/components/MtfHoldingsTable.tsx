@@ -77,7 +77,19 @@ export function MtfHoldingsTable({ holdings, onAddToCalculator }: MtfHoldingsTab
                   </span>
                 </span>
               </th>
-              <th className="px-2 py-2 text-right">Breakeven</th>
+              <th className="px-2 py-2 text-right">
+                <span className="inline-flex items-center justify-end gap-1">
+                  Breakeven
+                  <span
+                    aria-label="Breakeven formula: MTF average price plus accrued interest and estimated charges divided by MTF quantity"
+                    className="cursor-help text-[0.65rem] normal-case text-terminal-near"
+                    role="img"
+                    title="Breakeven = MTF Avg + (accrued interest + estimated charges) / MTF Qty. Charges include brokerage, pledge charge, and GST."
+                  >
+                    ⓘ
+                  </span>
+                </span>
+              </th>
               <th className="px-2 py-2 text-right">Days</th>
               <th className="px-2 py-2 text-right" title="Funded amount x Daily Interest %">Int/Day</th>
               <th className="px-2 py-2 text-right" title="Funded amount x Daily Interest % x Days">Interest</th>
@@ -178,7 +190,10 @@ function mtfInterestMetrics(holding: MtfHolding, dailyInterestRate: number) {
   const netPnl = interestSoFar === null ? null : holding.pnl - interestSoFar - charges;
   const costPct = interestSoFar === null || holding.pnl === 0 ? null : ((interestSoFar + charges) / Math.abs(holding.pnl)) * 100;
   const pnlPct = holding.mtfAvgPrice === 0 ? null : ((holding.ltp - holding.mtfAvgPrice) / holding.mtfAvgPrice) * 100;
-  const breakeven = interestSoFar === null || holding.mtfQty === 0 ? null : holding.mtfAvgPrice + interestSoFar / holding.mtfQty;
+  const breakeven =
+    interestSoFar === null || holding.mtfQty === 0
+      ? null
+      : holding.mtfAvgPrice + (interestSoFar + charges) / holding.mtfQty;
 
   return {
     fundedAmount,
