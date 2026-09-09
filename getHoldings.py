@@ -46,6 +46,7 @@ from getHldgBrk import (
     _normalized_symbol_value,
     _refresh_holdings_breakdown_state_for_symbols,
     _render_add_holdings_breakdown_entries_form,
+    ORDER_SYNC_SKIPPED_SELLS_STATE_KEY,
     _set_holdings_breakdown_state,
     clean_holdings_breakdown_for_supabase,
     display_holdings_breakdown_df,
@@ -1888,6 +1889,11 @@ def _today_orders_display_df(
     return pd.DataFrame(display_rows)
 
 
+def _is_today_order(order: dict[str, Any], today: str) -> bool:
+    parsed_timestamp = pd.to_datetime(order.get("order_timestamp"), errors="coerce")
+    return not pd.isna(parsed_timestamp) and parsed_timestamp.date().isoformat() == today
+
+
 def _render_today_orders_for_breakdown() -> None:
     today = datetime.now().date().isoformat()
     if st.session_state.get(TODAY_ORDERS_DATE_STATE_KEY) != today:
@@ -1897,6 +1903,7 @@ def _render_today_orders_for_breakdown() -> None:
                 order
                 for order in orders_kite.orders()
                 if str(order.get("status") or "").upper().strip() == "COMPLETE"
+                and _is_today_order(order, today)
             ]
             st.session_state[TODAY_ORDERS_STATE_KEY] = complete_orders
             st.session_state[TODAY_ORDERS_DATE_STATE_KEY] = today
@@ -1907,8 +1914,19 @@ def _render_today_orders_for_breakdown() -> None:
         else:
             try:
                 affected_symbols = update_holdings_breakdown_from_orders(complete_orders)
+                skipped_sell_messages = st.session_state.get(
+                    ORDER_SYNC_SKIPPED_SELLS_STATE_KEY, []
+                )
+                for message in skipped_sell_messages:
+                    st.warning(f"Order was not applied: {message}")
                 if affected_symbols:
                     _load_holdings_breakdown_state()
+                    st.success(
+                        "Today's orders updated the holdings breakdown for "
+                        f"{len(affected_symbols)} symbol(s)."
+                    )
+                elif not skipped_sell_messages:
+                    st.info("Today's complete orders are already reflected in the holdings breakdown.")
                 st.session_state.pop(TODAY_ORDERS_SYNC_ERROR_STATE_KEY, None)
             except Exception as exc:
                 st.session_state[TODAY_ORDERS_SYNC_ERROR_STATE_KEY] = str(exc)

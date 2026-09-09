@@ -63,6 +63,8 @@ SUPABASE_EXCLUDED_WRITE_COLUMNS = {
     "batch_pnl_pct",
     "present_age",
 }
+ORDER_SOURCE_COLUMN = "source_order_ids"
+ORDER_SYNC_SKIPPED_SELLS_STATE_KEY = "holdings_breakdown_skipped_sell_orders"
 
 def _json_safe_value(value: Any) -> Any:
     """Convert pandas/numpy values into JSON-safe primitives for Supabase."""
@@ -226,6 +228,23 @@ def _json_safe_record(record: dict[str, Any]) -> dict[str, Any]:
         if column in safe_record:
             safe_record[column] = _record_integer_value(safe_record[column])
     return safe_record
+
+def _source_order_ids(value: Any) -> set[str]:
+    return {
+        order_id.strip()
+        for order_id in str(value or "").split(",")
+        if order_id.strip()
+    }
+
+
+def _with_source_order_id(record: dict[str, Any], order_id: Any) -> dict[str, Any]:
+    order_ids = _source_order_ids(record.get(ORDER_SOURCE_COLUMN))
+    normalized_order_id = str(order_id or "").strip()
+    if normalized_order_id:
+        order_ids.add(normalized_order_id)
+    if order_ids:
+        record[ORDER_SOURCE_COLUMN] = ",".join(sorted(order_ids))
+    return record
 
 
 def _supabase_write_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -1027,6 +1046,7 @@ def _apply_batch_exit(
     exit_price: float,
     exit_qty: int,
     ltp_by_symbol: dict[str, float],
+    source_order_id: Any = None,
 ) -> None:
     row_id = _row_id(row)
     batch_qty = _int_input_value(row.get("batch_qty"))
@@ -1051,11 +1071,16 @@ def _apply_batch_exit(
             },
             ltp_by_symbol,
         )
+        _with_source_order_id(active_record, source_order_id)
         update_holdings_breakdown_row(row_id, active_record)
-        insert_holdings_breakdown_row(_exit_batch_record(row, exit_date, exit_price, exit_qty))
+        exited_record = _exit_batch_record(row, exit_date, exit_price, exit_qty)
+        _with_source_order_id(exited_record, source_order_id)
+        insert_holdings_breakdown_row(exited_record)
         return
 
-    update_holdings_breakdown_row(row_id, _exit_batch_record(row, exit_date, exit_price, exit_qty))
+    exited_record = _exit_batch_record(row, exit_date, exit_price, exit_qty)
+    _with_source_order_id(exited_record, source_order_id)
+    update_holdings_breakdown_row(row_id, exited_record)
 
 
 def _render_exit_form(
@@ -1217,6 +1242,24 @@ def _canonical_symbol_isin(symbol_df: pd.DataFrame) -> str | None:
     return str(candidates.iloc[0]["_isin_key"]).upper().strip()
 
 
+def _canonical_symbol_sector(symbol_df: pd.DataFrame) -> str | None:
+    if symbol_df.empty or "sector" not in symbol_df.columns:
+        return None
+
+    summary_rows = symbol_df[
+        symbol_df.get("row_type", pd.Series(index=symbol_df.index, dtype=object))
+        .astype(str)
+        .str.upper()
+        .str.strip()
+        .eq("SUMMARY")
+    ]
+    if summary_rows.empty:
+        return None
+
+    sector = _json_safe_value(summary_rows.iloc[0].get("sector"))
+    return str(sector).strip() if sector is not None else None
+
+
 def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dict[str, float]) -> list[str]:
     affected_symbols: set[str] = set()
     errors: list[str] = []
@@ -1242,6 +1285,11 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
         for symbol, symbol_df in existing_by_symbol.items()
         if (isin := _canonical_symbol_isin(symbol_df))
     }
+    sector_by_symbol = {
+        symbol: sector
+        for symbol, symbol_df in existing_by_symbol.items()
+        if (sector := _canonical_symbol_sector(symbol_df))
+    }
     seen_symbols: set[str] = set()
     pending_summary_symbols: set[str] = set()
 
@@ -1250,7 +1298,8 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
             continue
 
         symbol = str(row.get("Symbol") or "").upper().strip()
-        sector = _json_safe_value(row.get("Sector"))
+        sector = _json_safe_value(row.get("Sector")) or sector_by_symbol.get(symbol)
+        source_order_id = str(row.get("Source Order ID") or "").strip()
         is_exit = bool(row.get("Exit?"))
         is_mtf = bool(row.get("MTF?"))
         is_bonus = bool(row.get("Bonus?"))
@@ -1294,9 +1343,9 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                 },
                 ltp_by_symbol,
             )
+            _with_source_order_id(record, source_order_id)
             if should_create_initial_batch:
-                pending_records.append(
-                    _recompute_breakdown_record(
+                batch_record = _recompute_breakdown_record(
                         {
                             "row_type": "BATCH",
                             "symbol": symbol,
@@ -1309,8 +1358,9 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                             "ltp": _lookup_ltp(ltp_by_symbol, symbol),
                         },
                         ltp_by_symbol,
-                    )
                 )
+                _with_source_order_id(batch_record, source_order_id)
+                pending_records.append(batch_record)
         else:
             batch_qty = qty
             batch_price = price
@@ -1345,6 +1395,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                 if is_exit
                 else _recompute_breakdown_record(base_record, ltp_by_symbol)
             )
+            _with_source_order_id(record, source_order_id)
 
             has_existing_summary = (
                 not symbol_df.empty
@@ -1441,47 +1492,83 @@ def _render_add_holdings_breakdown_entries_form(ltp_by_symbol: dict[str, float])
 
 
 def update_holdings_breakdown_from_orders(orders: list[dict[str, Any]]) -> list[str]:
-    buy_rows: list[dict[str, Any]] = []
-    sell_orders: list[dict[str, Any]] = []
+    order_events: list[dict[str, Any]] = []
+    skipped_sell_messages: list[str] = []
+    st.session_state[ORDER_SYNC_SKIPPED_SELLS_STATE_KEY] = skipped_sell_messages
+    existing_df = load_holdings_breakdown_from_supabase()
+    processed_order_ids = {
+        order_id
+        for value in existing_df.get(ORDER_SOURCE_COLUMN, pd.Series(dtype=object))
+        for order_id in _source_order_ids(value)
+    }
+    today = date.today()
     for order in orders:
         if str(order.get("status") or "").upper().strip() != "COMPLETE":
             continue
 
+        order_id = str(order.get("order_id") or "").strip()
         symbol = _normalized_symbol_value(order.get("tradingsymbol"))
         quantity = _record_integer_value(order.get("filled_quantity"))
         price = _record_numeric_value(order.get("average_price"))
-        trade_date = _normalize_trade_date(order.get("order_timestamp"))
-        if not symbol or quantity is None or quantity <= 0 or price is None or trade_date is None:
+        parsed_trade_date = _parse_trade_date(order.get("order_timestamp"))
+        trade_date = parsed_trade_date.isoformat() if parsed_trade_date else None
+        if (
+            not order_id
+            or order_id in processed_order_ids
+            or parsed_trade_date != today
+            or not symbol
+            or quantity is None
+            or quantity <= 0
+            or price is None
+            or trade_date is None
+        ):
             continue
 
         transaction_type = str(order.get("transaction_type") or "").upper().strip()
         if transaction_type == "BUY":
-            buy_rows.append(
+            order_events.append(
                 {
-                    "Symbol": symbol,
-                    "Qty": quantity,
-                    "Price": price,
-                    "Date": trade_date,
-                    "Exit?": False,
-                    "MTF?": False,
-                    "Bonus?": False,
+                    "date": trade_date,
+                    "timestamp": str(order.get("order_timestamp") or ""),
+                    "order_id": order_id,
+                    "type": "BUY",
+                    "data": {
+                        "Symbol": symbol,
+                        "Qty": quantity,
+                        "Price": price,
+                        "Date": trade_date,
+                        "Exit?": False,
+                        "MTF?": False,
+                        "Bonus?": False,
+                        "Source Order ID": order_id,
+                    },
                 }
             )
         elif transaction_type == "SELL":
-            sell_orders.append(
+            order_events.append(
                 {
-                    "symbol": symbol,
-                    "quantity": quantity,
-                    "price": price,
                     "date": trade_date,
+                    "timestamp": str(order.get("order_timestamp") or ""),
+                    "order_id": order_id,
+                    "type": "SELL",
+                    "data": {
+                        "symbol": symbol,
+                        "quantity": quantity,
+                        "price": price,
+                    },
                 }
             )
 
     affected_symbols: set[str] = set()
-    if buy_rows:
-        affected_symbols.update(_insert_added_breakdown_entries(pd.DataFrame(buy_rows), {}))
+    for event in sorted(
+        order_events,
+        key=lambda item: (item["date"], item["timestamp"], item["order_id"]),
+    ):
+        if event["type"] == "BUY":
+            affected_symbols.update(_insert_added_breakdown_entries(pd.DataFrame([event["data"]]), {}))
+            continue
 
-    for order in sell_orders:
+        order = event["data"]
         symbol = order["symbol"]
         symbol_df = load_holdings_breakdown_for_symbols([symbol])
         if symbol_df.empty or "row_type" not in symbol_df.columns:
@@ -1498,7 +1585,16 @@ def update_holdings_breakdown_from_orders(orders: list[dict[str, Any]]) -> list[
             order["quantity"],
         )
         allocated_quantity = sum(quantity for _, quantity in allocations)
-        if allocated_quantity <= 0:
+        if allocated_quantity <= 0 or allocated_quantity != order["quantity"]:
+            active_quantity = sum(
+                _active_batch_exit_qty(row)
+                for _, row in symbol_df.iterrows()
+                if str(row.get("row_type") or "").upper().strip() == "BATCH"
+            )
+            skipped_sell_messages.append(
+                f"{symbol}: sell order {order['order_id']} requested "
+                f"{order['quantity']} but only {active_quantity} active quantity was available."
+            )
             continue
 
         exit_date = _parse_trade_date(order["date"]) or date.today()
@@ -1509,6 +1605,7 @@ def update_holdings_breakdown_from_orders(orders: list[dict[str, Any]]) -> list[
                 exit_price=order["price"],
                 exit_qty=exit_quantity,
                 ltp_by_symbol={},
+                source_order_id=order["order_id"],
             )
 
         refreshed_symbol_df = load_holdings_breakdown_for_symbols([symbol])
@@ -1520,7 +1617,7 @@ def update_holdings_breakdown_from_orders(orders: list[dict[str, Any]]) -> list[
         sync_exited_holdings_index({symbol})
         affected_symbols.add(symbol)
 
-    if not buy_rows and not sell_orders:
+    if not order_events:
         return []
 
     return sorted(affected_symbols)
