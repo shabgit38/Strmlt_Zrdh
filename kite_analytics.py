@@ -1401,7 +1401,7 @@ def _format_position_line_chart_html(position: str) -> str:
     ):
         return ""
 
-    ordered_points = sorted(parsed_points, key=lambda point: point["value"], reverse=True)
+    ordered_points = _sort_position_chart_points(parsed_points)
     current_point = next(
         (point for point in parsed_points if point["label"] in {"LTP", "Latest Close"}),
         None,
@@ -1519,21 +1519,115 @@ def _position_line_chart_points(position: str) -> list[dict[str, float | str | N
         {"label": label, "value": value, "distance": distance}
         for label, value, distance in parsed_points
     ]
-    monthly_best: dict[tuple[str, float], tuple[int, dict[str, float | str | None]]] = {}
+    period_best: dict[tuple[str, float], tuple[int, dict[str, float | str | None]]] = {}
     other_points: list[dict[str, float | str | None]] = []
     for point in points:
-        monthly_match = re.fullmatch(r"([136])M (High|Low)", str(point["label"]))
-        if monthly_match is None:
+        label = str(point["label"])
+        period_match = re.fullmatch(r"(1W|1M|3M|6M|52W|[1-5]Y) (High|Low)", label)
+        if period_match is None:
             other_points.append(point)
             continue
 
-        months = int(monthly_match.group(1))
-        key = (monthly_match.group(2), float(point["value"]))
-        existing = monthly_best.get(key)
-        if existing is None or months > existing[0]:
-            monthly_best[key] = (months, point)
+        period = _position_period_days(period_match.group(1))
+        key = (period_match.group(2), float(point["value"]))
+        existing = period_best.get(key)
+        if existing is None or period > existing[0]:
+            period_best[key] = (period, point)
 
-    return other_points + [point for _, point in monthly_best.values()]
+    return other_points + [point for _, point in period_best.values()]
+
+
+def _position_period_days(period: str) -> int:
+    if period.endswith("W"):
+        return int(period.removesuffix("W")) * 7
+    if period.endswith("M"):
+        return int(period.removesuffix("M")) * 30
+    return int(period.removesuffix("Y")) * 365
+
+
+def _sort_position_chart_points(
+    points: list[dict[str, float | str | None]],
+) -> list[dict[str, float | str | None]]:
+    high_labels = [
+        "5Y High",
+        "4Y High",
+        "3Y High",
+        "2Y High",
+        "1Y High",
+        "52W High",
+        "6M High",
+        "3M High",
+        "1M High",
+        "1W High",
+    ]
+    low_labels = [
+        "1W Low",
+        "1M Low",
+        "3M Low",
+        "6M Low",
+        "52W Low",
+        "1Y Low",
+        "2Y Low",
+        "3Y Low",
+        "4Y Low",
+        "5Y Low",
+    ]
+    ordered_labels = ["Upper Rng", *high_labels, "LTP", "Latest Close", *low_labels, "Lower Rng"]
+    order_by_label = {label: index for index, label in enumerate(ordered_labels)}
+    known_points = [point for point in points if str(point["label"]) in order_by_label]
+    other_points = [point for point in points if str(point["label"]) not in order_by_label]
+    known_points.sort(key=lambda point: order_by_label[str(point["label"])])
+
+    current_point = next(
+        (point for point in known_points if str(point["label"]) in {"LTP", "Latest Close"}),
+        None,
+    )
+    if current_point is None:
+        return known_points + sorted(other_points, key=lambda point: float(point["value"]), reverse=True)
+
+    current_value = float(current_point["value"])
+    ema_points = [
+        point
+        for point in other_points
+        if re.fullmatch(r"EMA\d+", str(point["label"]))
+    ]
+    non_ema_points = [point for point in other_points if point not in ema_points]
+    ema_above = sorted(
+        [point for point in ema_points if float(point["value"]) > current_value],
+        key=lambda point: float(point["value"]),
+        reverse=True,
+    )
+    ema_below = sorted(
+        [point for point in ema_points if float(point["value"]) <= current_value],
+        key=lambda point: float(point["value"]),
+        reverse=True,
+    )
+
+    high_points = [
+        point
+        for point in known_points
+        if str(point["label"]) not in {"Upper Rng", "LTP", "Latest Close", "Lower Rng"}
+        and str(point["label"]).endswith("High")
+    ]
+    low_points = [
+        point
+        for point in known_points
+        if str(point["label"]) not in {"Upper Rng", "LTP", "Latest Close", "Lower Rng"}
+        and str(point["label"]).endswith("Low")
+    ]
+    upper_range = [point for point in known_points if str(point["label"]) == "Upper Rng"]
+    current = [point for point in known_points if str(point["label"]) in {"LTP", "Latest Close"}]
+    lower_range = [point for point in known_points if str(point["label"]) == "Lower Rng"]
+    return (
+        upper_range
+        + high_points
+        + ema_above
+        + current
+        + ema_below
+        + low_points
+        + lower_range
+        + sorted(non_ema_points, key=lambda point: float(point["value"]), reverse=True)
+    )
 
 
 def position_line_chart_points_from_dashboard_column(
@@ -1548,7 +1642,7 @@ def position_line_chart_points_from_dashboard_column(
         point["label"] == "Lower Rng" for point in points
     ):
         return []
-    return sorted(points, key=lambda point: float(point["value"]), reverse=True)
+    return _sort_position_chart_points(points)
 
 
 def highlight_return_cells(data: pd.DataFrame) -> pd.DataFrame:
