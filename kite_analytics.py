@@ -224,6 +224,12 @@ def build_metric_values(analytics_df: pd.DataFrame, live_ltp: float | None = Non
         metrics["52W Low"] = float(df_52w["Low"].min())
         metrics["52W High"] = float(df_52w["High"].max())
 
+    for years in [2, 3, 4]:
+        period_df = analytics_df[analytics_df.index >= latest_date - pd.DateOffset(years=years)]
+        if not period_df.empty:
+            metrics[f"{years}Y Low"] = float(period_df["Low"].min())
+            metrics[f"{years}Y High"] = float(period_df["High"].max())
+
     metrics["5Y Low"] = float(analytics_df["Low"].min())
     metrics["5Y High"] = float(analytics_df["High"].max())
 
@@ -513,7 +519,8 @@ def _format_price_position(
         )
     surrounding_pivots = _surrounding_position_levels(current_price, pivots)
     monthly_levels = _monthly_position_levels(current_price, metrics)
-    technical_parts.extend(part for part in [nearest_52w, *monthly_levels, *surrounding_pivots] if part)
+    yearly_levels = _yearly_position_levels(current_price, metrics)
+    technical_parts.extend(part for part in [nearest_52w, *yearly_levels, *monthly_levels, *surrounding_pivots] if part)
     parts: list[str] = []
     if range_position is not None:
         parts.append(f"Upper Rng {_format_position_number(range_position[2])}")
@@ -532,6 +539,19 @@ def _monthly_position_levels(current_price: float, metrics: dict[str, float]) ->
         "3M Low",
         "6M High",
         "6M Low",
+    ]
+    return [
+        _format_position_level(label, current_price, metrics.get(label))
+        for label in labels
+        if metrics.get(label) is not None
+    ]
+
+
+def _yearly_position_levels(current_price: float, metrics: dict[str, float]) -> list[str]:
+    labels = [
+        label
+        for years in range(1, 6)
+        for label in (f"{years}Y Low", f"{years}Y High")
     ]
     return [
         _format_position_level(label, current_price, metrics.get(label))
