@@ -522,12 +522,8 @@ def _format_price_position(
     yearly_levels = _yearly_position_levels(current_price, metrics)
     technical_parts.extend(part for part in [nearest_52w, *yearly_levels, *monthly_levels, *surrounding_pivots] if part)
     parts: list[str] = []
-    if range_position is not None:
-        parts.append(f"Upper Rng {_format_position_number(range_position[2])}")
     parts.append(f"{current_label} {_format_position_number(current_price)}")
     parts.extend(technical_parts)
-    if range_position is not None:
-        parts.append(f"Lower Rng {_format_position_number(range_position[1])}")
     return " | ".join(parts) or None
 
 
@@ -1343,26 +1339,16 @@ def _position_text_from_dashboard_column(symbol_values: pd.Series) -> str | None
         if low_52w_distance is not None and low_52w_value is not None
         else None
     )
-    if position.startswith("Upper Rng "):
-        parts = position.split(" | ")
-        if low_52w_part and not any(part.startswith("52W Low ") for part in parts):
-            lower_index = next(
-                (index for index, part in enumerate(parts) if part.startswith("Lower Rng ")),
-                len(parts),
-            )
-            parts.insert(lower_index, low_52w_part)
-        return " | ".join(parts)
-
-    parts: list[str] = []
-    if range_high is not None:
-        parts.append(f"Upper Rng {_format_position_number(range_high)}")
+    parts = [
+        part
+        for part in position.split(" | ")
+        if not part.startswith(("Upper Rng ", "Lower Rng "))
+    ]
     if ltp_label and ltp_value is not None:
-        parts.append(f"{ltp_label} {_format_position_number(ltp_value)}")
-    parts.append(position)
+        if not any(part.startswith(("LTP ", "Latest Close ")) for part in parts):
+            parts.insert(0, f"{ltp_label} {_format_position_number(ltp_value)}")
     if low_52w_part and "52W Low " not in position:
         parts.append(low_52w_part)
-    if range_low is not None:
-        parts.append(f"Lower Rng {_format_position_number(range_low)}")
     return " | ".join(parts)
 
 
@@ -1396,9 +1382,7 @@ def _format_position_line_chart_html(position: str) -> str:
     """Render the existing Position values; do not derive any technical metric."""
     parsed_points = _position_line_chart_points(position)
 
-    if not any(point["label"] == "Upper Rng" for point in parsed_points) or not any(
-        point["label"] == "Lower Rng" for point in parsed_points
-    ):
+    if not parsed_points:
         return ""
 
     ordered_points = _sort_position_chart_points(parsed_points)
@@ -1489,7 +1473,7 @@ def _position_line_chart_points(position: str) -> list[dict[str, float | str | N
     parsed_points: list[tuple[str, float, str | None]] = []
     for part in position.split(" | "):
         endpoint_match = re.fullmatch(
-            r"(Upper Rng|Lower Rng|LTP|Latest Close)\s+([\d,]+(?:\.\d+)?)",
+            r"(LTP|Latest Close)\s+([\d,]+(?:\.\d+)?)",
             part.strip(),
         )
         if endpoint_match:
@@ -1548,86 +1532,34 @@ def _position_period_days(period: str) -> int:
 def _sort_position_chart_points(
     points: list[dict[str, float | str | None]],
 ) -> list[dict[str, float | str | None]]:
-    high_labels = [
-        "5Y High",
-        "4Y High",
-        "3Y High",
-        "2Y High",
-        "1Y High",
-        "52W High",
-        "6M High",
-        "3M High",
-        "1M High",
-        "1W High",
-    ]
-    low_labels = [
-        "1W Low",
-        "1M Low",
-        "3M Low",
-        "6M Low",
-        "52W Low",
-        "1Y Low",
-        "2Y Low",
-        "3Y Low",
-        "4Y Low",
-        "5Y Low",
-    ]
-    ordered_labels = ["Upper Rng", *high_labels, "LTP", "Latest Close", *low_labels, "Lower Rng"]
-    order_by_label = {label: index for index, label in enumerate(ordered_labels)}
-    known_points = [point for point in points if str(point["label"]) in order_by_label]
-    other_points = [point for point in points if str(point["label"]) not in order_by_label]
-    known_points.sort(key=lambda point: order_by_label[str(point["label"])])
-
+    upper_range = [point for point in points if str(point["label"]) == "Upper Rng"]
+    lower_range = [point for point in points if str(point["label"]) == "Lower Rng"]
     current_point = next(
-        (point for point in known_points if str(point["label"]) in {"LTP", "Latest Close"}),
+        (point for point in points if str(point["label"]) in {"LTP", "Latest Close"}),
         None,
     )
     if current_point is None:
-        return known_points + sorted(other_points, key=lambda point: float(point["value"]), reverse=True)
+        return sorted(points, key=lambda point: float(point["value"]), reverse=True)
 
     current_value = float(current_point["value"])
-    ema_points = [
+    surrounding_points = [
         point
-        for point in other_points
-        if re.fullmatch(r"EMA\d+", str(point["label"]))
+        for point in points
+        if point not in upper_range
+        and point not in lower_range
+        and point is not current_point
     ]
-    non_ema_points = [point for point in other_points if point not in ema_points]
-    ema_above = sorted(
-        [point for point in ema_points if float(point["value"]) > current_value],
+    above = sorted(
+        [point for point in surrounding_points if float(point["value"]) > current_value],
         key=lambda point: float(point["value"]),
         reverse=True,
     )
-    ema_below = sorted(
-        [point for point in ema_points if float(point["value"]) <= current_value],
+    below = sorted(
+        [point for point in surrounding_points if float(point["value"]) <= current_value],
         key=lambda point: float(point["value"]),
         reverse=True,
     )
-
-    high_points = [
-        point
-        for point in known_points
-        if str(point["label"]) not in {"Upper Rng", "LTP", "Latest Close", "Lower Rng"}
-        and str(point["label"]).endswith("High")
-    ]
-    low_points = [
-        point
-        for point in known_points
-        if str(point["label"]) not in {"Upper Rng", "LTP", "Latest Close", "Lower Rng"}
-        and str(point["label"]).endswith("Low")
-    ]
-    upper_range = [point for point in known_points if str(point["label"]) == "Upper Rng"]
-    current = [point for point in known_points if str(point["label"]) in {"LTP", "Latest Close"}]
-    lower_range = [point for point in known_points if str(point["label"]) == "Lower Rng"]
-    return (
-        upper_range
-        + high_points
-        + ema_above
-        + current
-        + ema_below
-        + low_points
-        + lower_range
-        + sorted(non_ema_points, key=lambda point: float(point["value"]), reverse=True)
-    )
+    return upper_range + above + [current_point] + below + lower_range
 
 
 def position_line_chart_points_from_dashboard_column(
@@ -1638,9 +1570,7 @@ def position_line_chart_points_from_dashboard_column(
     if not position:
         return []
     points = _position_line_chart_points(position)
-    if not any(point["label"] == "Upper Rng" for point in points) or not any(
-        point["label"] == "Lower Rng" for point in points
-    ):
+    if not points:
         return []
     return _sort_position_chart_points(points)
 
