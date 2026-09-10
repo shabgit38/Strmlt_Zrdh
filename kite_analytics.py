@@ -240,12 +240,23 @@ def build_metric_values(analytics_df: pd.DataFrame, live_ltp: float | None = Non
             metrics[f"{years}Y Low"] = float(period_df["Low"].min())
             metrics[f"{years}Y High"] = float(period_df["High"].max())
 
-    if first_date <= latest_date - pd.DateOffset(years=5):
-        metrics["5Y Low"] = float(analytics_df["Low"].min())
-        metrics["5Y High"] = float(analytics_df["High"].max())
-    else:
-        metrics["Since Listed Low"] = float(analytics_df["Low"].min())
-        metrics["Since Listed High"] = float(analytics_df["High"].max())
+    coverage_boundaries = [
+        ("1W", pd.DateOffset(weeks=1)),
+        ("1M", pd.DateOffset(months=1)),
+        ("3M", pd.DateOffset(months=3)),
+        ("6M", pd.DateOffset(months=6)),
+        ("1Y", pd.DateOffset(years=1)),
+        ("2Y", pd.DateOffset(years=2)),
+        ("3Y", pd.DateOffset(years=3)),
+        ("4Y", pd.DateOffset(years=4)),
+        ("5Y", pd.DateOffset(years=5)),
+    ]
+    for period, offset in coverage_boundaries:
+        if first_date <= latest_date - offset:
+            continue
+        metrics[f"<{period} Low"] = float(analytics_df["Low"].min())
+        metrics[f"<{period} High"] = float(analytics_df["High"].max())
+        break
 
     for span in [10, 20, 50,100, 200]:
         metrics[f"EMA{span}"] = float(latest[f"EMA{span}"])
@@ -563,6 +574,18 @@ def _yearly_position_levels(current_price: float, metrics: dict[str, float]) -> 
         for years in range(1, 6)
         for label in (f"{years}Y Low", f"{years}Y High")
     ]
+    labels.extend(
+        [
+            f"<{period} Low"
+            for period in ["1W", "1M", "3M", "6M", "1Y", "2Y", "3Y", "4Y", "5Y"]
+        ]
+    )
+    labels.extend(
+        [
+            f"<{period} High"
+            for period in ["1W", "1M", "3M", "6M", "1Y", "2Y", "3Y", "4Y", "5Y"]
+        ]
+    )
     return [
         _format_position_level(label, current_price, metrics.get(label))
         for label in labels
