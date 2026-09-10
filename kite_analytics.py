@@ -190,7 +190,7 @@ def get_high_low_resampled(df: pd.DataFrame) -> dict:
 
 def build_metric_values(analytics_df: pd.DataFrame, live_ltp: float | None = None) -> dict[str, float]:
     """
-    Build the shared 5Y daily metric values used by dashboards and holdings.
+    Build metric values using only periods covered by the available history.
     """
     if analytics_df.empty:
         return {}
@@ -198,6 +198,7 @@ def build_metric_values(analytics_df: pd.DataFrame, live_ltp: float | None = Non
     analytics_df = add_ema(analytics_df.copy())
     latest = analytics_df.iloc[-1]
     latest_date = pd.to_datetime(analytics_df.index[-1])
+    first_date = pd.to_datetime(analytics_df.index.min())
     high_low = get_high_low_resampled(analytics_df)
 
     latest_close = float(latest["Close"])
@@ -212,7 +213,16 @@ def build_metric_values(analytics_df: pd.DataFrame, live_ltp: float | None = Non
         metrics["Today Low"] = float(latest["Low"])
         metrics["Today High"] = float(latest["High"])
 
+    minimum_history_offsets = {
+        "1W": pd.DateOffset(weeks=1),
+        "1M": pd.DateOffset(months=1),
+        "3M": pd.DateOffset(months=3),
+        "6M": pd.DateOffset(months=6),
+        "1Y": pd.DateOffset(years=1),
+    }
     for period in ["1W", "1M", "3M", "6M", "1Y"]:
+        if first_date > latest_date - minimum_history_offsets[period]:
+            continue
         if period not in high_low:
             continue
         high, low = high_low[period]
@@ -220,18 +230,22 @@ def build_metric_values(analytics_df: pd.DataFrame, live_ltp: float | None = Non
         metrics[f"{period} High"] = float(high)
 
     df_52w = analytics_df[analytics_df.index >= latest_date - pd.DateOffset(weeks=52)]
-    if not df_52w.empty:
+    if first_date <= latest_date - pd.DateOffset(weeks=52) and not df_52w.empty:
         metrics["52W Low"] = float(df_52w["Low"].min())
         metrics["52W High"] = float(df_52w["High"].max())
 
     for years in [2, 3, 4]:
         period_df = analytics_df[analytics_df.index >= latest_date - pd.DateOffset(years=years)]
-        if not period_df.empty:
+        if first_date <= latest_date - pd.DateOffset(years=years) and not period_df.empty:
             metrics[f"{years}Y Low"] = float(period_df["Low"].min())
             metrics[f"{years}Y High"] = float(period_df["High"].max())
 
-    metrics["5Y Low"] = float(analytics_df["Low"].min())
-    metrics["5Y High"] = float(analytics_df["High"].max())
+    if first_date <= latest_date - pd.DateOffset(years=5):
+        metrics["5Y Low"] = float(analytics_df["Low"].min())
+        metrics["5Y High"] = float(analytics_df["High"].max())
+    else:
+        metrics["Since Listed Low"] = float(analytics_df["Low"].min())
+        metrics["Since Listed High"] = float(analytics_df["High"].max())
 
     for span in [10, 20, 50,100, 200]:
         metrics[f"EMA{span}"] = float(latest[f"EMA{span}"])
