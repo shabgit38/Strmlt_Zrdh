@@ -34,6 +34,18 @@ import type { MtfHolding } from "../types";
 type OptionField = keyof OptionCalculatorRow;
 type TradeField = keyof TradeCalculatorRow;
 type AvgField = keyof AvgCalculatorRow;
+const OPTION_ROWS_STORAGE_KEY = "portfolio-terminal:option-calculator-rows";
+
+function loadSavedOptionRows(): OptionCalculatorRow[] {
+  try {
+    const saved = window.sessionStorage.getItem(OPTION_ROWS_STORAGE_KEY);
+    if (!saved) return [emptyOptionRow()];
+    const rows = JSON.parse(saved) as unknown;
+    return Array.isArray(rows) && rows.length > 0 ? rows as OptionCalculatorRow[] : [emptyOptionRow()];
+  } catch {
+    return [emptyOptionRow()];
+  }
+}
 
 export function CalculatorsScreen({
   liveData,
@@ -42,7 +54,7 @@ export function CalculatorsScreen({
   liveData?: CalculatorsLiveData | null;
   mtfHoldings?: MtfHolding[];
 }) {
-  const [optionRows, setOptionRows] = useState<OptionCalculatorRow[]>(() => [emptyOptionRow()]);
+  const [optionRows, setOptionRows] = useState<OptionCalculatorRow[]>(loadSavedOptionRows);
   const [tradeRows, setTradeRows] = useState<TradeCalculatorRow[]>(() => [emptyTradeRow()]);
   const [avgRows, setAvgRows] = useState<AvgCalculatorRow[]>(() => [emptyAvgRow()]);
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
@@ -56,6 +68,13 @@ export function CalculatorsScreen({
   const generatedRowIdsRef = useRef(new Map<string, string>());
   const fetchedSymbolsRef = useRef(new Set<string>());
   const lastLiveRequestIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(OPTION_ROWS_STORAGE_KEY, JSON.stringify(optionRows));
+    } catch {
+    }
+  }, [optionRows]);
 
   const effectiveOptionRows = useMemo(
     () =>
