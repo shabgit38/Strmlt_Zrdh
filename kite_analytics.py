@@ -417,46 +417,6 @@ def compute_volume_gains(analytics_df: pd.DataFrame) -> dict[str, float | None]:
     }
 
 
-def pivot_points(df: pd.DataFrame) -> dict[str, float]:
-    """
-    Return daily classical pivot values for the current trading session.
-
-    Daily pivots use the most recent session before today. Keep today's candle
-    excluded after market close as well, so the displayed levels do not advance
-    to the next session while Kite is still showing the current session's pivots.
-    """
-    required_columns = {"High", "Low", "Close"}
-    if df.empty or not required_columns.issubset(df.columns):
-        return {}
-
-    normalized_df = _normalize_datetime_index(df)
-    normalized_df = normalized_df.sort_index().dropna(subset=list(required_columns))
-    if normalized_df.empty:
-        return {}
-
-    today = datetime.now(IST).date()
-    reference_df = normalized_df.loc[pd.Index(normalized_df.index.date) < today]
-    if reference_df.empty:
-        return {}
-    reference_row = reference_df.iloc[-1]
-
-    high = float(reference_row["High"])
-    low = float(reference_row["Low"])
-    close = float(reference_row["Close"])
-    price_range = high - low
-
-    pivot = (high + low + close) / 3
-    return {
-        "D Pivot": pivot,
-        "D R1": 2 * pivot - low,
-        "D R2": pivot + price_range,
-        "D R3": high + 2 * (pivot - low),
-        "D S1": 2 * pivot - high,
-        "D S2": pivot - price_range,
-        "D S3": low - 2 * (high - pivot),
-    }
-
-
 def build_metric_ladder(
     analytics_df: pd.DataFrame,
     *,
@@ -476,9 +436,6 @@ def build_metric_ladder(
         if range_position is not None and current_price is not None
         else None
     )
-    # Pivot calculations are intentionally excluded from the UI for now.
-    # Keep pivot_points() available so the feature can be restored later.
-    pivots: dict[str, float] = {}
     ladder: list[tuple[str, float | str | tuple[float, ...] | None]] = [
         ("Range Position", range_with_ltp),
     ]
@@ -495,21 +452,17 @@ def build_metric_ladder(
         ladder.append(("Qty", quantity))
 
     ladder.append(("Range Used", range_position))
-    ladder.append(("Position", _format_price_position(metrics, pivots, range_position)))
+    ladder.append(("Position", _format_price_position(metrics)))
     for span in [10, 20, 50, 100, 200]:
         label = f"EMA{span}"
         ladder.append((f"__EMA_DISTANCE__{label}", calculate_distance_pct(current_price, metrics.get(label))))
     for label in ["52W High", "52W Low"]:
         ladder.append((f"__52W_DISTANCE__{label}", calculate_distance_pct(current_price, metrics.get(label))))
-    ladder.extend(sorted({**metrics, **pivots}.items(), key=lambda item: item[1]))
+    ladder.extend(sorted(metrics.items(), key=lambda item: item[1]))
     return ladder
 
 
-def _format_price_position(
-    metrics: dict[str, float],
-    pivots: dict[str, float],
-    range_position: tuple[float, float, float] | None = None,
-) -> str | None:
+def _format_price_position(metrics: dict[str, float]) -> str | None:
     current_price = metrics.get("LTP", metrics.get("Latest Close"))
     if current_price is None:
         return None
@@ -542,10 +495,9 @@ def _format_price_position(
             current_price,
             {label: metrics.get(label) for label in ["52W Low", "52W High"]},
         )
-    surrounding_pivots = _surrounding_position_levels(current_price, pivots)
     monthly_levels = _monthly_position_levels(current_price, metrics)
     yearly_levels = _yearly_position_levels(current_price, metrics)
-    technical_parts.extend(part for part in [nearest_52w, *yearly_levels, *monthly_levels, *surrounding_pivots] if part)
+    technical_parts.extend(part for part in [nearest_52w, *yearly_levels, *monthly_levels] if part)
     parts: list[str] = []
     parts.append(f"{current_label} {_format_position_number(current_price)}")
     parts.extend(technical_parts)
@@ -600,33 +552,6 @@ def _nearest_position_level(current_price: float, levels: dict[str, Any]) -> str
         if distance is not None:
             candidates.append((abs(distance), _format_position_level(label, current_price, level)))
     return min(candidates, key=lambda item: item[0])[1] if candidates else None
-
-
-def _surrounding_position_levels(current_price: float, levels: dict[str, Any]) -> list[str]:
-    numeric_levels: list[tuple[float, str]] = []
-    for label, level in levels.items():
-        numeric_level = pd.to_numeric(level, errors="coerce")
-        if pd.notna(numeric_level):
-            numeric_levels.append((float(numeric_level), label))
-    numeric_levels.sort(key=lambda item: item[0])
-
-    exact = [item for item in numeric_levels if item[0] == current_price]
-    if exact:
-        selected = exact[:1]
-    else:
-        below = [item for item in numeric_levels if item[0] < current_price]
-        above = [item for item in numeric_levels if item[0] > current_price]
-        selected = []
-        if below:
-            selected.append(below[-1])
-        if above:
-            selected.append(above[0])
-
-        pivot_value = pd.to_numeric(levels.get("D Pivot"), errors="coerce")
-        if pd.notna(pivot_value) and current_price < float(pivot_value):
-            selected.reverse()
-
-    return [_format_position_level(label, current_price, level) for level, label in selected]
 
 
 def _format_position_level(label: str, current_price: float, level: Any) -> str:
@@ -1335,8 +1260,6 @@ def _position_text_from_dashboard_column(symbol_values: pd.Series) -> str | None
     position: str | None = None
     ltp_label: str | None = None
     ltp_value: float | None = None
-    range_low: float | None = None
-    range_high: float | None = None
     low_52w_distance: str | None = None
     low_52w_value: float | None = None
     for value in symbol_values:
@@ -1376,11 +1299,7 @@ def _position_text_from_dashboard_column(symbol_values: pd.Series) -> str | None
         if low_52w_distance is not None and low_52w_value is not None
         else None
     )
-    parts = [
-        part
-        for part in position.split(" | ")
-        if not part.startswith(("Upper Rng ", "Lower Rng "))
-    ]
+    parts = position.split(" | ")
     if ltp_label and ltp_value is not None:
         if not any(part.startswith(("LTP ", "Latest Close ")) for part in parts):
             parts.insert(0, f"{ltp_label} {_format_position_number(ltp_value)}")
@@ -1444,7 +1363,6 @@ def _format_position_line_chart_html(position: str) -> str:
         value = float(point["value"])
         distance = point["distance"]
         distance = str(distance) if distance is not None else None
-        is_endpoint = label in {"Upper Rng", "Lower Rng"}
         is_current = label in {"LTP", "Latest Close"}
         is_nearest_monthly = label in nearest_monthly_labels
         distance_color = "#64748B"
@@ -1462,8 +1380,6 @@ def _format_position_line_chart_html(position: str) -> str:
             if is_current
             else "#38BDF8"
             if is_nearest_monthly
-            else MOMENTUM_PALETTE["wait"][0]
-            if is_endpoint
             else distance_color
         )
         title = escape(f"{label} {_format_position_number(value)}" + (f" {distance}" if distance else ""))
@@ -1570,8 +1486,6 @@ def _position_period_days(period: str) -> int:
 def _sort_position_chart_points(
     points: list[dict[str, float | str | None]],
 ) -> list[dict[str, float | str | None]]:
-    upper_range = [point for point in points if str(point["label"]) == "Upper Rng"]
-    lower_range = [point for point in points if str(point["label"]) == "Lower Rng"]
     current_point = next(
         (point for point in points if str(point["label"]) in {"LTP", "Latest Close"}),
         None,
@@ -1580,13 +1494,7 @@ def _sort_position_chart_points(
         return sorted(points, key=lambda point: float(point["value"]), reverse=True)
 
     current_value = float(current_point["value"])
-    surrounding_points = [
-        point
-        for point in points
-        if point not in upper_range
-        and point not in lower_range
-        and point is not current_point
-    ]
+    surrounding_points = [point for point in points if point is not current_point]
     above = sorted(
         [point for point in surrounding_points if float(point["value"]) > current_value],
         key=_position_chart_sort_key,
@@ -1597,7 +1505,7 @@ def _sort_position_chart_points(
         key=_position_chart_sort_key,
         reverse=True,
     )
-    return upper_range + above + [current_point] + below + lower_range
+    return above + [current_point] + below
 
 
 def _position_chart_sort_key(point: dict[str, float | str | None]) -> tuple[float, int, str]:

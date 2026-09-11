@@ -16,17 +16,14 @@ export function PositionLineChart({ points = [] }: PositionLineChartProps) {
       >
         {points.map((point, index) => {
           const current = point.label === "LTP" || point.label === "Latest Close";
-          const endpoint = point.label === "Upper Rng" || point.label === "Lower Rng";
           const distanceValue = point.distance ? Number(point.distance.replace("%", "")) : 0;
           const color = current
             ? "#FFB15C"
-            : endpoint
-              ? "#5EA6D1"
-              : distanceValue > 0
-                ? "#7DCE9B"
-                : distanceValue < 0
-                  ? "#BE123C"
-                  : "#64748B";
+            : distanceValue > 0
+              ? "#7DCE9B"
+              : distanceValue < 0
+                ? "#BE123C"
+                : "#64748B";
 
           return (
             <div
