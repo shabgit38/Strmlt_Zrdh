@@ -1544,7 +1544,7 @@ def _position_line_chart_points(position: str) -> list[dict[str, float | str | N
     other_points: list[dict[str, float | str | None]] = []
     for point in points:
         label = str(point["label"])
-        period_match = re.fullmatch(r"(1W|1M|3M|6M|52W|[1-5]Y) (High|Low)", label)
+        period_match = re.fullmatch(r"((?:<)?(?:1W|1M|3M|6M|52W|[1-5]Y)) (High|Low)", label)
         if period_match is None:
             other_points.append(point)
             continue
@@ -1559,6 +1559,7 @@ def _position_line_chart_points(position: str) -> list[dict[str, float | str | N
 
 
 def _position_period_days(period: str) -> int:
+    period = period.removeprefix("<")
     if period.endswith("W"):
         return int(period.removesuffix("W")) * 7
     if period.endswith("M"):
@@ -1588,15 +1589,27 @@ def _sort_position_chart_points(
     ]
     above = sorted(
         [point for point in surrounding_points if float(point["value"]) > current_value],
-        key=lambda point: float(point["value"]),
+        key=_position_chart_sort_key,
         reverse=True,
     )
     below = sorted(
         [point for point in surrounding_points if float(point["value"]) <= current_value],
-        key=lambda point: float(point["value"]),
+        key=_position_chart_sort_key,
         reverse=True,
     )
     return upper_range + above + [current_point] + below + lower_range
+
+
+def _position_chart_sort_key(point: dict[str, float | str | None]) -> tuple[float, int, str]:
+    label = str(point["label"])
+    period_match = re.fullmatch(r"(?:<(\d+)([WMY])|([\d]+)([WMY])) (High|Low)", label)
+    if period_match is None:
+        return float(point["value"]), 0, label
+
+    amount = int(period_match.group(1) or period_match.group(3))
+    unit = period_match.group(2) or period_match.group(4)
+    period_days = amount * {"W": 7, "M": 30, "Y": 365}[unit]
+    return float(point["value"]), -period_days, label
 
 
 def position_line_chart_points_from_dashboard_column(
