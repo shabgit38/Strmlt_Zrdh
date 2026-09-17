@@ -11,7 +11,6 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 
 import portfolio_streamlit
 from kite_analytics import (
@@ -65,7 +64,6 @@ DEFAULT_MOMENTUM_BENCHMARK = "NIFTY 50"
 BUTTON_COLOR = "#ffca83"
 BUTTON_HOVER_COLOR = "#f2b766"
 BUTTON_TEXT_COLOR = "#1f2937"
-LTP_REFRESH_INTERVAL_MS = 60 * 60 * 1000
 HOLDINGS_BREAKDOWN_ADD_MESSAGE_KEY = "holdings_breakdown_add_message"
 TODAY_ORDERS_STATE_KEY = "kite_today_orders"
 TODAY_ORDERS_DATE_STATE_KEY = "kite_today_orders_date"
@@ -81,12 +79,6 @@ PRICE_LADDER_EARLY_ENTRY_LABELS = (
     ("ema20_bounce", "EMA20 bounce"),
     ("ema50_reclaim", "EMA50 reclaim"),
 )
-
-
-def _live_ltp_refreshed_caption(state_key: str) -> None:
-    refreshed_at = st.session_state.get(state_key)
-    if refreshed_at:
-        st.caption(f"Live LTP refreshed at {pd.Timestamp(refreshed_at).strftime('%Y-%m-%d %H:%M:%S')}")
 
 
 def _apply_button_palette() -> None:
@@ -2064,8 +2056,6 @@ if selected_main_tab == "Holdings":
         if st.button("Fetch Holdings", type="primary"):
             with st.spinner("Fetching holdings and analytics..."):
                 fetch_and_display_holdings()#get holdings from kite,
-    with holdings_ltp_col:
-        _live_ltp_refreshed_caption("kite_holdings_ltp_refreshed_at")
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
 
     kite_holdings_df = st.session_state.get("kite_holdings_df")
@@ -2251,19 +2241,6 @@ if selected_main_tab == "Holdings":
                         st.warning(f"Could not load exited holdings summary: {exc}")
     #display_supabase_holdings_breakdown()  
 
-    if kite_holdings_df is not None:
-        ltp_refresh_count = st_autorefresh(
-            interval=LTP_REFRESH_INTERVAL_MS,
-            key="ltp_refresh",
-        )
-        previous_ltp_refresh_count = st.session_state.get("kite_holdings_ltp_refresh_count")
-        if previous_ltp_refresh_count is None:
-            st.session_state["kite_holdings_ltp_refresh_count"] = ltp_refresh_count
-        elif ltp_refresh_count != previous_ltp_refresh_count:
-            kite_holdings_df = refresh_live_ltp_for_holdings(kite_holdings_df)
-            st.session_state["kite_holdings_ltp_refresh_count"] = ltp_refresh_count
-
-
 if selected_main_tab == "Calculators":
     render_calculators_terminal(
         key="calculators_terminal_component",
@@ -2360,16 +2337,12 @@ if selected_main_tab == "Historic Data":
     )
     st.session_state["historic_saved_tickers_input"] = tickers_input
 
-    fetch_dashboard_col, historic_ltp_col = st.columns([1, 3], vertical_alignment="center")
-    with fetch_dashboard_col:
-        fetch_dashboard_clicked = st.button(
-            "Fetch dashboard",
-            type="primary",
-            key="historic_fetch_dashboard",
-            help="Fetch cached 2Y daily Kite data and show a sorted price ladder per ticker.",
-        )
-    with historic_ltp_col:
-        _live_ltp_refreshed_caption("historic_ltp_refreshed_at")
+    fetch_dashboard_clicked = st.button(
+        "Fetch dashboard",
+        type="primary",
+        key="historic_fetch_dashboard",
+        help="Fetch cached 2Y daily Kite data and show a sorted price ladder per ticker.",
+    )
 
     if fetch_dashboard_clicked:
         raw_tickers = [item.strip().upper() for item in tickers_input.split(",") if item.strip()]
