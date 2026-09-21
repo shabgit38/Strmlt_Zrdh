@@ -1276,6 +1276,13 @@ def refresh_live_ltp_for_holdings(holdings_df: pd.DataFrame) -> pd.DataFrame:
         return holdings_df
 
     symbols = holdings_df["tradingsymbol"].dropna().astype(str).tolist()
+    analytics_rows = st.session_state.get("kite_holdings_analytics_token_rows", [])
+    symbols.extend(
+        str(row.get("tradingsymbol"))
+        for row in analytics_rows
+        if row.get("tradingsymbol")
+    )
+    symbols = list(dict.fromkeys(symbols))
     try:
         kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
         ltp_df = fetch_live_ltp(kite, symbols)
@@ -1289,6 +1296,20 @@ def refresh_live_ltp_for_holdings(holdings_df: pd.DataFrame) -> pd.DataFrame:
 
     updated_df, missing_symbols = _apply_live_ltp_to_holdings(holdings_df, ltp_df)
     _cache_ltp_by_symbol(updated_df)
+    live_ltp_by_symbol = {
+        str(row["Symbol"]).strip().upper(): float(row["LTP"])
+        for _, row in ltp_df.iterrows()
+        if pd.notna(row.get("LTP"))
+    }
+    st.session_state["kite_holdings_dashboard_df"] = _patch_historic_dashboard_ltp(
+        st.session_state.get("kite_holdings_dashboard_df", pd.DataFrame()),
+        live_ltp_by_symbol,
+    )
+    st.session_state["kite_holdings_day_movers_df"] = _patch_historic_day_movers_ltp(
+        st.session_state.get("kite_holdings_day_movers_df", pd.DataFrame()),
+        live_ltp_by_symbol,
+    )
+    st.session_state["ltp_by_symbol"].update(live_ltp_by_symbol)
     st.session_state["kite_holdings_df"] = updated_df
     st.session_state["kite_holdings_ltp_refreshed_at"] = pd.Timestamp.now().isoformat()
     if missing_symbols:
@@ -2054,8 +2075,13 @@ if selected_main_tab == "Holdings":
     fetch_holdings_col, holdings_ltp_col = st.columns([1, 3], vertical_alignment="center")
     with fetch_holdings_col:
         if st.button("Fetch Holdings", type="primary"):
-            with st.spinner("Fetching holdings and analytics..."):
-                fetch_and_display_holdings()#get holdings from kite,
+            cached_holdings_df = st.session_state.get("kite_holdings_df")
+            if cached_holdings_df is None:
+                with st.spinner("Fetching holdings and analytics..."):
+                    fetch_and_display_holdings()#get holdings from kite,
+            else:
+                with st.spinner("Refreshing live holdings prices..."):
+                    refresh_live_ltp_for_holdings(cached_holdings_df)
     #session state - kite_holdings_df, kite_holdings_download_filename, ltp_by_symbol
 
     kite_holdings_df = st.session_state.get("kite_holdings_df")
