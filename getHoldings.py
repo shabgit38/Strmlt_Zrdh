@@ -1909,40 +1909,39 @@ def _is_today_order(order: dict[str, Any], today: str) -> bool:
 
 def _render_today_orders_for_breakdown() -> None:
     today = datetime.now().date().isoformat()
-    if st.session_state.get(TODAY_ORDERS_DATE_STATE_KEY) != today:
+    try:
+        orders_kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
+        complete_orders = [
+            order
+            for order in orders_kite.orders()
+            if str(order.get("status") or "").upper().strip() == "COMPLETE"
+            and _is_today_order(order, today)
+        ]
+        st.session_state[TODAY_ORDERS_STATE_KEY] = complete_orders
+        st.session_state[TODAY_ORDERS_DATE_STATE_KEY] = today
+        st.session_state.pop(TODAY_ORDERS_ERROR_STATE_KEY, None)
+    except Exception as exc:
+        st.session_state[TODAY_ORDERS_STATE_KEY] = []
+        st.session_state[TODAY_ORDERS_ERROR_STATE_KEY] = str(exc)
+    else:
         try:
-            orders_kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
-            complete_orders = [
-                order
-                for order in orders_kite.orders()
-                if str(order.get("status") or "").upper().strip() == "COMPLETE"
-                and _is_today_order(order, today)
-            ]
-            st.session_state[TODAY_ORDERS_STATE_KEY] = complete_orders
-            st.session_state[TODAY_ORDERS_DATE_STATE_KEY] = today
-            st.session_state.pop(TODAY_ORDERS_ERROR_STATE_KEY, None)
-        except Exception as exc:
-            st.session_state[TODAY_ORDERS_STATE_KEY] = []
-            st.session_state[TODAY_ORDERS_ERROR_STATE_KEY] = str(exc)
-        else:
-            try:
-                affected_symbols = update_holdings_breakdown_from_orders(complete_orders)
-                skipped_sell_messages = st.session_state.get(
-                    ORDER_SYNC_SKIPPED_SELLS_STATE_KEY, []
+            affected_symbols = update_holdings_breakdown_from_orders(complete_orders)
+            skipped_sell_messages = st.session_state.get(
+                ORDER_SYNC_SKIPPED_SELLS_STATE_KEY, []
+            )
+            for message in skipped_sell_messages:
+                st.warning(f"Order was not applied: {message}")
+            if affected_symbols:
+                _load_holdings_breakdown_state()
+                st.success(
+                    "Today's orders updated the holdings breakdown for "
+                    f"{len(affected_symbols)} symbol(s)."
                 )
-                for message in skipped_sell_messages:
-                    st.warning(f"Order was not applied: {message}")
-                if affected_symbols:
-                    _load_holdings_breakdown_state()
-                    st.success(
-                        "Today's orders updated the holdings breakdown for "
-                        f"{len(affected_symbols)} symbol(s)."
-                    )
-                elif not skipped_sell_messages:
-                    st.info("Today's complete orders are already reflected in the holdings breakdown.")
-                st.session_state.pop(TODAY_ORDERS_SYNC_ERROR_STATE_KEY, None)
-            except Exception as exc:
-                st.session_state[TODAY_ORDERS_SYNC_ERROR_STATE_KEY] = str(exc)
+            elif not skipped_sell_messages:
+                st.info("Today's complete orders are already reflected in the holdings breakdown.")
+            st.session_state.pop(TODAY_ORDERS_SYNC_ERROR_STATE_KEY, None)
+        except Exception as exc:
+            st.session_state[TODAY_ORDERS_SYNC_ERROR_STATE_KEY] = str(exc)
 
     orders_error = st.session_state.get(TODAY_ORDERS_ERROR_STATE_KEY)
     if orders_error:

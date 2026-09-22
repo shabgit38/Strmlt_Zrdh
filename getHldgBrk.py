@@ -1311,8 +1311,19 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
             continue
 
         symbol_df = existing_by_symbol.get(symbol, pd.DataFrame())
-        symbol_exists = not symbol_df.empty or symbol in seen_symbols
-        row_type = "BATCH" if symbol_exists else "SUMMARY"
+        active_summary_exists = (
+            not symbol_df.empty
+            and "row_type" in symbol_df.columns
+            and symbol_df["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY")
+            .reindex(symbol_df.index, fill_value=False)
+            .where(
+                ~symbol_df.get("holding_status", pd.Series(index=symbol_df.index, dtype=object))
+                .apply(_is_exited_status),
+                False,
+            )
+            .any()
+        ) or symbol in seen_symbols or symbol in pending_summary_symbols
+        row_type = "BATCH" if active_summary_exists else "SUMMARY"
         qty = _record_integer_value(row.get("Qty"))
         price = _record_numeric_value(row.get("Price"))
 
@@ -1327,8 +1338,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                 seen_symbols.add(symbol)
                 continue
             should_create_initial_batch = (
-                not is_mtf
-                and not is_exit
+                not is_exit
             )
             record = _recompute_breakdown_record(
                 {
@@ -1352,7 +1362,7 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                             "isin": canonical_isin,
                             "sector": sector,
                             "trade_date": trade_date,
-                            "trade_type": "BONUS" if is_bonus else None,
+                            "trade_type": "MTF" if is_mtf else ("BONUS" if is_bonus else None),
                             "batch_qty": qty,
                             "batch_price": price,
                             "ltp": _lookup_ltp(ltp_by_symbol, symbol),
@@ -1400,7 +1410,14 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
             has_existing_summary = (
                 not symbol_df.empty
                 and "row_type" in symbol_df.columns
-                and symbol_df["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY").any()
+                and symbol_df["row_type"].astype(str).str.upper().str.strip().eq("SUMMARY")
+                .reindex(symbol_df.index, fill_value=False)
+                .where(
+                    ~symbol_df.get("holding_status", pd.Series(index=symbol_df.index, dtype=object))
+                    .apply(_is_exited_status),
+                    False,
+                )
+                .any()
             )
             if not has_existing_summary and symbol not in pending_summary_symbols:
                 pending_records.append(
@@ -1525,6 +1542,7 @@ def update_holdings_breakdown_from_orders(orders: list[dict[str, Any]]) -> list[
             continue
 
         transaction_type = str(order.get("transaction_type") or "").upper().strip()
+        is_mtf_order = str(order.get("product") or "").upper().strip() == "MTF"
         if transaction_type == "BUY":
             order_events.append(
                 {
@@ -1538,7 +1556,7 @@ def update_holdings_breakdown_from_orders(orders: list[dict[str, Any]]) -> list[
                         "Price": price,
                         "Date": trade_date,
                         "Exit?": False,
-                        "MTF?": False,
+                        "MTF?": is_mtf_order,
                         "Bonus?": False,
                         "Source Order ID": order_id,
                     },
@@ -1555,6 +1573,7 @@ def update_holdings_breakdown_from_orders(orders: list[dict[str, Any]]) -> list[
                         "symbol": symbol,
                         "quantity": quantity,
                         "price": price,
+                        "order_id": order_id,
                     },
                 }
             )
