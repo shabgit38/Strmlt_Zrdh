@@ -92,8 +92,32 @@ export function MtfHoldingsTable({ holdings, onAddToCalculator }: MtfHoldingsTab
               </th>
               <th className="px-2 py-2 text-right">Days</th>
               <th className="px-2 py-2 text-right" title="Funded amount x Daily Interest %">Int/Day</th>
-              <th className="px-2 py-2 text-right" title="Funded amount x Daily Interest % x Days">Interest</th>
-              <th className="px-2 py-2 text-right" title="min(MTF Value x 0.3%, Rs 20) + Rs 15 pledge charge + 18% GST">Charges</th>
+              <th className="px-2 py-2 text-right">
+                <span className="inline-flex items-center justify-end gap-1">
+                  Interest
+                  <span
+                    aria-label="Interest formula: funded amount multiplied by daily interest rate multiplied by holding days"
+                    className="cursor-help text-[0.65rem] normal-case text-terminal-near"
+                    role="img"
+                    title="Interest = funded amount x daily interest rate x holding days"
+                  >
+                    ⓘ
+                  </span>
+                </span>
+              </th>
+              <th className="px-2 py-2 text-right">
+                <span className="inline-flex items-center justify-end gap-1">
+                  Charges
+                  <span
+                    aria-label="Charges formula: buy brokerage plus sell brokerage plus pledge and unpledge charges, including GST"
+                    className="cursor-help text-[0.65rem] normal-case text-terminal-near"
+                    role="img"
+                    title="Charges = buy brokerage + sell brokerage + pledge charge + unpledge charge, including GST"
+                  >
+                    ⓘ
+                  </span>
+                </span>
+              </th>
               <th className="px-2 py-2 text-right">Initial Margin</th>
               <th className="px-2 py-2 text-right">Funded</th>
               <th className="px-2 py-2 text-right">Margin %</th>
@@ -186,7 +210,7 @@ function mtfInterestMetrics(holding: MtfHolding, dailyInterestRate: number) {
   const interestPerDay = fundedAmount * dailyInterestRate;
   const holdingDays = typeof holding.holdingDays === "number" && Number.isFinite(holding.holdingDays) ? holding.holdingDays : null;
   const interestSoFar = holdingDays === null ? null : interestPerDay * holdingDays;
-  const charges = estimatedCurrentCharges(holding.mtfValue);
+  const charges = estimatedCurrentCharges(holding.mtfValue, holding.ltp * holding.mtfQty);
   const netPnl = interestSoFar === null ? null : holding.pnl - interestSoFar - charges;
   const costPct = interestSoFar === null || holding.pnl === 0 ? null : ((interestSoFar + charges) / Math.abs(holding.pnl)) * 100;
   const pnlPct = holding.mtfAvgPrice === 0 ? null : ((holding.ltp - holding.mtfAvgPrice) / holding.mtfAvgPrice) * 100;
@@ -208,10 +232,11 @@ function mtfInterestMetrics(holding: MtfHolding, dailyInterestRate: number) {
   };
 }
 
-function estimatedCurrentCharges(buyValue: number): number {
+function estimatedCurrentCharges(buyValue: number, sellValue: number): number {
   const buyBrokerage = Math.min(buyValue * 0.003, 20);
-  const pledgeCharge = 15 * 1.18;
-  return buyBrokerage + pledgeCharge;
+  const sellBrokerage = Math.min(sellValue * 0.003, 20);
+  const pledgeAndUnpledge = 30 * 1.18;
+  return buyBrokerage + sellBrokerage + pledgeAndUnpledge;
 }
 
 function parseNumber(value: string): number {

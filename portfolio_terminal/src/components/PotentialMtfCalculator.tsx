@@ -136,15 +136,17 @@ function calculatePotentialMtf(qtyText: string, priceText: string, exitPriceText
   const interest = interestPerDay * days;
   const exitPrice = projectedExitPrice;
   const grossPnl = qty * (exitPrice - entryPrice);
-  const charges = existing ? estimatedExistingPositionCharges(buyValue) : estimatedRoundTripCharges(buyValue, qty * exitPrice);
+  const charges = existing ? estimatedExistingPositionCharges(buyValue, qty * exitPrice) : estimatedRoundTripCharges(buyValue, qty * exitPrice);
   const netPnl = grossPnl - interest - charges;
   const netReturnPct = initialMargin === 0 ? null : netPnl / initialMargin * 100;
   const breakeven = qty === 0 ? null : entryPrice + (interest + charges) / qty;
   return { days, buyValue, initialMargin, fundedAmount, interestPerDay, interest, exitPrice, grossPnl, charges, netPnl, netReturnPct, breakeven };
 }
 
-function estimatedExistingPositionCharges(buyValue: number) {
-  return Math.min(buyValue * 0.003, 20) + 15 * 1.18;
+function estimatedExistingPositionCharges(buyValue: number, sellValue: number) {
+  const brokerage = Math.min(buyValue * 0.003, 20) + Math.min(sellValue * 0.003, 20);
+  const pledgeAndUnpledge = 30 * 1.18;
+  return brokerage + pledgeAndUnpledge;
 }
 
 function returnFromPrices(entryPrice: number, exitPrice: number) {
