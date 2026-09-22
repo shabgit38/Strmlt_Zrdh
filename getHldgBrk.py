@@ -1068,10 +1068,10 @@ def _apply_batch_exit(
                 "exit_date": None,
                 "exit_price": None,
                 "exit_qty": None,
+                "source_order_ids": row.get(ORDER_SOURCE_COLUMN),
             },
             ltp_by_symbol,
         )
-        _with_source_order_id(active_record, source_order_id)
         update_holdings_breakdown_row(row_id, active_record)
         exited_record = _exit_batch_record(row, exit_date, exit_price, exit_qty)
         _with_source_order_id(exited_record, source_order_id)
@@ -1353,7 +1353,6 @@ def _insert_added_breakdown_entries(entries_df: pd.DataFrame, ltp_by_symbol: dic
                 },
                 ltp_by_symbol,
             )
-            _with_source_order_id(record, source_order_id)
             if should_create_initial_batch:
                 batch_record = _recompute_breakdown_record(
                         {
