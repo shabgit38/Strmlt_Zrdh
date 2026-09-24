@@ -118,6 +118,11 @@ export function App({
           />
         </section>
 
+        <section className="grid gap-3 md:grid-cols-2">
+          <Metric label="Sector Total" value={formatMoney(totalSectorInvested(snapshot))} />
+          <Metric label="MTF Total" value={formatMoney(totalMtfInvested(snapshot))} />
+        </section>
+
         <section className="grid gap-4 lg:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.7fr)]">
           <SectorPieChart sectors={snapshot.sectors} />
           <SectorSummaryTable
@@ -165,4 +170,12 @@ function Metric({ label, value, tone = "text-terminal-ink" }: MetricProps) {
 function formatDayPnl(value: number, pct: number): string {
   const sign = value >= 0 ? "+" : "-";
   return `${sign}${formatMoney(Math.abs(value))}[${formatPct(pct)}]`;
+}
+
+function totalSectorInvested(snapshot: PortfolioSnapshot): number {
+  return snapshot.sectors.reduce((total, sector) => total + sector.invested, 0);
+}
+
+function totalMtfInvested(snapshot: PortfolioSnapshot): number {
+  return (snapshot.mtfHoldings ?? []).reduce((total, holding) => total + holding.mtfValue, 0);
 }
