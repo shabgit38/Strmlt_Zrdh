@@ -1992,7 +1992,6 @@ for main_nav_label in MAIN_NAV_OPTIONS:
         width="stretch",
     ):
         st.session_state["main_navigation"] = main_nav_label
-        st.rerun()
 
 selected_main_label = st.session_state["main_navigation"]
 selected_main_tab = MAIN_NAV_OPTIONS[selected_main_label]
