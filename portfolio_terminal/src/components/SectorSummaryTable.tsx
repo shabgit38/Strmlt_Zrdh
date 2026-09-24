@@ -31,6 +31,9 @@ export function SectorSummaryTable({
   const [sortKey, setSortKey] = useState<SortKey>("invested");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const sortedSectors = sortSectors(sectors, sortKey, sortDirection);
+  const totalInvested = sectors.reduce((total, sector) => total + sector.invested, 0);
+  const totalPnl = sectors.reduce((total, sector) => total + sector.pnl, 0);
+  const totalPnlPct = totalInvested === 0 ? 0 : (totalPnl / totalInvested) * 100;
 
   function handleSort(nextKey: SortKey) {
     if (nextKey === sortKey) {
@@ -99,6 +102,18 @@ export function SectorSummaryTable({
                 </td>
               </tr>
             ))}
+            <tr className="border-t-2 border-terminal-line bg-terminal-panel-alt font-semibold text-terminal-ink">
+              <td className="px-3 py-2">Total</td>
+              <td className="px-3 py-2 text-right tabular-nums">{sectors.length} sectors</td>
+              <td className="px-3 py-2 text-right tabular-nums">{formatMoney(totalInvested)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">100.00%</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${signedClass(totalPnl)}`}>
+                {formatMoney(totalPnl)}
+              </td>
+              <td className={`px-3 py-2 text-right tabular-nums ${signedClass(totalPnlPct)}`}>
+                {formatPct(totalPnlPct)}
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
