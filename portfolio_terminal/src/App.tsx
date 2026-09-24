@@ -106,9 +106,18 @@ export function App({
   return (
     <main className="min-h-screen bg-terminal-bg">
       <div className="mx-auto max-w-[1680px] space-y-5 px-5 py-5">
-        <section className="grid gap-3 md:grid-cols-5">
-          <Metric label="Invested" value={formatMoney(snapshot.totals.invested)} />
+        <section className="grid gap-3 md:grid-cols-4">
+          <Metric label="Sector Total" value={formatMoney(totalSectorInvested(snapshot))} />
+          <Metric label="MTF Total" value={formatMoney(totalMtfInvested(snapshot))} />
+          <Metric
+            label="Invested"
+            value={formatMoney(snapshot.totals.invested)}
+            tone={hasInvestedMismatch(snapshot) ? "text-terminal-avoid" : undefined}
+          />
           <Metric label="Current" value={formatMoney(snapshot.totals.current)} />
+        </section>
+
+        <section className="grid gap-3 md:grid-cols-3">
           <Metric label="P&L" value={formatMoney(snapshot.totals.pnl)} tone={signedClass(snapshot.totals.pnl)} />
           <Metric label="P&L %" value={formatPct(snapshot.totals.pnlPct)} tone={signedClass(snapshot.totals.pnlPct)} />
           <Metric
@@ -116,11 +125,6 @@ export function App({
             value={formatDayPnl(snapshot.totals.dayPnl, snapshot.totals.dayPnlPct)}
             tone={signedClass(snapshot.totals.dayPnl)}
           />
-        </section>
-
-        <section className="grid gap-3 md:grid-cols-2">
-          <Metric label="Sector Total" value={formatMoney(totalSectorInvested(snapshot))} />
-          <Metric label="MTF Total" value={formatMoney(totalMtfInvested(snapshot))} />
         </section>
 
         <section className="grid gap-4 lg:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.7fr)]">
@@ -178,4 +182,9 @@ function totalSectorInvested(snapshot: PortfolioSnapshot): number {
 
 function totalMtfInvested(snapshot: PortfolioSnapshot): number {
   return (snapshot.mtfHoldings ?? []).reduce((total, holding) => total + holding.mtfValue, 0);
+}
+
+function hasInvestedMismatch(snapshot: PortfolioSnapshot): boolean {
+  const expectedInvested = totalSectorInvested(snapshot) + totalMtfInvested(snapshot);
+  return Math.abs(snapshot.totals.invested - expectedInvested) > 0.01;
 }
