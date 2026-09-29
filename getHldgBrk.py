@@ -1918,7 +1918,6 @@ def display_holdings_breakdown_preview(
                     batch_rows["symbol"].astype(str).str.upper().str.strip().eq(symbol_key)
                 ].iterrows()
             ]
-            batches = sorted(batches, key=lambda row: _is_exited_status(row.get("holding_status")))
             summary_batches.append((summary, batches))
     else:
         current_summary: pd.Series | None = None
@@ -1937,6 +1936,10 @@ def display_holdings_breakdown_preview(
         if current_summary is not None:
             summary_batches.append((current_summary, current_batches))
 
+    summary_batches = [
+        (summary, sorted(batches, key=_batch_fifo_sort_key))
+        for summary, batches in summary_batches
+    ]
     summary_batches = sorted(
         summary_batches,
         key=lambda item: _is_exited_status(item[0].get("holding_status")),

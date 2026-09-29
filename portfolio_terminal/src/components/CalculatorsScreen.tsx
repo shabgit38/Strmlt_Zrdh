@@ -176,7 +176,7 @@ export function CalculatorsScreen({
           return {
             ...row,
             ltp: quote.ltp === undefined ? row.ltp : decimalInput(quote.ltp),
-            avgPrice: row.avgPrice || (quote.ltp === undefined ? "" : decimalInput(quote.ltp)),
+            avgPrice: quote.ltp === undefined ? row.avgPrice : decimalInput(quote.ltp),
             spot: quote.spot === undefined ? row.spot : wholeNumberInput(quote.spot),
             expiry: row.expiry || quote.expiry || "",
             strike: row.strike || (quote.strike === undefined ? "" : wholeNumberInput(quote.strike)),

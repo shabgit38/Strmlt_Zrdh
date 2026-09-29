@@ -1,4 +1,5 @@
 import unittest
+from contextlib import nullcontext
 from datetime import date
 from unittest.mock import patch
 
@@ -8,6 +9,60 @@ import getHldgBrk
 
 
 class HoldingsBreakdownOrderTests(unittest.TestCase):
+    def test_active_breakdown_shows_batches_oldest_first_without_exited_batches(self):
+        breakdown_df = pd.DataFrame(
+            [
+                {
+                    "row_type": "SUMMARY",
+                    "symbol": "ABC",
+                    "id": 10,
+                    "total_qty": 3,
+                },
+                {
+                    "row_type": "BATCH",
+                    "symbol": "ABC",
+                    "id": 12,
+                    "trade_date": "2026-09-10",
+                    "batch_qty": 2,
+                    "batch_price": 12.0,
+                },
+                {
+                    "row_type": "BATCH",
+                    "symbol": "ABC",
+                    "id": 11,
+                    "trade_date": "2026-09-01",
+                    "batch_qty": 1,
+                    "batch_price": 10.0,
+                    "holding_status": "Exited",
+                    "exit_qty": 1,
+                },
+                {
+                    "row_type": "BATCH",
+                    "symbol": "ABC",
+                    "id": 13,
+                    "trade_date": "2026-09-05",
+                    "batch_qty": 1,
+                    "batch_price": 11.0,
+                },
+            ]
+        )
+        active_df = getHldgBrk._active_breakdown_df(breakdown_df)
+
+        with (
+            patch.object(getHldgBrk.st, "expander", return_value=nullcontext()),
+            patch.object(getHldgBrk.st, "dataframe") as display_dataframe,
+            patch.object(getHldgBrk, "_summary_display_df", return_value=pd.DataFrame()),
+            patch.object(getHldgBrk, "_summary_column_config", return_value={}),
+            patch.object(getHldgBrk, "_style_pnl_columns", side_effect=lambda frame: frame),
+        ):
+            getHldgBrk.display_holdings_breakdown_preview(active_df)
+
+        displayed_batches = display_dataframe.call_args_list[1].args[0]
+        self.assertEqual(
+            displayed_batches["Date"].tolist(),
+            ["2026-09-05", "2026-09-10"],
+        )
+
     def test_full_batch_exit_marks_summary_exited(self):
         summary = pd.Series({"id": 10, "symbol": "ABC", "ltp": 12.5})
         holdings_df = pd.DataFrame(
