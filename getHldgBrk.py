@@ -873,6 +873,7 @@ def _recalculate_summary_from_supabase_batches(summary: pd.Series, ltp_by_symbol
         "present_value": present_value,
         "pnl": pnl,
         "pnl_pct": pnl_pct,
+        "holding_status": "Exited" if total_qty == 0 else None,
     }
     update_holdings_breakdown_row(_row_id(summary), record)
 
@@ -1615,7 +1616,7 @@ def update_holdings_breakdown_from_orders(orders: list[dict[str, Any]]) -> list[
             )
             continue
 
-        exit_date = _parse_trade_date(order["date"]) or date.today()
+        exit_date = _parse_trade_date(event["date"]) or date.today()
         for batch, exit_quantity in allocations:
             _apply_batch_exit(
                 batch,
