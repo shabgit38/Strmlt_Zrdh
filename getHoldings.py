@@ -712,6 +712,10 @@ def _group_momentum_symbols_by_label(momentum_df: pd.DataFrame) -> dict[str, lis
     return label_groups
 
 
+def _is_option_contract_symbol(symbol: str) -> bool:
+    return re.search(r"\d{2}[A-Z]{3}\d+(?:\.\d+)?(?:CE|PE)$", symbol.strip().upper()) is not None
+
+
 def _momentum_label_by_symbol(momentum_df: pd.DataFrame) -> dict[str, str]:
     """Return the same symbol labels used by the Momentum Summary card."""
     return {
@@ -1707,7 +1711,18 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
     day_movers_df = st.session_state.get("kite_holdings_day_movers_df", pd.DataFrame())
     momentum_df = st.session_state.get("kite_holdings_momentum_df", pd.DataFrame())
     early_entry_labels = st.session_state.get("kite_holdings_early_entry_labels", {})
-    exited_symbols = st.session_state.get("kite_holdings_exited_symbols", set())
+    exited_symbols = {
+        str(symbol).strip().upper()
+        for symbol in st.session_state.get("kite_holdings_exited_symbols", set())
+        if str(symbol).strip()
+    }
+    exited_option_symbols = {symbol for symbol in exited_symbols if _is_option_contract_symbol(symbol)}
+    if exited_option_symbols:
+        exited_symbols -= exited_option_symbols
+        if "ticker" in momentum_df.columns:
+            momentum_tickers = momentum_df["ticker"].astype(str).str.strip().str.upper()
+            momentum_df = momentum_df.loc[~momentum_tickers.isin(exited_option_symbols)].copy()
+        sorted_dashboard_df = sorted_dashboard_df.drop(columns=list(exited_option_symbols), errors="ignore")
     price_ladder_highlight_symbols = _summary_ticker_accents(
         build_portfolio_day_movers_summary(kite_holdings_df)
     )
