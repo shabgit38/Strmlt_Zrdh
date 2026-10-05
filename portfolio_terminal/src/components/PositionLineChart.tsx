@@ -9,7 +9,7 @@ export function PositionLineChart({ points = [] }: PositionLineChartProps) {
   if (points.length === 0) return null;
 
   return (
-    <div className="w-full min-w-0 overflow-x-auto px-1 pb-2 pt-1">
+    <div className="position-line-chart-scroll w-full min-w-0 overflow-x-scroll px-1 pb-2 pt-1">
       <div
         className="grid min-w-max"
         style={{ gridTemplateColumns: `repeat(${points.length}, minmax(4.25rem, 1fr))` }}

@@ -55,3 +55,27 @@ input,
 select {
   font: inherit;
 }
+
+.position-line-chart-scroll {
+  scrollbar-color: var(--terminal-muted) var(--terminal-panel-alt);
+  scrollbar-width: thin;
+}
+
+.position-line-chart-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+
+.position-line-chart-scroll::-webkit-scrollbar-track {
+  background: var(--terminal-panel-alt);
+  border-radius: 9999px;
+}
+
+.position-line-chart-scroll::-webkit-scrollbar-thumb {
+  background: var(--terminal-muted);
+  border: 2px solid var(--terminal-panel-alt);
+  border-radius: 9999px;
+}
+
+.position-line-chart-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--terminal-watch);
+}
