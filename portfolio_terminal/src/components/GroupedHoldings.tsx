@@ -160,7 +160,7 @@ export function GroupedHoldings({
                         </td>
                       </tr>
                       <tr key={`${holding.symbol}-chart`} className="border-t border-terminal-line bg-terminal-panel-alt/40">
-                        <td colSpan={10}><PositionLineChart points={holding.positionChart} /></td>
+                        <td className="max-w-0" colSpan={10}><PositionLineChart points={holding.positionChart} /></td>
                       </tr>
                       </Fragment>
                     ))}
