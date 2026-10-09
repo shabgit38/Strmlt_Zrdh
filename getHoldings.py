@@ -1645,9 +1645,9 @@ def _render_price_ladder_summary_card(
     if not summary_html:
         st.info("No price ladder summary available.")
         return
-    st.markdown(
+    st.html(
         _summary_panel_html("Price Ladder Summary", summary_html, BUTTON_COLOR),
-        unsafe_allow_html=True,
+        unsafe_allow_javascript=True,
     )
 
 

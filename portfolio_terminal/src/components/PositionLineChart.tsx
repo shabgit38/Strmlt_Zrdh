@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import type { PositionChartPoint } from "../types";
 import { formatPrice } from "../format";
 
@@ -6,10 +7,29 @@ type PositionLineChartProps = {
 };
 
 export function PositionLineChart({ points = [] }: PositionLineChartProps) {
+  const chartRef = useRef<HTMLDivElement>(null);
+  const focusedOnCurrentRef = useRef(false);
+
+  useLayoutEffect(() => {
+    const chart = chartRef.current;
+    const current = chart?.querySelector<HTMLElement>("[data-position-current='true']");
+    if (!chart || !current || focusedOnCurrentRef.current) return;
+
+    focusedOnCurrentRef.current = true;
+    chart.scrollLeft =
+      current.getBoundingClientRect().left -
+      chart.getBoundingClientRect().left +
+      chart.scrollLeft -
+      (chart.clientWidth - current.clientWidth) / 2;
+  }, [points]);
+
   if (points.length === 0) return null;
 
   return (
-    <div className="position-line-chart-scroll w-full min-w-0 overflow-x-scroll px-1 pb-2 pt-1">
+    <div
+      ref={chartRef}
+      className="position-line-chart-scroll w-full min-w-0 overflow-x-scroll px-1 pb-2 pt-1"
+    >
       <div
         className="grid min-w-max"
         style={{ gridTemplateColumns: `repeat(${points.length}, minmax(4.25rem, 1fr))` }}
@@ -28,6 +48,7 @@ export function PositionLineChart({ points = [] }: PositionLineChartProps) {
           return (
             <div
               key={`${point.label}-${point.value}`}
+              data-position-current={current ? "true" : undefined}
               className={`grid grid-rows-[0.9rem_0.5rem_auto] items-center rounded text-center ${
                 current ? "bg-amber-100/10" : ""
               }`}

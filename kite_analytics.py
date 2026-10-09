@@ -925,7 +925,7 @@ def display_price_ladder_summary(
         exited_symbols=exited_symbols,
     )
     if summary_html:
-        st.markdown(summary_html, unsafe_allow_html=True)
+        st.html(summary_html, unsafe_allow_javascript=True)
     else:
         st.info("No price ladder summary available.")
 
@@ -1392,7 +1392,9 @@ def _format_position_line_chart_html(position: str) -> str:
             else "<span>&nbsp;</span>"
         )
         nodes.append(
-            f"<span title='{title}' style='display:grid;grid-template-rows:1.1rem 0.65rem auto;"
+            f"<span title='{title}'"
+            + (" data-position-current='true'" if is_current else "")
+            + f" style='display:grid;grid-template-rows:1.1rem 0.65rem auto;"
             f"min-width:6.25rem;text-align:center;align-items:center;background:{node_background};"
             "border-radius:0.35rem;'>"
             "<span style='font-size:0.8rem;font-weight:400;white-space:nowrap;color:#FFFFFF;'>"
@@ -1412,12 +1414,19 @@ def _format_position_line_chart_html(position: str) -> str:
         )
 
     return (
-        "<span style='grid-column:3;display:grid;grid-template-columns:repeat("
+        "<span data-position-chart='true' style='grid-column:3;display:grid;grid-template-columns:repeat("
         + str(len(ordered_points))
         + ",minmax(6.25rem,1fr));width:100%;overflow-x:auto;margin:0;"
         "padding:0.1rem 0 0.2rem;'>"
         + "".join(nodes)
         + "</span>"
+        + "<script>"
+        "const chart = document.currentScript.previousElementSibling;"
+        "const current = chart.querySelector('[data-position-current=\"true\"]');"
+        "if (current) chart.scrollLeft = current.getBoundingClientRect().left - "
+        "chart.getBoundingClientRect().left + chart.scrollLeft - "
+        "(chart.clientWidth - current.clientWidth) / 2;"
+        "</script>"
     )
 
 

@@ -1,6 +1,10 @@
 import unittest
 
-from kite_analytics import _position_line_chart_points, _sort_position_chart_points
+from kite_analytics import (
+    _format_position_line_chart_html,
+    _position_line_chart_points,
+    _sort_position_chart_points,
+)
 
 
 class PositionLineChartTests(unittest.TestCase):
@@ -27,6 +31,15 @@ class PositionLineChartTests(unittest.TestCase):
             [point["label"] for point in points],
             ["<5Y High", "LTP"],
         )
+
+    def test_position_chart_marks_ltp_for_initial_scroll_focus(self):
+        chart_html = _format_position_line_chart_html(
+            "1Y Low -20.00% 80 | LTP 100 | 1Y High +20.00% 120"
+        )
+
+        self.assertEqual(chart_html.count("data-position-current='true'"), 1)
+        self.assertIn("data-position-chart='true'", chart_html)
+        self.assertIn("current.getBoundingClientRect().left", chart_html)
 
 
 if __name__ == "__main__":
