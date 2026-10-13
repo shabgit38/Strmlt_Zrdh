@@ -119,6 +119,8 @@ def get_kite_historical_data(
     preferred_columns = ["Open", "High", "Low", "Close", "Volume", "OI"]
     existing_columns = [col for col in preferred_columns if col in df.columns]
     df = df[existing_columns]
+    duplicate_keys = df.index.normalize() if interval == "day" else df.index
+    df = df.loc[~duplicate_keys.duplicated(keep="last")]
     df.sort_index(inplace=True)
     return df
 
