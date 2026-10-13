@@ -18,6 +18,7 @@ export type KiteAlert = {
   alert_count: number;
   ltp?: number | null;
   price_context?: string | null;
+  sector?: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -31,6 +32,7 @@ export type AlertsData = {
   lastAction?: string;
   lastRequestId?: string;
   disabledSymbolsText?: string;
+  sectorError?: string;
 };
 
 export type AlertFormValues = {

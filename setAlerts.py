@@ -23,6 +23,26 @@ ALERTS_DEFAULT_STATUS = "active"
 KITE_ALERTS_ENDPOINT = "https://api.kite.trade/alerts"
 ALERTS_HTTP_TIMEOUT_SECONDS = 10
 ALERTS_DEBUG_LOG_ENABLED = False
+SECTOR_INDEX_LABELS = (
+    ("PRIVATE BANK", "Banking"),
+    ("PSU BANK", "Banking"),
+    ("BANK", "Banking"),
+    ("FINANCIAL SERVICES", "Financial Services"),
+    ("AUTO", "Automobiles"),
+    ("AUTOMOBILE", "Automobiles"),
+    ("FMCG", "FMCG"),
+    ("IT", "Information Technology"),
+    ("INFORMATION TECHNOLOGY", "Information Technology"),
+    ("MEDIA", "Media"),
+    ("METAL", "Metals"),
+    ("PHARMA", "Pharmaceuticals"),
+    ("HEALTHCARE", "Healthcare"),
+    ("REALTY", "Real Estate"),
+    ("CONSUMER DURABLES", "Consumer Durables"),
+    ("OIL GAS", "Oil & Gas"),
+    ("ENERGY", "Energy"),
+    ("INFRA", "Infrastructure"),
+)
 ALERT_FIELD_NAMES = [
     "name",
     "type",
@@ -102,6 +122,7 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
             if created_uuid:
                 next_data["alerts"] = _append_created_alert_row(next_data["alerts"], created_uuid, payload, created_alert)
                 next_data["disabledSymbolsText"] = _disabled_alert_symbols_text(next_data["alerts"])
+                _enrich_alerts_with_sectors(next_data)
                 next_data["message"] = "Alert created."
                 next_data["loaded"] = True
                 next_data.pop("error", None)
@@ -118,6 +139,7 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
             modify_alert(api_key, st.session_state.access_token, uuid, payload)
             next_data["alerts"] = _patch_modified_alert_row(next_data["alerts"], uuid, payload)
             next_data["disabledSymbolsText"] = _disabled_alert_symbols_text(next_data["alerts"])
+            _enrich_alerts_with_sectors(next_data)
             next_data["message"] = "Alert modified."
             next_data["loaded"] = True
             next_data.pop("error", None)
@@ -152,6 +174,7 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
                 previous_alerts=list(previous_data.get("alerts") or []),
             )
         )
+        _enrich_alerts_with_sectors(next_data)
         next_data["disabledSymbolsText"] = _disabled_alert_symbols_text(next_data["alerts"])
         _log_alerts_step(f"Prepared {len(next_data['alerts'])} alert row(s) for React table.")
         if ALERTS_DEBUG_LOG_ENABLED:
@@ -524,6 +547,79 @@ def _supabase_headers(supabase_key: str) -> dict[str, str]:
         "apikey": supabase_key,
         "Authorization": f"Bearer {supabase_key}",
     }
+
+
+def _sector_label_for_index(index_name: Any) -> str | None:
+    normalized_words = "".join(
+        character if character.isalnum() else " "
+        for character in str(index_name or "").upper()
+    ).split()
+    for index_fragment, sector_label in SECTOR_INDEX_LABELS:
+        fragment_words = index_fragment.split()
+        if any(
+            normalized_words[start : start + len(fragment_words)] == fragment_words
+            for start in range(len(normalized_words) - len(fragment_words) + 1)
+        ):
+            return sector_label
+    return None
+
+
+def _sector_map_from_index_records(records: list[dict[str, Any]]) -> dict[str, str]:
+    sectors_by_symbol: dict[str, set[str]] = {}
+    for record in records:
+        sector = _sector_label_for_index(record.get("Index"))
+        if sector is None:
+            continue
+        symbols = str(record.get("Constituents") or "").split(",")
+        for symbol in symbols:
+            normalized_symbol = symbol.strip().upper()
+            if normalized_symbol:
+                sectors_by_symbol.setdefault(normalized_symbol, set()).add(sector)
+    return {
+        symbol: ", ".join(sorted(sectors))
+        for symbol, sectors in sectors_by_symbol.items()
+    }
+
+
+@st.cache_data(ttl=24 * 60 * 60)
+def _load_alert_sector_by_symbol() -> dict[str, str]:
+    supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
+    supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
+    table_name = get_secret_value("SUPABASE_INDICES_TABLE_NAME").strip() or "Indices_constituents"
+    if not supabase_url or not supabase_key:
+        raise ValueError("Missing Supabase config for alert sector lookup.")
+
+    endpoint = (
+        f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
+        "?select=Index,Constituents&order=Index.asc"
+    )
+    request = Request(endpoint, headers=_supabase_headers(supabase_key), method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase alert sector lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase alert sector lookup failed: {exc.reason}") from exc
+
+    return _sector_map_from_index_records(records)
+
+
+def _enrich_alerts_with_sectors(alerts_data: dict[str, Any]) -> None:
+    try:
+        sector_by_symbol = _load_alert_sector_by_symbol()
+    except Exception as exc:
+        alerts_data["sectorError"] = str(exc)
+        _log_alerts_step(f"Sector lookup failed; alerts loaded without sector labels: {exc}")
+        return
+
+    for alert in alerts_data.get("alerts", []):
+        symbol = str(alert.get("lhs_tradingsymbol") or "").strip().upper()
+        alert["sector"] = sector_by_symbol.get(symbol)
+    alerts_data.pop("sectorError", None)
 
 
 def _resolve_alert_instrument_token(alert: dict[str, Any], instrument_df: pd.DataFrame) -> int | None:

@@ -5,10 +5,11 @@ import { formatPrice } from "../format";
 import { setStreamlitComponentValue, setStreamlitFrameHeight } from "../streamlitBridge";
 import type { AlertFormValues, AlertsData, AlertStatusFilter, KiteAlert } from "../alerts/types";
 
-type SortKey = "status" | "symbol" | "name" | "ltp" | "distance_pct" | "updated_at";
+type SortKey = "status" | "name" | "sector" | "ltp" | "distance_pct" | "updated_at";
 type SortDirection = "asc" | "desc";
 type AlertAction = "fetch" | "create" | "modify" | "delete";
 const ALERTS_SEARCH_STORAGE_KEY = "portfolio-terminal-alerts-search";
+const UNMAPPED_SECTOR_FILTER = "__unmapped__";
 
 const EMPTY_FORM: AlertFormValues = {
   name: "",
@@ -28,6 +29,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
   const [statusFilter, setStatusFilter] = useState<AlertStatusFilter>(data?.statusFilter ?? "active");
   const [sortKey, setSortKey] = useState<SortKey>("status");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [sectorFilter, setSectorFilter] = useState("");
   const [editingUuid, setEditingUuid] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<AlertFormValues>(EMPTY_FORM);
   const [searchText, setSearchText] = useState(() => sessionStorage.getItem(ALERTS_SEARCH_STORAGE_KEY) ?? "");
@@ -58,9 +60,16 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
 
   const alerts = data?.alerts ?? [];
   const uniqueAlerts = useMemo(() => dedupeAlertsByUuid(alerts), [alerts]);
+  const sectorOptions = useMemo(
+    () => [...new Set(uniqueAlerts.map((alert) => alert.sector?.trim()).filter((sector): sector is string => Boolean(sector)))].sort(),
+    [uniqueAlerts],
+  );
   const visibleAlerts = useMemo(
-    () => uniqueAlerts.filter((alert) => matchesStatusFilter(alert, statusFilter)).filter((alert) => matchesSearch(alert, searchText)),
-    [uniqueAlerts, statusFilter, searchText],
+    () => uniqueAlerts
+      .filter((alert) => matchesStatusFilter(alert, statusFilter))
+      .filter((alert) => matchesSearch(alert, searchText))
+      .filter((alert) => matchesSectorFilter(alert, sectorFilter)),
+    [uniqueAlerts, statusFilter, searchText, sectorFilter],
   );
   const sortedAlerts = useMemo(
     () => [...visibleAlerts].sort((left, right) => compareAlerts(left, right, sortKey, sortDirection)),
@@ -85,7 +94,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
       return;
     }
     setSortKey(nextSortKey);
-    setSortDirection(nextSortKey === "status" || nextSortKey === "symbol" || nextSortKey === "name" ? "asc" : "desc");
+    setSortDirection(nextSortKey === "status" || nextSortKey === "name" || nextSortKey === "sector" ? "asc" : "desc");
   }
 
   function startCreate() {
@@ -158,6 +167,11 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
               Disabled: {data.disabledSymbolsText}
             </div>
           ) : null}
+          {data?.sectorError ? (
+            <div className="whitespace-normal break-words rounded-md border border-terminal-near bg-terminal-panel px-3 py-2 text-xs leading-5 text-terminal-near">
+              Sector lookup unavailable: {data.sectorError}
+            </div>
+          ) : null}
         </section>
 
         <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
@@ -165,7 +179,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
             <div className="border-b border-terminal-line bg-terminal-panel-alt px-3 py-2">
               <input
                 className="w-full rounded-md border border-terminal-line bg-terminal-panel px-3 py-2 text-sm font-semibold text-terminal-ink outline-none focus:border-terminal-watch"
-                placeholder="Search alerts by symbol, name, status, trigger, or UUID"
+                placeholder="Search alerts by symbol, name, sector, status, trigger, or UUID"
                 value={searchText}
                 onChange={(event) => setSearchText(event.target.value)}
               />
@@ -173,8 +187,27 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
             <table className="w-max min-w-full border-collapse text-left text-xs">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
                 <tr>
-                  <SortableHeader className="w-[7.5rem] max-w-[7.5rem]" sortKey="symbol" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Symbol</SortableHeader>
                   <SortableHeader className="w-32 max-w-32" sortKey="name" activeSortKey={sortKey} direction={sortDirection} onSort={handleSort}>Name</SortableHeader>
+                  <th className="w-36 max-w-36 px-3 py-2 text-left">
+                    <button
+                      className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-terminal-muted hover:text-terminal-ink"
+                      type="button"
+                      onClick={() => handleSort("sector")}
+                    >
+                      <span>Sector</span>
+                      {sortKey === "sector" ? <span aria-hidden="true">{sortDirection === "asc" ? "^" : "v"}</span> : null}
+                    </button>
+                    <select
+                      aria-label="Filter alerts by sector"
+                      className="mt-1 block w-full rounded border border-terminal-line bg-terminal-panel px-1.5 py-1 text-xs font-normal normal-case tracking-normal text-terminal-ink"
+                      value={sectorFilter}
+                      onChange={(event) => setSectorFilter(event.target.value)}
+                    >
+                      <option value="">All sectors</option>
+                      {sectorOptions.map((sector) => <option key={sector} value={sector}>{sector}</option>)}
+                      <option value={UNMAPPED_SECTOR_FILTER}>Unmapped</option>
+                    </select>
+                  </th>
                   <HeaderCell align="right" className="w-20 max-w-20">LTP</HeaderCell>
                   <HeaderCell className="w-32 max-w-32">Position</HeaderCell>
                   <HeaderCell align="right" className="w-20 max-w-20">Trigger</HeaderCell>
@@ -187,7 +220,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
               <tbody>
                 {sortedAlerts.map((alert) => (
                   <tr key={alert.uuid} className={`border-t border-terminal-line ${editingUuid === alert.uuid ? "bg-terminal-selected" : ""}`}>
-                    <td className="w-[7.5rem] max-w-[7.5rem] whitespace-normal break-words px-3 py-2 text-xs font-semibold text-terminal-ink">
+                    <td className="w-32 max-w-32 whitespace-normal break-words px-3 py-2 text-xs text-terminal-ink">
                       <span className="inline-flex items-center gap-1.5">
                         <button
                           aria-label={`Edit ${alert.lhs_tradingsymbol} alert`}
@@ -199,10 +232,10 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                         >
                           <Edit3 className="h-3 w-3" />
                         </button>
-                        <span>{alert.lhs_tradingsymbol}</span>
+                        <span>{alert.name || "-"}</span>
                       </span>
                     </td>
-                    <td className="w-32 max-w-32 whitespace-normal break-words px-3 py-2 text-xs text-terminal-ink" title={alert.name}>{alert.name}</td>
+                    <td className="w-36 max-w-36 whitespace-normal break-words px-3 py-2 text-xs text-terminal-muted" title={alert.sector || "-"}>{alert.sector || "-"}</td>
                     <td className="w-20 max-w-20 whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums text-terminal-ink">{alert.ltp === null || alert.ltp === undefined ? "-" : formatPrice(Number(alert.ltp))}</td>
                     <td className="w-32 max-w-32 whitespace-normal break-words px-2 py-2 text-xs leading-4 text-terminal-muted" title={alert.price_context || "-"}>
                       <span className="whitespace-normal break-words tabular-nums">{alert.price_context || "-"}</span>
@@ -338,8 +371,8 @@ function compareAlerts(left: KiteAlert, right: KiteAlert, sortKey: SortKey, dire
   if (sortKey === "ltp") {
     return (numericValue(left[sortKey]) - numericValue(right[sortKey])) * multiplier;
   }
-  const leftValue = sortKey === "symbol" ? left.lhs_tradingsymbol : String(left[sortKey] ?? "");
-  const rightValue = sortKey === "symbol" ? right.lhs_tradingsymbol : String(right[sortKey] ?? "");
+  const leftValue = String(left[sortKey] ?? "");
+  const rightValue = String(right[sortKey] ?? "");
   return leftValue.localeCompare(rightValue) * multiplier;
 }
 
@@ -380,12 +413,19 @@ function matchesStatusFilter(alert: KiteAlert, statusFilter: AlertStatusFilter) 
   return status === statusFilter;
 }
 
+function matchesSectorFilter(alert: KiteAlert, sectorFilter: string) {
+  if (!sectorFilter) return true;
+  const sector = alert.sector?.trim();
+  return sectorFilter === UNMAPPED_SECTOR_FILTER ? !sector : sector === sectorFilter;
+}
+
 function matchesSearch(alert: KiteAlert, searchText: string) {
   const query = searchText.trim().toLowerCase();
   if (!query) return true;
   return [
     alert.uuid,
     alert.name,
+    alert.sector,
     alert.status,
     alert.lhs_exchange,
     alert.lhs_tradingsymbol,
