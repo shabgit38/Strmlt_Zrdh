@@ -56,6 +56,13 @@ from getHldgBrk import (
     upsert_holdings_breakdown_in_supabase,
     update_holdings_breakdown_from_orders,
 )
+from holdings_market_data import (
+    _apply_live_ltp_to_holdings,
+    fetch_live_ltp,
+    fetch_live_ltp_by_symbol,
+    instrument_lookup_symbols,
+    resolve_tokens_from_tickers,
+)
 
 st.set_page_config(layout="wide") 
 
@@ -178,7 +185,7 @@ def load_instrument_token_from_supabase(tickers: list[str]) -> pd.DataFrame:
     """
     Load instrument rows from Supabase for the ticker symbols entered by the user.
     """
-    normalized_tickers = sorted({ticker.strip().upper() for ticker in tickers if ticker.strip()})
+    normalized_tickers = instrument_lookup_symbols(tickers)
     if not normalized_tickers:
         return pd.DataFrame()
 
@@ -255,41 +262,6 @@ def load_indices_from_supabase() -> dict[str, str]:
         if index_name and constituents:
             indices[index_name] = constituents
     return indices
-
-
-def resolve_tokens_from_tickers(
-    tickers: list[str],
-    instruments_df: pd.DataFrame,
-    exchange_by_symbol: dict[str, str] | None = None,
-) -> tuple[dict[str, int], list[str]]:
-    """
-    Map comma-separated tickers to instrument tokens using the instrument dump.
-    """
-    resolved: dict[str, int] = {}
-    missing: list[str] = []
-    normalized = instruments_df.copy()
-    normalized["tradingsymbol"] = normalized["tradingsymbol"].astype(str).str.strip().str.upper()
-
-    for ticker in tickers:
-        matches = normalized[normalized["tradingsymbol"] == ticker]
-        if matches.empty:
-            missing.append(ticker)
-            continue
-        # The instrument dump can contain the same symbol for multiple exchanges.
-        if "exchange" in matches.columns:
-            requested_exchange = (exchange_by_symbol or {}).get(_ltp_match_symbol(ticker), "NSE")
-            exchange_matches = matches[
-                matches["exchange"].astype(str).str.strip().str.upper() == "NSE"
-            ]
-            requested_matches = matches[
-                matches["exchange"].astype(str).str.strip().str.upper() == requested_exchange
-            ]
-            if not requested_matches.empty:
-                matches = requested_matches
-            elif not exchange_matches.empty:
-                matches = exchange_matches
-        resolved[ticker] = int(matches.iloc[0]["instrument_token"])
-    return resolved, missing
 
 
 def _format_display_value(value: Any, decimals: int = 2) -> str:
@@ -1102,79 +1074,11 @@ def _historic_alert_exchange_by_symbol() -> dict[str, str]:
     for alert in alerts:
         if not isinstance(alert, dict):
             continue
-        symbol = _ltp_match_symbol(alert.get("lhs_tradingsymbol"))
+        symbol = _normalized_symbol_value(alert.get("lhs_tradingsymbol"))
         exchange = str(alert.get("lhs_exchange") or "").strip().upper()
         if symbol and exchange:
             exchange_by_symbol[symbol] = exchange
     return exchange_by_symbol
-
-
-def _historic_quote_instrument(symbol: str, exchange: str) -> str:
-    if exchange == "INDICES":
-        index_symbols = {
-            "NIFTY 50": "NSE:NIFTY 50",
-            "NIFTY BANK": "NSE:NIFTY BANK",
-            "SENSEX": "BSE:SENSEX",
-        }
-        return index_symbols.get(symbol, f"NSE:{symbol}")
-    return f"{exchange}:{symbol}"
-
-
-def fetch_live_ltp(
-    kite,
-    symbols: list[str],
-    exchange_by_symbol: dict[str, str] | None = None,
-) -> pd.DataFrame:
-    normalized_symbols = sorted(
-        {_ltp_match_symbol(symbol) for symbol in symbols if _ltp_match_symbol(symbol)}
-    )
-    if not normalized_symbols:
-        return pd.DataFrame(columns=["Symbol", "LTP"])
-
-    normalized_exchanges = {
-        _ltp_match_symbol(symbol): str(exchange).strip().upper()
-        for symbol, exchange in (exchange_by_symbol or {}).items()
-        if _ltp_match_symbol(symbol) and str(exchange).strip()
-    }
-    instruments = [
-        _historic_quote_instrument(symbol, normalized_exchanges.get(symbol, "NSE"))
-        for symbol in normalized_symbols
-    ]
-    data = kite.ltp(*instruments)
-    rows: list[dict[str, Any]] = []
-    for instrument, quote_data in data.items():
-        if not isinstance(quote_data, dict) or quote_data.get("last_price") is None:
-            continue
-        symbol = _ltp_match_symbol(str(instrument).split(":", 1)[-1])
-        rows.append(
-            {
-                "Symbol": symbol,
-                "LTP": float(quote_data["last_price"]),
-            }
-        )
-    return pd.DataFrame(rows, columns=["Symbol", "LTP"])
-
-
-def fetch_live_ltp_by_symbol(
-    kite,
-    symbols: list[str],
-    exchange_by_symbol: dict[str, str] | None = None,
-) -> dict[str, float]:
-    ltp_df = fetch_live_ltp(kite, symbols, exchange_by_symbol=exchange_by_symbol)
-    if ltp_df.empty:
-        return {}
-    normalized_ltp_by_symbol = {
-        str(row["Symbol"]).strip().upper(): float(row["LTP"])
-        for _, row in ltp_df.iterrows()
-        if pd.notna(row.get("LTP"))
-    }
-    ltp_by_symbol = dict(normalized_ltp_by_symbol)
-    for symbol in symbols:
-        original_symbol = str(symbol).strip().upper()
-        normalized_symbol = _ltp_match_symbol(original_symbol)
-        if original_symbol and normalized_symbol in normalized_ltp_by_symbol:
-            ltp_by_symbol[original_symbol] = normalized_ltp_by_symbol[normalized_symbol]
-    return ltp_by_symbol
 
 
 def _historic_request_signature(tickers: list[str], benchmark: str) -> tuple[tuple[str, ...], str]:
@@ -1251,29 +1155,6 @@ def _patch_historic_day_movers_ltp(
     return updated_df
 
 
-def _apply_live_ltp_to_holdings(holdings_df: pd.DataFrame, ltp_df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-    if holdings_df.empty or "tradingsymbol" not in holdings_df.columns or ltp_df.empty:
-        return holdings_df, []
-
-    updated_df = holdings_df.copy()
-    symbol_key = updated_df["tradingsymbol"].astype(str).str.strip().str.upper()
-    ltp_by_symbol = ltp_df.set_index("Symbol")["LTP"]
-    live_ltp = pd.to_numeric(symbol_key.map(ltp_by_symbol), errors="coerce")
-    matched = live_ltp.notna()
-    if matched.any():
-        updated_df.loc[matched, "last_price"] = live_ltp[matched]
-        if {"average_price", "quantity"}.issubset(updated_df.columns):
-            average_price = pd.to_numeric(updated_df["average_price"], errors="coerce")
-            quantity = pd.to_numeric(updated_df["quantity"], errors="coerce")
-            last_price = pd.to_numeric(updated_df["last_price"], errors="coerce")
-            invested = average_price * quantity
-            updated_df["pnl"] = (last_price - average_price) * quantity
-            updated_df["pnl_pct"] = updated_df["pnl"].where(invested.ne(0)) / invested * 100
-
-    missing_symbols = sorted(set(symbol_key[~matched].dropna()) - {""})
-    return updated_df, missing_symbols
-
-
 def refresh_live_ltp_for_holdings(holdings_df: pd.DataFrame) -> pd.DataFrame:
     if holdings_df.empty or "tradingsymbol" not in holdings_df.columns:
         st.session_state["ltp_by_symbol"] = {}
@@ -1287,9 +1168,16 @@ def refresh_live_ltp_for_holdings(holdings_df: pd.DataFrame) -> pd.DataFrame:
         if row.get("tradingsymbol")
     )
     symbols = list(dict.fromkeys(symbols))
+    exchange_by_symbol = {}
+    if {"tradingsymbol", "exchange"}.issubset(holdings_df.columns):
+        exchange_by_symbol = {
+            _normalized_symbol_value(symbol): str(exchange).strip().upper()
+            for symbol, exchange in zip(holdings_df["tradingsymbol"], holdings_df["exchange"])
+            if _normalized_symbol_value(symbol) and str(exchange).strip()
+        }
     try:
         kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
-        ltp_df = fetch_live_ltp(kite, symbols)
+        ltp_df = fetch_live_ltp(kite, symbols, exchange_by_symbol=exchange_by_symbol)
     except Exception as exc:
         if is_token_error(exc):
             clear_auth_state()
@@ -1417,8 +1305,15 @@ def fetch_and_display_holdings():
         exited_symbols_requested -= current_symbols
 
         instruments_df = load_instrument_token_from_supabase(sorted(current_symbols | exited_symbols_requested))
+        exchange_by_symbol = {
+            _normalized_symbol_value(row.get("tradingsymbol")): str(row.get("exchange") or "").strip().upper()
+            for row in df.to_dict(orient="records")
+            if _normalized_symbol_value(row.get("tradingsymbol")) and row.get("exchange")
+        }
         token_map, _ = resolve_tokens_from_tickers(
-            sorted(current_symbols | exited_symbols_requested), instruments_df
+            sorted(current_symbols | exited_symbols_requested),
+            instruments_df,
+            exchange_by_symbol=exchange_by_symbol,
         )
         exited_ltp_by_symbol = fetch_live_ltp_by_symbol(kite, sorted(exited_symbols_requested))
         analytics_rows = df.to_dict(orient="records")
