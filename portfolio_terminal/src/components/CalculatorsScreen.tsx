@@ -15,7 +15,7 @@ import {
   summarizeTrades,
 } from "../calculators/logic";
 import { generateExitAlert } from "../calculators/alertEngine";
-import { formatManualSpotDistance } from "../calculators/optionMetrics";
+import { dateToInputValue, formatManualSpotDistance, parseOptionSymbol } from "../calculators/optionMetrics";
 import { MtfHoldingsTable } from "./MtfHoldingsTable";
 import { PotentialMtfCalculator } from "./PotentialMtfCalculator";
 import type {
@@ -172,16 +172,17 @@ export function CalculatorsScreen({
         rows.map((row) => {
           const symbol = row.symbol.trim().toUpperCase();
           const quote = incomingOptions[symbol];
-          if (!quote) return row;
+          const parsed = parseOptionSymbol(symbol);
+          if (!quote && parsed === null && !row.expiry && !row.strike && !row.optionType) return row;
           return {
             ...row,
-            ltp: quote.ltp === undefined ? row.ltp : decimalInput(quote.ltp),
-            avgPrice: quote.ltp === undefined ? row.avgPrice : decimalInput(quote.ltp),
-            spot: quote.spot === undefined ? row.spot : wholeNumberInput(quote.spot),
-            expiry: row.expiry || quote.expiry || "",
-            strike: row.strike || (quote.strike === undefined ? "" : wholeNumberInput(quote.strike)),
-            optionType: row.optionType || quote.optionType || "",
-            openQty: row.openQty || (quote.lotSize === undefined ? "" : String(quote.lotSize)),
+            ltp: quote?.ltp === undefined ? row.ltp : decimalInput(quote.ltp),
+            avgPrice: quote?.ltp === undefined ? row.avgPrice : decimalInput(quote.ltp),
+            spot: quote?.spot === undefined ? row.spot : wholeNumberInput(quote.spot),
+            expiry: parsed ? dateToInputValue(parsed.expiry) : "",
+            strike: parsed ? wholeNumberInput(parsed.strike) : "",
+            optionType: parsed?.type ?? "",
+            openQty: row.openQty || (quote?.lotSize === undefined ? "" : String(quote.lotSize)),
           };
         }),
       );
@@ -439,7 +440,12 @@ export function CalculatorsScreen({
               <tbody>
                 {calculatedOptionRows.map((row) => (
                   <tr key={row.id} className="border-t border-terminal-line">
-                    <InputCell widthClass="min-w-44" value={row.symbol} onChange={(value) => updateOptionRow(row.id, "symbol", value)} />
+                    <InputCell
+                      hint={row.symbolError ?? undefined}
+                      widthClass="min-w-44"
+                      value={row.symbol}
+                      onChange={(value) => updateOptionRow(row.id, "symbol", value)}
+                    />
                     <InputCell align="right" widthClass="w-16" value={row.openQty} onChange={(value) => updateOptionRow(row.id, "openQty", value)} />
                     <InputCell align="right" widthClass="w-20" value={row.avgPrice} onChange={(value) => updateOptionRow(row.id, "avgPrice", value)} />
                     <ValueCell align="right" value={row.ltp || "-"} />
@@ -930,12 +936,14 @@ function HeaderCell({
 function InputCell({
   value,
   onChange,
+  hint,
   align = "left",
   type = "text",
   widthClass = "w-24",
 }: {
   value: string;
   onChange: (value: string) => void;
+  hint?: string;
   align?: "left" | "right";
   type?: "text" | "date";
   widthClass?: string;
@@ -951,6 +959,7 @@ function InputCell({
         onChange={(event) => onChange(event.target.value)}
         onClick={(event) => event.stopPropagation()}
       />
+      {hint ? <div className="mt-1 whitespace-nowrap text-[10px] text-terminal-avoid">{hint}</div> : null}
     </td>
   );
 }

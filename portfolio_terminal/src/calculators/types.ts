@@ -13,6 +13,7 @@ export type OptionCalculatorRow = {
 };
 
 export type CalculatedOptionRow = OptionCalculatorRow & {
+  symbolError: string | null;
   daysExpiry: number | null;
   breakeven: number | null;
   distSpot: string;

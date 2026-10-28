@@ -61,10 +61,9 @@ export function calculateOptionRows(rows: OptionCalculatorRow[]): CalculatedOpti
     const ltp = toNumber(row.ltp);
     const spot = toNumber(row.spot);
     const exitPrice = toNumber(row.exitPrice);
-    const strike = toNumber(row.strike);
-    const optionType = row.optionType === "CE" || row.optionType === "PE" ? row.optionType : null;
     const parsed = parseOptionSymbol(symbol);
-    const expiry = row.expiry ? new Date(row.expiry) : parsed?.expiry;
+    const optionType = parsed?.type ?? null;
+    const expiry = parsed?.expiry ?? null;
     const effectiveAvgPrice = avgPrice ?? ltp;
     const valuationPrice = exitPrice ?? ltp;
     const invested = openQty !== null && effectiveAvgPrice !== null ? Math.abs(openQty) * effectiveAvgPrice : null;
@@ -74,15 +73,15 @@ export function calculateOptionRows(rows: OptionCalculatorRow[]): CalculatedOpti
         ? openQty * (valuationPrice - effectiveAvgPrice)
         : null;
     const breakeven =
-      effectiveAvgPrice !== null && strike !== null && optionType !== null
+      parsed !== null && effectiveAvgPrice !== null
         ? optionType === "PE"
-          ? strike - effectiveAvgPrice
-          : strike + effectiveAvgPrice
-        : optionBreakeven(symbol, effectiveAvgPrice);
+          ? parsed.strike - effectiveAvgPrice
+          : parsed.strike + effectiveAvgPrice
+        : null;
     const isOtm =
       spot !== null &&
-      ((optionType !== null && strike !== null && ((optionType === "CE" && spot < strike) || (optionType === "PE" && spot > strike))) ||
-        (parsed !== null && ((parsed.type === "CE" && spot < parsed.strike) || (parsed.type === "PE" && spot > parsed.strike))));
+      parsed !== null &&
+      ((parsed.type === "CE" && spot < parsed.strike) || (parsed.type === "PE" && spot > parsed.strike));
     const daysExpiry = expiry && Number.isFinite(expiry.getTime()) ? daysBetween(today, expiry) : null;
     const alert = generateExitAlert({
       entryPrice: effectiveAvgPrice,
@@ -94,10 +93,11 @@ export function calculateOptionRows(rows: OptionCalculatorRow[]): CalculatedOpti
     return {
       ...row,
       symbol,
+      symbolError: symbol && parsed === null ? "Symbol can't be parsed" : null,
       avgPrice: row.avgPrice || (ltp === null ? "" : ltp.toFixed(2)),
-      optionType: row.optionType || parsed?.type || "",
-      strike: row.strike || (parsed?.strike === undefined ? "" : parsed.strike.toFixed(0)),
-      expiry: row.expiry || dateToInputValue(parsed?.expiry ?? null),
+      optionType: parsed?.type ?? "",
+      strike: parsed === null ? "" : parsed.strike.toFixed(0),
+      expiry: dateToInputValue(parsed?.expiry ?? null),
       daysExpiry,
       breakeven,
       distSpot: formatManualSpotDistance(breakeven, spot),
