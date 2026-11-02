@@ -35,6 +35,7 @@ from top_gainers_losers import (
     display_portfolio_day_movers_summary,
 )
 from getHldgBrk import (
+    EXITED_HOLDINGS_INDEX_NAME,
     HOLDINGS_BREAKDOWN_DF_STATE_KEY,
     HOLDINGS_BREAKDOWN_VIEW_STATE_KEY,
     _active_breakdown_df,
@@ -262,6 +263,44 @@ def load_indices_from_supabase() -> dict[str, str]:
         if index_name and constituents:
             indices[index_name] = constituents
     return indices
+
+
+def load_exited_holdings_symbols_from_indices() -> set[str]:
+    supabase_url = get_secret_value("SUPABASE_URL").strip().rstrip("/")
+    supabase_key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY").strip()
+    table_name = get_secret_value("SUPABASE_INDICES_TABLE_NAME").strip() or SUPABASE_INDICES_TABLE_NAME
+
+    if not supabase_url or not supabase_key:
+        raise ValueError(
+            "Missing Supabase config. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
+            "in .streamlit/secrets.toml or environment variables."
+        )
+
+    endpoint = (
+        f"{supabase_url}/rest/v1/{quote(table_name, safe='')}"
+        f"?select=Constituents&Index=eq.{quote(EXITED_HOLDINGS_INDEX_NAME, safe='')}"
+    )
+    request = Request(endpoint, headers=_supabase_headers(supabase_key), method="GET")
+    try:
+        with urlopen(request, timeout=60) as response:
+            records = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Supabase exited holdings index lookup failed with HTTP {exc.code}: {body or exc.reason}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Supabase exited holdings index lookup failed: {exc.reason}") from exc
+
+    return {
+        symbol
+        for record in records
+        for symbol in (
+            _normalized_symbol_value(value)
+            for value in str(record.get("Constituents") or "").split(",")
+        )
+        if symbol and not _is_option_contract_symbol(symbol)
+    }
 
 
 def _format_display_value(value: Any, decimals: int = 2) -> str:
@@ -1239,7 +1278,12 @@ def _build_exited_analytics_rows(
     for symbol, symbol_df in exited_df.groupby(
         exited_df["symbol"].map(_normalized_symbol_value), sort=False
     ):
-        if not symbol or symbol in current_symbols or symbol not in token_map:
+        if (
+            not symbol
+            or _is_option_contract_symbol(symbol)
+            or symbol in current_symbols
+            or symbol not in token_map
+        ):
             continue
         summary_rows = symbol_df[row_type.loc[symbol_df.index].eq("SUMMARY")]
         row = summary_rows.iloc[0] if not summary_rows.empty else symbol_df.iloc[0]
@@ -1275,11 +1319,19 @@ def fetch_and_display_holdings():
         kite, _, _ = bootstrap_kite_app("Zerodha Holdings")
         holdings = kite.holdings()
         df = pd.DataFrame(holdings)
+        exited_errors = []
         try:
             exited_breakdown_df = load_exited_holdings_breakdown_from_supabase()
         except Exception as breakdown_exc:
             exited_breakdown_df = pd.DataFrame()
-            st.session_state["kite_holdings_exited_error"] = str(breakdown_exc)
+            exited_errors.append(str(breakdown_exc))
+        try:
+            exited_index_symbols = load_exited_holdings_symbols_from_indices()
+        except Exception as index_exc:
+            exited_index_symbols = set()
+            exited_errors.append(str(index_exc))
+        if exited_errors:
+            st.session_state["kite_holdings_exited_error"] = "; ".join(exited_errors)
         else:
             st.session_state.pop("kite_holdings_exited_error", None)
 
@@ -1300,7 +1352,10 @@ def fetch_and_display_holdings():
                 exited_status.eq("EXITED") & ~exited_sector.eq("OPTIONS"),
                 "symbol",
             ]
-            if _normalized_symbol_value(symbol)
+            if (
+                _normalized_symbol_value(symbol)
+                and not _is_option_contract_symbol(_normalized_symbol_value(symbol))
+            )
         } if not exited_breakdown_df.empty and "symbol" in exited_breakdown_df.columns else set()
         exited_symbols_requested -= current_symbols
 
@@ -1323,6 +1378,7 @@ def fetch_and_display_holdings():
             token_map,
             exited_ltp_by_symbol,
         )
+        exited_symbols.update(exited_index_symbols - current_symbols)
         analytics_rows.extend(exited_rows)
         analytics_ltp_by_symbol = _holdings_live_ltp_by_symbol(df)
         analytics_ltp_by_symbol.update(exited_ltp_by_symbol)
@@ -1627,7 +1683,7 @@ def _render_holdings_analytics_tab(kite_holdings_df: pd.DataFrame | None) -> Non
 
     exited_error = st.session_state.get("kite_holdings_exited_error")
     if exited_error:
-        st.warning(f"Could not load exited holdings for analytics: {exited_error}")
+        st.warning(f"Could not load all exited holdings sources: {exited_error}")
 
     momentum_error = st.session_state.get("kite_holdings_momentum_error")
     if momentum_error:
