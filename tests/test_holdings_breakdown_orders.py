@@ -1,3 +1,4 @@
+import json
 import unittest
 from contextlib import nullcontext
 from datetime import date
@@ -9,6 +10,69 @@ import getHldgBrk
 
 
 class HoldingsBreakdownOrderTests(unittest.TestCase):
+    def test_exited_index_sync_adds_only_fully_exited_summaries(self):
+        class FakeResponse:
+            def __init__(self, body=b""):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return self.body
+
+        exited_rows = pd.DataFrame(
+            [
+                {
+                    "row_type": "SUMMARY",
+                    "symbol": "FULL",
+                    "holding_status": "Exited",
+                    "total_qty": 0,
+                },
+                {
+                    "row_type": "BATCH",
+                    "symbol": "PARTIAL",
+                    "holding_status": "Exited",
+                    "total_qty": 0,
+                },
+                {
+                    "row_type": "SUMMARY",
+                    "symbol": "REOPENED",
+                    "holding_status": "Exited",
+                    "total_qty": 4,
+                },
+            ]
+        )
+
+        with (
+            patch.object(
+                getHldgBrk,
+                "_get_supabase_indices_config",
+                return_value=("https://supabase.example", "key", "indices"),
+            ),
+            patch.object(
+                getHldgBrk,
+                "load_exited_holdings_breakdown_from_supabase",
+                return_value=exited_rows,
+            ),
+            patch.object(
+                getHldgBrk,
+                "urlopen",
+                side_effect=[
+                    FakeResponse(b'[{"Index":"Exited Holdings","Constituents":"OLD, old"}]'),
+                    FakeResponse(),
+                ],
+            ) as urlopen,
+        ):
+            getHldgBrk.sync_exited_holdings_index()
+
+        written_request = urlopen.call_args_list[1].args[0]
+        payload = json.loads(written_request.data)
+        self.assertEqual(payload["Constituents"], "FULL, OLD")
+
     def test_active_breakdown_shows_batches_oldest_first_without_exited_batches(self):
         breakdown_df = pd.DataFrame(
             [

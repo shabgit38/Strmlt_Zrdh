@@ -129,7 +129,7 @@ def _get_supabase_indices_config() -> tuple[str, str, str]:
     return supabase_url, supabase_key, table_name
 
 
-def sync_exited_holdings_index(symbols: set[str] | None = None) -> int:
+def sync_exited_holdings_index() -> int:
     """Merge exited symbols into the single `Exited Holdings` index row."""
     supabase_url, supabase_key, table_name = _get_supabase_indices_config()
     encoded_table_name = quote(table_name, safe="")
@@ -155,17 +155,25 @@ def sync_exited_holdings_index(symbols: set[str] | None = None) -> int:
         if symbol.strip()
     }
     exited_holdings_df = load_exited_holdings_breakdown_from_supabase()
-    historical_symbols = {
-        str(symbol or "").strip().upper()
-        for symbol in exited_holdings_df.get("symbol", pd.Series(dtype=object))
-        if str(symbol or "").strip()
-    }
-    requested_symbols = {
-        str(symbol or "").strip().upper()
-        for symbol in (symbols or set())
-        if str(symbol or "").strip()
-    }
-    all_symbols = sorted(existing_symbols | historical_symbols | requested_symbols)
+    if exited_holdings_df.empty or not {"symbol", "row_type", "total_qty"}.issubset(
+        exited_holdings_df.columns
+    ):
+        historical_symbols = set()
+    else:
+        row_type = exited_holdings_df["row_type"].astype(str).str.upper().str.strip()
+        status = exited_holdings_df.get(
+            "holding_status", pd.Series(index=exited_holdings_df.index, dtype=object)
+        ).apply(_is_exited_status)
+        total_qty = pd.to_numeric(exited_holdings_df["total_qty"], errors="coerce")
+        historical_symbols = {
+            _normalized_symbol_value(symbol)
+            for symbol in exited_holdings_df.loc[
+                row_type.eq("SUMMARY") & status & total_qty.le(0),
+                "symbol",
+            ]
+            if _normalized_symbol_value(symbol)
+        }
+    all_symbols = sorted(existing_symbols | historical_symbols)
     if not all_symbols:
         return 0
 
@@ -1166,7 +1174,7 @@ def _render_exit_form(
         if summary is not None and str(summary.get("symbol") or "").strip():
             affected_symbols.add(str(summary.get("symbol")).upper().strip())
         try:
-            sync_exited_holdings_index(affected_symbols)
+            sync_exited_holdings_index()
         except Exception as exc:
             st.warning(f"Holding exit saved, but the Exited Holdings index could not be updated: {exc}")
         _refresh_holdings_breakdown_state_for_symbols(sorted(affected_symbols))
@@ -1633,7 +1641,7 @@ def update_holdings_breakdown_from_orders(orders: list[dict[str, Any]]) -> list[
         ]
         for _, summary in refreshed_summaries.iterrows():
             _recalculate_summary_from_supabase_batches(summary, {})
-        sync_exited_holdings_index({symbol})
+        sync_exited_holdings_index()
         affected_symbols.add(symbol)
 
     if not order_events:
@@ -2526,4 +2534,3 @@ def display_selected_holding_batches(
             "Profit %": st.column_config.NumberColumn("Profit %", width="small", format="%.2f%%"),
         },
     )
-

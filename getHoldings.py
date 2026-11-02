@@ -1357,6 +1357,7 @@ def fetch_and_display_holdings():
                 and not _is_option_contract_symbol(_normalized_symbol_value(symbol))
             )
         } if not exited_breakdown_df.empty and "symbol" in exited_breakdown_df.columns else set()
+        exited_symbols_requested.update(exited_index_symbols)
         exited_symbols_requested -= current_symbols
 
         instruments_df = load_instrument_token_from_supabase(sorted(current_symbols | exited_symbols_requested))
@@ -1378,8 +1379,33 @@ def fetch_and_display_holdings():
             token_map,
             exited_ltp_by_symbol,
         )
+        exited_row_symbols = {
+            _normalized_symbol_value(row.get("tradingsymbol"))
+            for row in exited_rows
+            if _normalized_symbol_value(row.get("tradingsymbol"))
+        }
+        missing_exited_index_tokens = []
+        for symbol in sorted(exited_index_symbols - current_symbols - exited_row_symbols):
+            token = token_map.get(symbol)
+            if token is None:
+                missing_exited_index_tokens.append(symbol)
+                continue
+            exited_rows.append(
+                {
+                    "tradingsymbol": symbol,
+                    "instrument_token": token,
+                    "last_price": exited_ltp_by_symbol.get(symbol),
+                    "average_price": None,
+                    "quantity": None,
+                }
+            )
         exited_symbols.update(exited_index_symbols - current_symbols)
         analytics_rows.extend(exited_rows)
+        if missing_exited_index_tokens:
+            st.warning(
+                "Could not load analytics for exited index symbols without instrument tokens: "
+                + ", ".join(missing_exited_index_tokens)
+            )
         analytics_ltp_by_symbol = _holdings_live_ltp_by_symbol(df)
         analytics_ltp_by_symbol.update(exited_ltp_by_symbol)
 
