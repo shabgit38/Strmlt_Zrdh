@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -23,6 +24,7 @@ ALERTS_DEFAULT_STATUS = "active"
 KITE_ALERTS_ENDPOINT = "https://api.kite.trade/alerts"
 ALERTS_HTTP_TIMEOUT_SECONDS = 10
 ALERTS_DEBUG_LOG_ENABLED = False
+ALERT_EMA_LABELS = ("EMA10", "EMA20", "EMA50", "EMA100", "EMA200")
 SECTOR_INDEX_LABELS = (
     ("PRIVATE BANK", "Banking"),
     ("PSU BANK", "Banking"),
@@ -162,6 +164,15 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
                 next_data.pop("fetchMeta", None)
                 next_data.pop("debug", None)
             return next_data
+        elif action == "reset":
+            return _reset_disabled_alerts(
+                kite,
+                api_key,
+                st.session_state.access_token,
+                previous_data,
+                next_data,
+                payload,
+            )
 
         _log_alerts_step(f"Fetching alerts list with status_filter={fetch_status_filter}.")
         alerts, fetch_meta = get_alerts(api_key, st.session_state.access_token, fetch_status_filter)
@@ -196,6 +207,302 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
             next_data["debug"] = f"{action} failed before table refresh."
         _log_alerts_step(f"Alerts request failed: {exc}")
     return next_data
+
+
+def _reset_disabled_alerts(
+    kite: Any,
+    api_key: str,
+    access_token: str,
+    previous_data: dict[str, Any],
+    next_data: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    _log_alerts_step("Fetching disabled alerts for reset.")
+    disabled_alerts, _ = _get_alerts_by_status(api_key, access_token, "disabled")
+    disabled_alerts = enrich_alerts_with_ltp(kite, disabled_alerts) if disabled_alerts else []
+
+    previous_alerts = list(previous_data.get("alerts") or [])
+    previous_by_uuid = {
+        str(alert.get("uuid") or "").strip(): alert
+        for alert in previous_alerts
+        if str(alert.get("uuid") or "").strip()
+    }
+    for alert in disabled_alerts:
+        previous_alert = previous_by_uuid.get(str(alert.get("uuid") or "").strip(), {})
+        if previous_alert.get("price_context"):
+            alert["price_context"] = previous_alert["price_context"]
+            if previous_alert.get("price_context_version") is not None:
+                alert["price_context_version"] = previous_alert["price_context_version"]
+
+    resettable_alerts = [alert for alert in disabled_alerts if _alert_reset_skip_reason(alert) is None]
+    symbols = sorted(
+        {
+            str(alert.get("lhs_tradingsymbol") or "").strip().upper()
+            for alert in resettable_alerts
+            if str(alert.get("lhs_tradingsymbol") or "").strip()
+        }
+    )
+    instrument_df = _load_alert_instrument_tokens(symbols) if symbols else pd.DataFrame()
+    as_of_date = pd.Timestamp.now().date().isoformat()
+    analytics_by_instrument: dict[tuple[str, str], tuple[dict[str, float], str | None]] = {}
+    skipped_details: list[str] = []
+    failed_details: list[str] = []
+    reset_count = 0
+    enabled_reset_count = 0
+    no_ema_fallback_count = 0
+    condition_adjustment_count = 0
+
+    for alert in disabled_alerts:
+        symbol = str(alert.get("lhs_tradingsymbol") or "").strip().upper() or "Unknown symbol"
+        uuid = str(alert.get("uuid") or "").strip()
+        skip_reason = _alert_reset_skip_reason(alert)
+        if skip_reason:
+            skipped_details.append(f"{symbol}: {skip_reason}")
+            continue
+        if not uuid:
+            skipped_details.append(f"{symbol}: missing alert UUID")
+            continue
+
+        current_price = pd.to_numeric(alert.get("ltp"), errors="coerce")
+        if pd.isna(current_price) or float(current_price) <= 0:
+            skipped_details.append(f"{symbol}: current LTP unavailable")
+            continue
+
+        instrument_token = _resolve_alert_instrument_token(alert, instrument_df)
+        if instrument_token is None:
+            skipped_details.append(f"{symbol}: instrument token unavailable")
+            continue
+
+        instrument_key = (str(alert.get("lhs_exchange") or "").strip().upper(), symbol)
+        if instrument_key not in analytics_by_instrument:
+            try:
+                analytics_df = load_analytics_history(kite, instrument_token, as_of_date)
+                metrics = build_metric_values(analytics_df, live_ltp=float(current_price))
+                alert["price_context"] = _format_alert_price_context(analytics_df, current_price)
+                alert["price_context_version"] = ALERTS_PRICE_CONTEXT_VERSION
+                analytics_by_instrument[instrument_key] = (metrics, None)
+            except Exception as exc:
+                _log_alerts_step(f"EMA history failed for {symbol}: {exc}")
+                analytics_by_instrument[instrument_key] = ({}, str(exc))
+
+        metrics, history_error = analytics_by_instrument[instrument_key]
+        if history_error:
+            skipped_details.append(f"{symbol}: EMA history unavailable ({history_error})")
+            continue
+
+        try:
+            target_price, used_fallback, adjusted_for_condition = _reset_alert_trigger_target(
+                float(current_price),
+                metrics,
+                str(alert.get("operator") or ""),
+            )
+        except ValueError as exc:
+            skipped_details.append(f"{symbol}: {exc}")
+            continue
+
+        update_fields = {field_name: alert.get(field_name) for field_name in ALERT_FIELD_NAMES}
+        update_fields["rhs_constant"] = f"{target_price:.2f}"
+        try:
+            normalized_update_fields = _alert_payload(update_fields)
+            modify_alert(api_key, access_token, uuid, normalized_update_fields)
+        except Exception as exc:
+            _log_alerts_step(f"Reset failed for alert uuid={uuid}, symbol={symbol}: {exc}")
+            failed_details.append(f"{symbol}: {exc}")
+            continue
+
+        alert.update(normalized_update_fields)
+        alert["status"] = "enabled"
+        alert["price_context"] = None
+        alert.pop("price_context_version", None)
+        reset_count += 1
+        no_ema_fallback_count += int(used_fallback)
+        condition_adjustment_count += int(adjusted_for_condition)
+
+    requested_enabled_uuids = {
+        str(uuid).strip()
+        for uuid in payload.get("enabledAlertUuids", [])
+        if str(uuid).strip()
+    } if isinstance(payload.get("enabledAlertUuids"), list) else set()
+    updated_enabled_alerts: dict[str, dict[str, Any]] = {}
+    found_enabled_uuids: set[str] = set()
+    for alert in previous_alerts:
+        uuid = str(alert.get("uuid") or "").strip()
+        if (
+            uuid not in requested_enabled_uuids
+            or str(alert.get("status") or "").strip().lower() != "enabled"
+        ):
+            continue
+        found_enabled_uuids.add(uuid)
+        symbol = str(alert.get("lhs_tradingsymbol") or "").strip().upper() or "Unknown symbol"
+        skip_reason = _alert_reset_skip_reason(alert)
+        if skip_reason:
+            skipped_details.append(f"{symbol}: {skip_reason}")
+            continue
+        if (_alert_distance_percentage(alert) or 0) <= 2:
+            skipped_details.append(f"{symbol}: distance is no longer greater than 2%")
+            continue
+
+        current_price = pd.to_numeric(alert.get("ltp"), errors="coerce")
+        try:
+            target_price = _enabled_alert_reset_target(
+                float(current_price),
+                str(alert.get("operator") or ""),
+            )
+        except (ValueError, TypeError) as exc:
+            skipped_details.append(f"{symbol}: {exc}")
+            continue
+
+        update_fields = {field_name: alert.get(field_name) for field_name in ALERT_FIELD_NAMES}
+        update_fields["rhs_constant"] = f"{target_price:.2f}"
+        try:
+            normalized_update_fields = _alert_payload(update_fields)
+            modify_alert(api_key, access_token, uuid, normalized_update_fields)
+        except Exception as exc:
+            _log_alerts_step(f"Enabled alert reset failed for uuid={uuid}, symbol={symbol}: {exc}")
+            failed_details.append(f"{symbol}: {exc}")
+            continue
+
+        updated_alert = dict(alert)
+        updated_alert.update(normalized_update_fields)
+        updated_alert["status"] = "enabled"
+        updated_enabled_alerts[uuid] = updated_alert
+        enabled_reset_count += 1
+
+    skipped_details.extend(
+        f"{uuid}: enabled alert is no longer available"
+        for uuid in sorted(requested_enabled_uuids - found_enabled_uuids)
+    )
+
+    reset_uuids = {
+        str(alert.get("uuid") or "").strip()
+        for alert in disabled_alerts
+        if str(alert.get("uuid") or "").strip()
+    }
+    previously_enabled_alerts = [
+        updated_enabled_alerts.get(str(alert.get("uuid") or "").strip(), dict(alert))
+        for alert in previous_alerts
+        if str(alert.get("status") or "").strip().lower() == "enabled"
+        and str(alert.get("uuid") or "").strip() not in reset_uuids
+    ]
+    next_data["alerts"] = _dedupe_alerts(previously_enabled_alerts + disabled_alerts)
+    next_data["disabledSymbolsText"] = _disabled_alert_symbols_text(next_data["alerts"])
+    next_data["loaded"] = True
+    _enrich_alerts_with_sectors(next_data)
+    next_data.pop("error", None)
+
+    if not disabled_alerts and not requested_enabled_uuids:
+        next_data["message"] = "No disabled alerts to reset."
+    else:
+        next_data["message"] = (
+            f"Reset and re-enabled {reset_count} disabled alert(s); "
+            f"adjusted {enabled_reset_count} enabled alert(s)."
+        )
+        if no_ema_fallback_count:
+            next_data["message"] += f" Used the 0.5% LTP fallback for {no_ema_fallback_count}."
+        if condition_adjustment_count:
+            next_data["message"] += f" Moved {condition_adjustment_count} trigger(s) to avoid an already-met condition."
+        if skipped_details:
+            next_data["message"] += f" Skipped {len(skipped_details)}."
+        if failed_details:
+            next_data["message"] += f" Failed {len(failed_details)}."
+        details = skipped_details + [f"Failed {detail}" for detail in failed_details]
+        if details:
+            next_data["error"] = "; ".join(details)
+
+    return next_data
+
+
+def _alert_reset_skip_reason(alert: dict[str, Any]) -> str | None:
+    if str(alert.get("type") or "").strip().lower() != "simple":
+        return "unsupported alert type"
+    if str(alert.get("rhs_type") or "").strip().lower() != "constant":
+        return "only constant-price alerts are supported"
+    lhs_attribute = str(alert.get("lhs_attribute") or "LastTradedPrice").strip().lower()
+    if lhs_attribute != "lasttradedprice":
+        return "only LastTradedPrice alerts are supported"
+    return None
+
+
+def _alert_distance_percentage(alert: dict[str, Any]) -> float | None:
+    if str(alert.get("rhs_type") or "").strip().lower() != "constant":
+        return None
+    ltp = pd.to_numeric(alert.get("ltp"), errors="coerce")
+    trigger = pd.to_numeric(alert.get("rhs_constant"), errors="coerce")
+    if (
+        pd.isna(ltp)
+        or pd.isna(trigger)
+        or not math.isfinite(float(ltp))
+        or not math.isfinite(float(trigger))
+        or float(ltp) <= 0
+    ):
+        return None
+    return abs(float(trigger) - float(ltp)) / float(ltp) * 100
+
+
+def _enabled_alert_reset_target(current_price: float, operator: str) -> float:
+    normalized_operator = operator.strip()
+    target_price = _non_triggering_alert_target(current_price, normalized_operator)
+    if _alert_condition_is_met(normalized_operator, current_price, target_price):
+        raise ValueError("could not move trigger outside the already-met condition")
+    return target_price
+
+
+def _reset_alert_trigger_target(
+    current_price: float,
+    metrics: dict[str, Any],
+    operator: str,
+) -> tuple[float, bool, bool]:
+    if not math.isfinite(current_price) or current_price <= 0:
+        raise ValueError("current LTP is invalid")
+
+    normalized_operator = operator.strip()
+    if normalized_operator not in {"<=", ">=", "<", ">", "=="}:
+        raise ValueError(f"unsupported alert operator {normalized_operator or '(missing)'}")
+
+    nearest_lower_ema = _nearest_lower_ema(current_price, metrics)
+    used_fallback = nearest_lower_ema is None
+    target_price = current_price * 0.995 if used_fallback else nearest_lower_ema[1]
+    target_price = float(f"{target_price:.2f}")
+
+    if _alert_condition_is_met(normalized_operator, current_price, target_price):
+        condition_adjustment = True
+        target_price = _non_triggering_alert_target(current_price, normalized_operator)
+    else:
+        condition_adjustment = False
+
+    if target_price <= 0:
+        raise ValueError("no positive trigger price can avoid an already-met condition")
+    if _alert_condition_is_met(normalized_operator, current_price, target_price):
+        raise ValueError("could not move trigger outside the already-met condition")
+    return target_price, used_fallback, condition_adjustment
+
+
+def _non_triggering_alert_target(current_price: float, operator: str) -> float:
+    if not math.isfinite(current_price) or current_price <= 0:
+        raise ValueError("current LTP is invalid")
+    operator = operator.strip()
+    if operator not in {"<=", ">=", "<", ">", "=="}:
+        raise ValueError(f"unsupported alert operator {operator or '(missing)'}")
+    if operator in {">=", ">", "=="}:
+        target_price = max(current_price * 1.005, current_price + 0.01)
+    else:
+        target_price = min(current_price * 0.995, current_price - 0.01)
+    target_price = float(f"{target_price:.2f}")
+    if target_price <= 0:
+        raise ValueError("no positive trigger price can avoid an already-met condition")
+    return target_price
+
+
+def _alert_condition_is_met(operator: str, current_price: float, target_price: float) -> bool:
+    if operator == "<=":
+        return current_price <= target_price
+    if operator == ">=":
+        return current_price >= target_price
+    if operator == "<":
+        return current_price < target_price
+    if operator == ">":
+        return current_price > target_price
+    return current_price == target_price
 
 
 def get_alerts(api_key: str, access_token: str, status: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -655,6 +962,19 @@ def _format_alert_price_context(analytics_df: pd.DataFrame, ltp: Any) -> str | N
     return " | ".join(part for part in parts if part) or None
 
 
+def _nearest_lower_ema(current_price: Any, metrics: dict[str, Any]) -> tuple[str, float] | None:
+    current = pd.to_numeric(current_price, errors="coerce")
+    if pd.isna(current):
+        return None
+
+    lower_emas: list[tuple[str, float]] = []
+    for label in ALERT_EMA_LABELS:
+        level = pd.to_numeric(metrics.get(label), errors="coerce")
+        if pd.notna(level) and float(level) <= float(current):
+            lower_emas.append((label, float(level)))
+    return max(lower_emas, key=lambda item: item[1], default=None)
+
+
 def _nearest_distance_label(_group: str, current_price: Any, levels: dict[str, Any]) -> str | None:
     distances: list[tuple[float, str, float]] = []
     for label, level in levels.items():
@@ -685,11 +1005,7 @@ def _alert_position_distance_labels(current_price: Any, metrics: dict[str, Any])
         key=lambda item: item[1] - current_value,
         default=None,
     )
-    nearest_lower_ema = min(
-        ((label, level) for label, level in ema_levels if level <= current_value),
-        key=lambda item: current_value - item[1],
-        default=None,
-    )
+    nearest_lower_ema = _nearest_lower_ema(current_value, dict(ema_levels))
 
     monthly_highs: list[tuple[str, float]] = []
     monthly_lows: list[tuple[str, float]] = []

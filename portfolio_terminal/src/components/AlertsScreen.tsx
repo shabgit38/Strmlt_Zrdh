@@ -1,4 +1,4 @@
-import { Edit3, RefreshCw, Save, Trash2, X } from "lucide-react";
+import { Edit3, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { formatPrice } from "../format";
@@ -7,7 +7,7 @@ import type { AlertFormValues, AlertsData, AlertStatusFilter, KiteAlert } from "
 
 type SortKey = "status" | "name" | "sector" | "ltp" | "distance_pct" | "updated_at";
 type SortDirection = "asc" | "desc";
-type AlertAction = "fetch" | "create" | "modify" | "delete";
+type AlertAction = "fetch" | "create" | "modify" | "delete" | "reset";
 const ALERTS_SEARCH_STORAGE_KEY = "portfolio-terminal-alerts-search";
 const UNMAPPED_SECTOR_FILTER = "__unmapped__";
 
@@ -60,6 +60,12 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
 
   const alerts = data?.alerts ?? [];
   const uniqueAlerts = useMemo(() => dedupeAlertsByUuid(alerts), [alerts]);
+  const disabledAlertCount = uniqueAlerts.filter((alert) => String(alert.status).trim().toLowerCase() === "disabled").length;
+  const enabledAlertsBeyondResetDistance = uniqueAlerts.filter((alert) =>
+    String(alert.status).trim().toLowerCase() === "enabled"
+    && isResettableEnabledAlert(alert)
+    && (alertDistancePercentage(alert) ?? 0) > 2,
+  );
   const sectorOptions = useMemo(
     () => [...new Set(uniqueAlerts.map((alert) => alert.sector?.trim()).filter((sector): sector is string => Boolean(sector)))].sort(),
     [uniqueAlerts],
@@ -142,6 +148,21 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
             </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                className="inline-flex items-center gap-2 rounded-md border border-terminal-line px-3 py-2 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover disabled:cursor-default disabled:opacity-40"
+                type="button"
+                disabled={!data?.loaded || (disabledAlertCount === 0 && enabledAlertsBeyondResetDistance.length === 0) || pendingAction !== null}
+                title="Reset disabled alerts to their nearest lower EMA, and move enabled alerts more than 2% away to 0.5% from LTP."
+                onClick={() => {
+                  const enabledAlertUuids = enabledAlertsBeyondResetDistance.map((alert) => alert.uuid);
+                  if (window.confirm(`Reset ${disabledAlertCount} disabled alert(s) to their nearest lower EMA and move ${enabledAlertUuids.length} enabled alert(s) over 2% away to 0.5% from LTP? Unsupported alert types will be skipped.`)) {
+                    sendAction("reset", { enabledAlertUuids });
+                  }
+                }}
+              >
+                <RotateCcw className={`h-4 w-4 ${pendingAction === "reset" ? "animate-spin text-terminal-watch" : ""}`} />
+                {pendingAction === "reset" ? "Resetting..." : "Reset alerts"}
+              </button>
               <select
                 className="rounded-md border border-terminal-line bg-terminal-panel px-3 py-2 text-sm font-semibold text-terminal-ink outline-none"
                 value={statusFilter}
@@ -458,6 +479,13 @@ function alertDistancePercentage(alert: KiteAlert) {
   const trigger = Number(alert.rhs_constant);
   if (!Number.isFinite(ltp) || ltp === 0 || !Number.isFinite(trigger)) return null;
   return (Math.abs(trigger - ltp) / ltp) * 100;
+}
+
+function isResettableEnabledAlert(alert: KiteAlert) {
+  return alert.type === "simple"
+    && alert.rhs_type === "constant"
+    && (!alert.lhs_attribute || alert.lhs_attribute.toLowerCase() === "lasttradedprice")
+    && Boolean(alert.uuid);
 }
 
 function alertDistanceText(alert: KiteAlert) {
