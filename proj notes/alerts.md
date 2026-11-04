@@ -8,7 +8,7 @@ When Kite rejects a new alert because its condition is already met, the app fetc
 
 After alerts are loaded, **Reset alerts** is enabled when there is at least one disabled alert or one eligible enabled alert more than 2% from its trigger. It asks for confirmation before making changes.
 
-- **Disabled alerts:** Supported simple `LastTradedPrice` alerts with constant triggers are set to the nearest EMA at or below current LTP (EMA10/20/50/100/200). If no such EMA exists, the fallback is 1% below LTP. The alert is re-enabled.
+- **Disabled alerts:** Supported simple `LastTradedPrice` alerts with constant triggers are set to the nearest EMA at least 1% on the non-triggering side of current LTP (EMA10/20/50/100/200). For `<`/`<=`, use the lower side; for `>`/`>=`, use the upper side. Equality uses the upper side. If no EMA meets the gap, the fallback is 1% from LTP on that side. The alert is re-enabled.
 - **Enabled alerts:** Supported simple constant-price alerts whose displayed distance is greater than 2% are moved to a trigger 1% from the LTP shown in the table.
 - **Comparator safety:** The existing comparator is preserved. If the proposed trigger would already satisfy the alert condition at current LTP, the trigger is moved 1% to the non-triggering side: above LTP for `>=`/`>` and below LTP for `<=`/`<`. Equality alerts use the above-LTP side.
 - **Unsupported or unavailable data:** ATO, non-constant, unsupported price-attribute, or missing-data alerts are skipped. The result message reports reset, fallback, adjusted, skipped, and failed counts; details are shown for skipped or failed alerts.

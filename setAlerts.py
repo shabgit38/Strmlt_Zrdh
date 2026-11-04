@@ -262,7 +262,6 @@ def _reset_disabled_alerts(
     reset_count = 0
     enabled_reset_count = 0
     no_ema_fallback_count = 0
-    condition_adjustment_count = 0
 
     for alert in disabled_alerts:
         symbol = str(alert.get("lhs_tradingsymbol") or "").strip().upper() or "Unknown symbol"
@@ -303,7 +302,7 @@ def _reset_disabled_alerts(
             continue
 
         try:
-            target_price, used_fallback, adjusted_for_condition = _reset_alert_trigger_target(
+            target_price, used_fallback = _reset_alert_trigger_target(
                 float(current_price),
                 metrics,
                 str(alert.get("operator") or ""),
@@ -328,7 +327,6 @@ def _reset_disabled_alerts(
         alert.pop("price_context_version", None)
         reset_count += 1
         no_ema_fallback_count += int(used_fallback)
-        condition_adjustment_count += int(adjusted_for_condition)
 
     requested_enabled_uuids = {
         str(uuid).strip()
@@ -411,8 +409,6 @@ def _reset_disabled_alerts(
         )
         if no_ema_fallback_count:
             next_data["message"] += f" Used the 1% LTP fallback for {no_ema_fallback_count}."
-        if condition_adjustment_count:
-            next_data["message"] += f" Moved {condition_adjustment_count} trigger(s) to avoid an already-met condition."
         if skipped_details:
             next_data["message"] += f" Skipped {len(skipped_details)}."
         if failed_details:
@@ -463,7 +459,7 @@ def _reset_alert_trigger_target(
     current_price: float,
     metrics: dict[str, Any],
     operator: str,
-) -> tuple[float, bool, bool]:
+) -> tuple[float, bool]:
     if not math.isfinite(current_price) or current_price <= 0:
         raise ValueError("current LTP is invalid")
 
@@ -471,22 +467,12 @@ def _reset_alert_trigger_target(
     if normalized_operator not in {"<=", ">=", "<", ">", "=="}:
         raise ValueError(f"unsupported alert operator {normalized_operator or '(missing)'}")
 
-    nearest_lower_ema = _nearest_lower_ema(current_price, metrics)
-    used_fallback = nearest_lower_ema is None
-    target_price = current_price * 0.99 if used_fallback else nearest_lower_ema[1]
-    target_price = float(f"{target_price:.2f}")
+    direction = "lower" if normalized_operator in {"<", "<="} else "upper"
+    nearest_ema = _nearest_ema_beyond_minimum_gap(current_price, metrics, direction)
+    if nearest_ema is None:
+        return _non_triggering_alert_target(current_price, normalized_operator), True
 
-    if _alert_condition_is_met(normalized_operator, current_price, target_price):
-        condition_adjustment = True
-        target_price = _non_triggering_alert_target(current_price, normalized_operator)
-    else:
-        condition_adjustment = False
-
-    if target_price <= 0:
-        raise ValueError("no positive trigger price can avoid an already-met condition")
-    if _alert_condition_is_met(normalized_operator, current_price, target_price):
-        raise ValueError("could not move trigger outside the already-met condition")
-    return target_price, used_fallback, condition_adjustment
+    return _round_price_outward(nearest_ema[1], direction), False
 
 
 def _non_triggering_alert_target(current_price: float, operator: str) -> float:
@@ -496,13 +482,42 @@ def _non_triggering_alert_target(current_price: float, operator: str) -> float:
     if operator not in {"<=", ">=", "<", ">", "=="}:
         raise ValueError(f"unsupported alert operator {operator or '(missing)'}")
     if operator in {">=", ">", "=="}:
-        target_price = max(current_price * 1.01, current_price + 0.01)
+        target_price = _round_price_outward(max(current_price * 1.01, current_price + 0.01), "upper")
     else:
-        target_price = min(current_price * 0.99, current_price - 0.01)
-    target_price = float(f"{target_price:.2f}")
+        target_price = _round_price_outward(min(current_price * 0.99, current_price - 0.01), "lower")
     if target_price <= 0:
         raise ValueError("no positive trigger price can avoid an already-met condition")
     return target_price
+
+
+def _nearest_ema_beyond_minimum_gap(
+    current_price: float,
+    metrics: dict[str, Any],
+    direction: str,
+) -> tuple[str, float] | None:
+    if direction not in {"lower", "upper"}:
+        raise ValueError(f"unsupported EMA direction {direction or '(missing)'}")
+    threshold = current_price * (0.99 if direction == "lower" else 1.01)
+    candidates: list[tuple[str, float]] = []
+    for label in ALERT_EMA_LABELS:
+        level = pd.to_numeric(metrics.get(label), errors="coerce")
+        if pd.isna(level) or not math.isfinite(float(level)) or float(level) <= 0:
+            continue
+        if direction == "lower" and float(level) <= threshold:
+            candidates.append((label, float(level)))
+        elif direction == "upper" and float(level) >= threshold:
+            candidates.append((label, float(level)))
+    if direction == "lower":
+        return max(candidates, key=lambda item: item[1], default=None)
+    return min(candidates, key=lambda item: item[1], default=None)
+
+
+def _round_price_outward(price: float, direction: str) -> float:
+    if direction == "lower":
+        return math.floor(price * 100) / 100
+    if direction == "upper":
+        return math.ceil(price * 100) / 100
+    raise ValueError(f"unsupported price direction {direction or '(missing)'}")
 
 
 def _alert_condition_is_met(operator: str, current_price: float, target_price: float) -> bool:

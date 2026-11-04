@@ -24,23 +24,39 @@ class AlertResetTests(unittest.TestCase):
     def test_returns_no_ema_when_all_levels_are_above_current_price(self):
         self.assertIsNone(_nearest_lower_ema(100, {"EMA10": 101, "EMA20": 102}))
 
-    def test_uses_one_percent_ltp_fallback_when_no_lower_ema_exists(self):
+    def test_uses_one_percent_ltp_fallback_when_no_lower_ema_meets_gap(self):
         self.assertEqual(
             _reset_alert_trigger_target(100, {"EMA10": 101}, "<="),
-            (99.0, True, False),
+            (99.0, True),
         )
 
-    def test_moves_trigger_above_ltp_when_upward_condition_is_already_met(self):
+    def test_selects_nearest_upper_ema_beyond_minimum_gap_for_upward_condition(self):
         self.assertEqual(
-            _reset_alert_trigger_target(100, {"EMA10": 99}, ">="),
-            (101.0, False, True),
+            _reset_alert_trigger_target(100, {"EMA10": 99, "EMA20": 101.5, "EMA50": 103}, ">="),
+            (101.5, False),
         )
 
-    def test_keeps_lower_ema_when_downward_condition_is_not_met(self):
+    def test_selects_nearest_lower_ema_that_meets_minimum_gap(self):
         self.assertEqual(
-            _reset_alert_trigger_target(100, {"EMA10": 99}, "<="),
-            (99.0, False, False),
+            _reset_alert_trigger_target(100, {"EMA10": 99.5, "EMA20": 98.5, "EMA50": 95}, "<="),
+            (98.5, False),
         )
+
+    def test_upward_reset_uses_one_percent_fallback_when_no_upper_ema_meets_gap(self):
+        self.assertEqual(
+            _reset_alert_trigger_target(100, {"EMA10": 100.5, "EMA20": 99}, ">"),
+            (101.0, True),
+        )
+
+    def test_ema_price_is_rounded_outward_to_preserve_minimum_gap(self):
+        target_price, used_fallback = _reset_alert_trigger_target(
+            100,
+            {"EMA10": 98.999, "EMA20": 100.5},
+            "<",
+        )
+        self.assertEqual(target_price, 98.99)
+        self.assertFalse(used_fallback)
+        self.assertGreaterEqual((100 - target_price) / 100, 0.01)
 
     def test_distance_matches_alerts_column_percentage(self):
         self.assertEqual(
@@ -116,10 +132,16 @@ class AlertResetTests(unittest.TestCase):
 
         create.assert_called_once()
 
-    def test_uses_safe_fallback_side_for_upward_comparator(self):
+    def test_uses_upper_ema_when_it_meets_minimum_gap_for_upward_comparator(self):
         self.assertEqual(
             _reset_alert_trigger_target(100, {"EMA10": 101}, ">="),
-            (101.0, True, True),
+            (101.0, False),
+        )
+
+    def test_equal_comparator_uses_upper_ema_side(self):
+        self.assertEqual(
+            _reset_alert_trigger_target(100, {"EMA10": 99, "EMA20": 101.25}, "=="),
+            (101.25, False),
         )
 
     def test_only_simple_constant_ltp_alerts_are_resettable(self):
