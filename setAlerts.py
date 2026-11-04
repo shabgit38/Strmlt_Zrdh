@@ -348,9 +348,6 @@ def _reset_disabled_alerts(
         if skip_reason:
             skipped_details.append(f"{symbol}: {skip_reason}")
             continue
-        if (_alert_distance_percentage(alert) or 0) <= 2:
-            skipped_details.append(f"{symbol}: distance is no longer greater than 2%")
-            continue
 
         current_price = pd.to_numeric(alert.get("ltp"), errors="coerce")
         try:
@@ -360,6 +357,11 @@ def _reset_disabled_alerts(
             )
         except (ValueError, TypeError) as exc:
             skipped_details.append(f"{symbol}: {exc}")
+            continue
+
+        current_trigger = pd.to_numeric(alert.get("rhs_constant"), errors="coerce")
+        if pd.notna(current_trigger) and abs(float(current_trigger) - target_price) < 0.005:
+            skipped_details.append(f"{symbol}: already at the 1% LTP target")
             continue
 
         update_fields = {field_name: alert.get(field_name) for field_name in ALERT_FIELD_NAMES}

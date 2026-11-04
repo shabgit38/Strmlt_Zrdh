@@ -70,6 +70,12 @@ class AlertResetTests(unittest.TestCase):
         self.assertEqual(_enabled_alert_reset_target(100, ">="), 101.0)
         self.assertEqual(_enabled_alert_reset_target(100, "<="), 99.0)
 
+    def test_enabled_reset_targets_ltp_offset_regardless_of_existing_gap(self):
+        target = _enabled_alert_reset_target(100, "<=")
+        self.assertEqual(target, 99.0)
+        self.assertNotEqual(target, 102.0)
+        self.assertNotEqual(target, 99.5)
+
     def test_create_adjusts_already_met_downward_condition_and_retries_once(self):
         fields = {
             "name": "Test",

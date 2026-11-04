@@ -61,10 +61,10 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
   const alerts = data?.alerts ?? [];
   const uniqueAlerts = useMemo(() => dedupeAlertsByUuid(alerts), [alerts]);
   const disabledAlertCount = uniqueAlerts.filter((alert) => String(alert.status).trim().toLowerCase() === "disabled").length;
-  const enabledAlertsBeyondResetDistance = uniqueAlerts.filter((alert) =>
+  const enabledAlertsNeedingReset = uniqueAlerts.filter((alert) =>
     String(alert.status).trim().toLowerCase() === "enabled"
     && isResettableEnabledAlert(alert)
-    && (alertDistancePercentage(alert) ?? 0) > 2,
+    && enabledAlertNeedsReset(alert),
   );
   const sectorOptions = useMemo(
     () => [...new Set(uniqueAlerts.map((alert) => alert.sector?.trim()).filter((sector): sector is string => Boolean(sector)))].sort(),
@@ -151,11 +151,11 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
               <button
                 className="inline-flex items-center gap-2 rounded-md border border-terminal-line px-3 py-2 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover disabled:cursor-default disabled:opacity-40"
                 type="button"
-                disabled={!data?.loaded || (disabledAlertCount === 0 && enabledAlertsBeyondResetDistance.length === 0) || pendingAction !== null}
-                title="Reset disabled alerts to the nearest EMA at least 1% on the safe side of LTP; enabled alerts more than 2% away move to 1% from LTP."
+                disabled={!data?.loaded || (disabledAlertCount === 0 && enabledAlertsNeedingReset.length === 0) || pendingAction !== null}
+                title="Reset disabled alerts to the nearest EMA at least 1% on the safe side of LTP; set enabled alerts to 1% from LTP."
                 onClick={() => {
-                  const enabledAlertUuids = enabledAlertsBeyondResetDistance.map((alert) => alert.uuid);
-                  if (window.confirm(`Reset ${disabledAlertCount} disabled alert(s) to the nearest EMA at least 1% on the safe side of LTP, and move ${enabledAlertUuids.length} enabled alert(s) over 2% away to 1% from LTP? Unsupported alert types will be skipped.`)) {
+                  const enabledAlertUuids = enabledAlertsNeedingReset.map((alert) => alert.uuid);
+                  if (window.confirm(`Reset ${disabledAlertCount} disabled alert(s) to the nearest EMA at least 1% on the safe side of LTP, and set ${enabledAlertUuids.length} enabled alert(s) to 1% from LTP if their trigger is currently farther or closer than that? Unsupported alert types will be skipped.`)) {
                     sendAction("reset", { enabledAlertUuids });
                   }
                 }}
@@ -486,6 +486,21 @@ function isResettableEnabledAlert(alert: KiteAlert) {
     && alert.rhs_type === "constant"
     && (!alert.lhs_attribute || alert.lhs_attribute.toLowerCase() === "lasttradedprice")
     && Boolean(alert.uuid);
+}
+
+function enabledAlertNeedsReset(alert: KiteAlert) {
+  const ltp = Number(alert.ltp);
+  const trigger = Number(alert.rhs_constant);
+  if (!Number.isFinite(ltp) || ltp <= 0 || !Number.isFinite(trigger)) return false;
+
+  const operator = operatorValue(alert.operator ?? "");
+  const rawTarget = operator === ">=" || operator === ">" || operator === "=="
+    ? Math.max(ltp * 1.01, ltp + 0.01)
+    : Math.min(ltp * 0.99, ltp - 0.01);
+  const target = operator === ">=" || operator === ">" || operator === "=="
+    ? Math.ceil(rawTarget * 100) / 100
+    : Math.floor(rawTarget * 100) / 100;
+  return Math.abs(trigger - target) >= 0.005;
 }
 
 function alertDistanceText(alert: KiteAlert) {
