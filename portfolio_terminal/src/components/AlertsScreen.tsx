@@ -152,10 +152,10 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 className="inline-flex items-center gap-2 rounded-md border border-terminal-line px-3 py-2 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover disabled:cursor-default disabled:opacity-40"
                 type="button"
                 disabled={!data?.loaded || (disabledAlertCount === 0 && enabledAlertsBeyondResetDistance.length === 0) || pendingAction !== null}
-                title="Reset disabled alerts to their nearest lower EMA, and move enabled alerts more than 2% away to 0.5% from LTP."
+                title="Reset disabled alerts to their nearest lower EMA, and move enabled alerts more than 2% away to 1% from LTP."
                 onClick={() => {
                   const enabledAlertUuids = enabledAlertsBeyondResetDistance.map((alert) => alert.uuid);
-                  if (window.confirm(`Reset ${disabledAlertCount} disabled alert(s) to their nearest lower EMA and move ${enabledAlertUuids.length} enabled alert(s) over 2% away to 0.5% from LTP? Unsupported alert types will be skipped.`)) {
+                  if (window.confirm(`Reset ${disabledAlertCount} disabled alert(s) to their nearest lower EMA and move ${enabledAlertUuids.length} enabled alert(s) over 2% away to 1% from LTP? Unsupported alert types will be skipped.`)) {
                     sendAction("reset", { enabledAlertUuids });
                   }
                 }}
