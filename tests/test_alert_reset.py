@@ -1,8 +1,10 @@
 import unittest
+from unittest.mock import patch
 
 from setAlerts import (
     _alert_distance_percentage,
     _alert_reset_skip_reason,
+    _create_alert_with_condition_adjustment,
     _enabled_alert_reset_target,
     _nearest_lower_ema,
     _reset_alert_trigger_target,
@@ -22,16 +24,16 @@ class AlertResetTests(unittest.TestCase):
     def test_returns_no_ema_when_all_levels_are_above_current_price(self):
         self.assertIsNone(_nearest_lower_ema(100, {"EMA10": 101, "EMA20": 102}))
 
-    def test_uses_half_percent_ltp_fallback_when_no_lower_ema_exists(self):
+    def test_uses_one_percent_ltp_fallback_when_no_lower_ema_exists(self):
         self.assertEqual(
             _reset_alert_trigger_target(100, {"EMA10": 101}, "<="),
-            (99.5, True, False),
+            (99.0, True, False),
         )
 
     def test_moves_trigger_above_ltp_when_upward_condition_is_already_met(self):
         self.assertEqual(
             _reset_alert_trigger_target(100, {"EMA10": 99}, ">="),
-            (100.5, False, True),
+            (101.0, False, True),
         )
 
     def test_keeps_lower_ema_when_downward_condition_is_not_met(self):
@@ -48,14 +50,76 @@ class AlertResetTests(unittest.TestCase):
             3.0,
         )
 
-    def test_enabled_reset_moves_trigger_half_percent_to_safe_side(self):
-        self.assertEqual(_enabled_alert_reset_target(100, ">="), 100.5)
-        self.assertEqual(_enabled_alert_reset_target(100, "<="), 99.5)
+    def test_enabled_reset_moves_trigger_one_percent_to_safe_side(self):
+        self.assertEqual(_enabled_alert_reset_target(100, ">="), 101.0)
+        self.assertEqual(_enabled_alert_reset_target(100, "<="), 99.0)
+
+    def test_create_adjusts_already_met_downward_condition_and_retries_once(self):
+        fields = {
+            "name": "Test",
+            "lhs_exchange": "NSE",
+            "lhs_tradingsymbol": "TEST",
+            "operator": "<=",
+            "rhs_constant": "101",
+        }
+        kite = type("Kite", (), {"ltp": lambda self, instrument: {instrument: {"last_price": 100}}})()
+        with patch(
+            "setAlerts.create_alert",
+            side_effect=[RuntimeError("The rule condition is already met"), {"uuid": "created"}],
+        ) as create:
+            response, payload, adjustment = _create_alert_with_condition_adjustment(
+                kite,
+                "key",
+                "token",
+                fields,
+            )
+
+        self.assertEqual(response, {"uuid": "created"})
+        self.assertEqual(payload["rhs_constant"], "99.00")
+        self.assertEqual(adjustment, {"previous": 101.0, "target": 99.0, "ltp": 100.0, "direction": "below"})
+        self.assertEqual(create.call_count, 2)
+
+    def test_create_adjusts_already_met_upward_condition_above_ltp(self):
+        fields = {
+            "name": "Test",
+            "lhs_exchange": "NSE",
+            "lhs_tradingsymbol": "TEST",
+            "operator": ">=",
+            "rhs_constant": "99",
+        }
+        kite = type("Kite", (), {"ltp": lambda self, instrument: {instrument: {"last_price": 100}}})()
+        with patch(
+            "setAlerts.create_alert",
+            side_effect=[RuntimeError("The rule condition is already met"), {"uuid": "created"}],
+        ):
+            _, payload, adjustment = _create_alert_with_condition_adjustment(
+                kite,
+                "key",
+                "token",
+                fields,
+            )
+
+        self.assertEqual(payload["rhs_constant"], "101.00")
+        self.assertEqual(adjustment["direction"], "above")
+
+    def test_create_does_not_retry_other_api_errors(self):
+        fields = {
+            "name": "Test",
+            "lhs_exchange": "NSE",
+            "lhs_tradingsymbol": "TEST",
+            "operator": "<=",
+            "rhs_constant": "99",
+        }
+        with patch("setAlerts.create_alert", side_effect=RuntimeError("API unavailable")) as create:
+            with self.assertRaisesRegex(RuntimeError, "API unavailable"):
+                _create_alert_with_condition_adjustment(object(), "key", "token", fields)
+
+        create.assert_called_once()
 
     def test_uses_safe_fallback_side_for_upward_comparator(self):
         self.assertEqual(
             _reset_alert_trigger_target(100, {"EMA10": 101}, ">="),
-            (100.5, True, True),
+            (101.0, True, True),
         )
 
     def test_only_simple_constant_ltp_alerts_are_resettable(self):

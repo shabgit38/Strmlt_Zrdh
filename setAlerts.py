@@ -119,20 +119,32 @@ def _handle_alerts_request(request: dict[str, Any]) -> dict[str, Any]:
 
         if action == "create":
             _log_alerts_step("Creating alert through Kite Alerts API.")
-            created_alert = create_alert(api_key, st.session_state.access_token, payload)
+            created_alert, payload, trigger_adjustment = _create_alert_with_condition_adjustment(
+                kite,
+                api_key,
+                st.session_state.access_token,
+                payload,
+            )
+            created_message = "Alert created."
+            if trigger_adjustment is not None:
+                created_message = (
+                    f"Alert created; trigger adjusted from {trigger_adjustment['previous']:.2f} "
+                    f"to {trigger_adjustment['target']:.2f} (1% {trigger_adjustment['direction']} "
+                    f"current LTP {trigger_adjustment['ltp']:.2f})."
+                )
             created_uuid = _created_alert_uuid(created_alert)
             if created_uuid:
                 next_data["alerts"] = _append_created_alert_row(next_data["alerts"], created_uuid, payload, created_alert)
                 next_data["disabledSymbolsText"] = _disabled_alert_symbols_text(next_data["alerts"])
                 _enrich_alerts_with_sectors(next_data)
-                next_data["message"] = "Alert created."
+                next_data["message"] = created_message
                 next_data["loaded"] = True
                 next_data.pop("error", None)
                 if not ALERTS_DEBUG_LOG_ENABLED:
                     next_data.pop("fetchMeta", None)
                     next_data.pop("debug", None)
                 return next_data
-            next_data["message"] = "Alert created."
+            next_data["message"] = created_message
         elif action == "modify":
             uuid = str(payload.get("uuid") or "")
             if not uuid:
@@ -398,7 +410,7 @@ def _reset_disabled_alerts(
             f"adjusted {enabled_reset_count} enabled alert(s)."
         )
         if no_ema_fallback_count:
-            next_data["message"] += f" Used the 0.5% LTP fallback for {no_ema_fallback_count}."
+            next_data["message"] += f" Used the 1% LTP fallback for {no_ema_fallback_count}."
         if condition_adjustment_count:
             next_data["message"] += f" Moved {condition_adjustment_count} trigger(s) to avoid an already-met condition."
         if skipped_details:
@@ -461,7 +473,7 @@ def _reset_alert_trigger_target(
 
     nearest_lower_ema = _nearest_lower_ema(current_price, metrics)
     used_fallback = nearest_lower_ema is None
-    target_price = current_price * 0.995 if used_fallback else nearest_lower_ema[1]
+    target_price = current_price * 0.99 if used_fallback else nearest_lower_ema[1]
     target_price = float(f"{target_price:.2f}")
 
     if _alert_condition_is_met(normalized_operator, current_price, target_price):
@@ -484,9 +496,9 @@ def _non_triggering_alert_target(current_price: float, operator: str) -> float:
     if operator not in {"<=", ">=", "<", ">", "=="}:
         raise ValueError(f"unsupported alert operator {operator or '(missing)'}")
     if operator in {">=", ">", "=="}:
-        target_price = max(current_price * 1.005, current_price + 0.01)
+        target_price = max(current_price * 1.01, current_price + 0.01)
     else:
-        target_price = min(current_price * 0.995, current_price - 0.01)
+        target_price = min(current_price * 0.99, current_price - 0.01)
     target_price = float(f"{target_price:.2f}")
     if target_price <= 0:
         raise ValueError("no positive trigger price can avoid an already-met condition")
@@ -701,6 +713,44 @@ def create_alert(api_key: str, access_token: str, fields: dict[str, Any]) -> dic
     payload = _alert_payload(fields)
     response = _kite_alerts_request(api_key, access_token, KITE_ALERTS_ENDPOINT, method="POST", payload=payload)
     return response.get("data", {}) if isinstance(response.get("data"), dict) else {}
+
+
+def _create_alert_with_condition_adjustment(
+    kite: Any,
+    api_key: str,
+    access_token: str,
+    fields: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str], dict[str, float | str] | None]:
+    payload = _alert_payload(fields)
+    try:
+        return create_alert(api_key, access_token, payload), payload, None
+    except RuntimeError as exc:
+        if "the rule condition is already met" not in str(exc).lower():
+            raise
+
+    instrument = _quote_instrument_for_alert(payload)
+    if not instrument:
+        raise RuntimeError("Cannot adjust alert trigger because the instrument is unavailable.")
+    quotes = kite.ltp(instrument)
+    quote = quotes.get(instrument, {}) if isinstance(quotes, dict) else {}
+    current_price = pd.to_numeric(quote.get("last_price"), errors="coerce") if isinstance(quote, dict) else float("nan")
+    if pd.isna(current_price) or not math.isfinite(float(current_price)) or float(current_price) <= 0:
+        raise RuntimeError(f"Cannot adjust alert trigger because current LTP is unavailable for {instrument}.")
+
+    ltp = float(current_price)
+    target_price = _non_triggering_alert_target(ltp, payload["operator"])
+    previous_trigger = pd.to_numeric(payload.get("rhs_constant"), errors="coerce")
+    adjusted_payload = dict(payload)
+    adjusted_payload["rhs_constant"] = f"{target_price:.2f}"
+    created_alert = create_alert(api_key, access_token, adjusted_payload)
+    direction = "below" if payload["operator"].strip() in {"<", "<="} else "above"
+    adjustment: dict[str, float | str] = {
+        "previous": float(previous_trigger) if not pd.isna(previous_trigger) else 0.0,
+        "target": target_price,
+        "ltp": ltp,
+        "direction": direction,
+    }
+    return created_alert, adjusted_payload, adjustment
 
 
 def modify_alert(api_key: str, access_token: str, uuid: str, fields: dict[str, Any]) -> dict[str, Any]:
