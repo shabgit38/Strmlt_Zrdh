@@ -24,6 +24,7 @@ export type PositionChartPoint = {
   label: string;
   value: number;
   distance: string | null;
+  date?: string | null;
 };
 
 export type SectorGroup = {

@@ -1,7 +1,11 @@
 import unittest
 
+import pandas as pd
+
 from kite_analytics import (
     _format_position_line_chart_html,
+    _format_price_position,
+    _position_level_date,
     _position_line_chart_points,
     _sort_position_chart_points,
 )
@@ -40,6 +44,43 @@ class PositionLineChartTests(unittest.TestCase):
         self.assertEqual(chart_html.count("data-position-current='true'"), 1)
         self.assertIn("data-position-chart='true'", chart_html)
         self.assertIn("current.getBoundingClientRect().left", chart_html)
+
+    def test_position_chart_shows_extreme_month_and_year(self):
+        points = _position_line_chart_points(
+            "LTP 100 | 1M High +10.00% 110 (2026-09-11)"
+        )
+
+        self.assertEqual(points[1]["date"], "2026-09-11")
+        chart_html = _format_position_line_chart_html(
+            "LTP 100 | 1M High +10.00% 110 (2026-09-11)"
+        )
+        self.assertIn("Sep 2026", chart_html)
+
+    def test_monthly_extreme_date_uses_completed_month_window(self):
+        current_month_start = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None).normalize().replace(day=1)
+        period_start = current_month_start - pd.DateOffset(months=1)
+        frame = pd.DataFrame(
+            {"High": [12, 20, 100], "Low": [10, 15, 90]},
+            index=[
+                period_start + pd.Timedelta(days=1),
+                current_month_start - pd.Timedelta(days=1),
+                current_month_start + pd.Timedelta(days=1),
+            ],
+        )
+
+        self.assertEqual(
+            _position_level_date("1M High", frame),
+            current_month_start - pd.Timedelta(days=1),
+        )
+        position = _format_price_position(
+            {"LTP": 25, "EMA10": 20, "1M High": 20, "1M Low": 10},
+            frame,
+        )
+
+        self.assertIn(
+            f"1M High +25.0% 20 ({(current_month_start - pd.Timedelta(days=1)):%Y-%m-%d})",
+            position,
+        )
 
 
 if __name__ == "__main__":

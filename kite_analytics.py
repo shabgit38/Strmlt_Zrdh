@@ -454,7 +454,7 @@ def build_metric_ladder(
         ladder.append(("Qty", quantity))
 
     ladder.append(("Range Used", range_position))
-    ladder.append(("Position", _format_price_position(metrics)))
+    ladder.append(("Position", _format_price_position(metrics, analytics_df)))
     for span in [10, 20, 50, 100, 200]:
         label = f"EMA{span}"
         ladder.append((f"__EMA_DISTANCE__{label}", calculate_distance_pct(current_price, metrics.get(label))))
@@ -464,7 +464,10 @@ def build_metric_ladder(
     return ladder
 
 
-def _format_price_position(metrics: dict[str, float]) -> str | None:
+def _format_price_position(
+    metrics: dict[str, float],
+    analytics_df: pd.DataFrame,
+) -> str | None:
     current_price = metrics.get("LTP", metrics.get("Latest Close"))
     if current_price is None:
         return None
@@ -491,14 +494,20 @@ def _format_price_position(metrics: dict[str, float]) -> str | None:
         if ema_values[span] is not None
     ]
     if ema200 is not None and current_price < ema200:
-        nearest_52w = _format_position_level("52W Low", current_price, metrics.get("52W Low"))
+        nearest_52w = _format_position_level(
+            "52W Low",
+            current_price,
+            metrics.get("52W Low"),
+            date=_position_level_date("52W Low", analytics_df),
+        )
     else:
         nearest_52w = _nearest_position_level(
             current_price,
             {label: metrics.get(label) for label in ["52W Low", "52W High"]},
+            analytics_df=analytics_df,
         )
-    monthly_levels = _monthly_position_levels(current_price, metrics)
-    yearly_levels = _yearly_position_levels(current_price, metrics)
+    monthly_levels = _monthly_position_levels(current_price, metrics, analytics_df)
+    yearly_levels = _yearly_position_levels(current_price, metrics, analytics_df)
     technical_parts.extend(part for part in [nearest_52w, *yearly_levels, *monthly_levels] if part)
     parts: list[str] = []
     parts.append(f"{current_label} {_format_position_number(current_price)}")
@@ -506,7 +515,11 @@ def _format_price_position(metrics: dict[str, float]) -> str | None:
     return " | ".join(parts) or None
 
 
-def _monthly_position_levels(current_price: float, metrics: dict[str, float]) -> list[str]:
+def _monthly_position_levels(
+    current_price: float,
+    metrics: dict[str, float],
+    analytics_df: pd.DataFrame,
+) -> list[str]:
     labels = [
         "1M High",
         "1M Low",
@@ -516,13 +529,22 @@ def _monthly_position_levels(current_price: float, metrics: dict[str, float]) ->
         "6M Low",
     ]
     return [
-        _format_position_level(label, current_price, metrics.get(label))
+        _format_position_level(
+            label,
+            current_price,
+            metrics.get(label),
+            date=_position_level_date(label, analytics_df),
+        )
         for label in labels
         if metrics.get(label) is not None
     ]
 
 
-def _yearly_position_levels(current_price: float, metrics: dict[str, float]) -> list[str]:
+def _yearly_position_levels(
+    current_price: float,
+    metrics: dict[str, float],
+    analytics_df: pd.DataFrame,
+) -> list[str]:
     labels = [
         label
         for years in range(1, 6)
@@ -541,28 +563,87 @@ def _yearly_position_levels(current_price: float, metrics: dict[str, float]) -> 
         ]
     )
     return [
-        _format_position_level(label, current_price, metrics.get(label))
+        _format_position_level(
+            label,
+            current_price,
+            metrics.get(label),
+            date=_position_level_date(label, analytics_df),
+        )
         for label in labels
         if metrics.get(label) is not None
     ]
 
 
-def _nearest_position_level(current_price: float, levels: dict[str, Any]) -> str | None:
+def _nearest_position_level(
+    current_price: float,
+    levels: dict[str, Any],
+    *,
+    analytics_df: pd.DataFrame | None = None,
+) -> str | None:
     candidates: list[tuple[float, str]] = []
     for label, level in levels.items():
         distance = calculate_distance_pct(current_price, level)
         if distance is not None:
-            candidates.append((abs(distance), _format_position_level(label, current_price, level)))
+            candidates.append(
+                (
+                    abs(distance),
+                    _format_position_level(
+                        label,
+                        current_price,
+                        level,
+                        date=_position_level_date(label, analytics_df) if analytics_df is not None else None,
+                    ),
+                )
+            )
     return min(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
-def _format_position_level(label: str, current_price: float, level: Any) -> str:
+def _format_position_level(
+    label: str,
+    current_price: float,
+    level: Any,
+    *,
+    date: pd.Timestamp | None = None,
+) -> str:
     distance = calculate_distance_pct(current_price, level)
     numeric_level = pd.to_numeric(level, errors="coerce")
     if distance is None or pd.isna(numeric_level):
         return ""
     level_text = _format_position_number(float(numeric_level))
-    return f"{label} {distance:+.1f}% {level_text}"
+    date_text = f" ({date:%Y-%m-%d})" if date is not None else ""
+    return f"{label} {distance:+.1f}% {level_text}{date_text}"
+
+
+def _position_level_date(label: str, analytics_df: pd.DataFrame) -> pd.Timestamp | None:
+    period_match = re.fullmatch(r"(<)?(\d+)([WMY]) (High|Low)", label)
+    if period_match is None:
+        return None
+
+    is_coverage_period, amount_text, unit, extreme = period_match.groups()
+    df = _normalize_datetime_index(analytics_df).sort_index()
+    if df.empty:
+        return None
+
+    if is_coverage_period:
+        period_df = df
+    elif unit == "M" and int(amount_text) in {1, 3, 6}:
+        current_month_start = pd.Timestamp(datetime.now(IST).date()).replace(day=1)
+        period_start = current_month_start - pd.DateOffset(months=int(amount_text))
+        period_df = df[(df.index >= period_start) & (df.index < current_month_start)]
+    else:
+        latest_date = pd.Timestamp(df.index.max())
+        offsets = {
+            "W": pd.DateOffset(weeks=int(amount_text)),
+            "M": pd.DateOffset(months=int(amount_text)),
+            "Y": pd.DateOffset(years=int(amount_text)),
+        }
+        period_df = df[df.index >= latest_date - offsets[unit]]
+
+    column = "High" if extreme == "High" else "Low"
+    if period_df.empty or column not in period_df:
+        return None
+    extreme_index = period_df[column].idxmax() if extreme == "High" else period_df[column].idxmin()
+    return pd.Timestamp(extreme_index)
 
 
 def _format_position_number(value: float) -> str:
@@ -1384,7 +1465,18 @@ def _format_position_line_chart_html(position: str) -> str:
             if is_nearest_monthly
             else distance_color
         )
-        title = escape(f"{label} {_format_position_number(value)}" + (f" {distance}" if distance else ""))
+        raw_date = point.get("date")
+        title = escape(
+            f"{label} {_format_position_number(value)}"
+            + (f" {distance}" if distance else "")
+            + (f" {raw_date}" if raw_date is not None else "")
+        )
+        date_text = pd.Timestamp(str(raw_date)).strftime("%b %Y") if raw_date is not None else ""
+        date_html = (
+            f"<span style='font-size:0.65rem;line-height:1;color:#94A3B8;'>{escape(date_text)}</span>"
+            if date_text
+            else "<span>&nbsp;</span>"
+        )
         left_line = "transparent" if index == 0 else "#64748B"
         right_line = "transparent" if index == last_index else "#64748B"
         node_background = "rgba(255, 202, 131, 0.12)" if is_current else "transparent"
@@ -1396,11 +1488,12 @@ def _format_position_line_chart_html(position: str) -> str:
         nodes.append(
             f"<span title='{title}'"
             + (" data-position-current='true'" if is_current else "")
-            + f" style='display:grid;grid-template-rows:1.1rem 0.65rem auto;"
+            + f" style='display:grid;grid-template-rows:1.1rem 0.8rem 0.65rem auto;"
             f"min-width:6.25rem;text-align:center;align-items:center;background:{node_background};"
             "border-radius:0.35rem;'>"
             "<span style='font-size:0.8rem;font-weight:400;white-space:nowrap;color:#FFFFFF;'>"
             f"{escape(label)}</span>"
+            f"{date_html}"
             "<span style='display:flex;align-items:center;width:100%;'>"
             f"<span style='flex:1;height:2px;background:{left_line};opacity:0.75;'></span>"
             f"<span style='width:{'0.72rem' if is_nearest_monthly else '0.55rem'};"
@@ -1434,7 +1527,7 @@ def _format_position_line_chart_html(position: str) -> str:
 
 def _position_line_chart_points(position: str) -> list[dict[str, float | str | None]]:
     """Parse the shared price-position string into serializable chart points."""
-    parsed_points: list[tuple[str, float, str | None]] = []
+    parsed_points: list[tuple[str, float, str | None, str | None]] = []
     for part in position.split(" | "):
         endpoint_match = re.fullmatch(
             r"(LTP|Latest Close)\s+([\d,]+(?:\.\d+)?)",
@@ -1446,12 +1539,13 @@ def _position_line_chart_points(position: str) -> list[dict[str, float | str | N
                     endpoint_match.group(1),
                     float(endpoint_match.group(2).replace(",", "")),
                     None,
+                    None,
                 )
             )
             continue
 
         metric_match = re.fullmatch(
-            r"(.+?)\s+([+-]\d+(?:\.\d+)?%)\s+([\d,]+(?:\.\d+)?)",
+            r"(.+?)\s+([+-]\d+(?:\.\d+)?%)\s+([\d,]+(?:\.\d+)?)(?:\s+\((\d{4}-\d{2}-\d{2})\))?",
             part.strip(),
         )
         if metric_match:
@@ -1460,12 +1554,13 @@ def _position_line_chart_points(position: str) -> list[dict[str, float | str | N
                     metric_match.group(1),
                     float(metric_match.group(3).replace(",", "")),
                     metric_match.group(2),
+                    metric_match.group(4),
                 )
             )
 
     points = [
-        {"label": label, "value": value, "distance": distance}
-        for label, value, distance in parsed_points
+        {"label": label, "value": value, "distance": distance, "date": date}
+        for label, value, distance, date in parsed_points
     ]
     period_best: dict[tuple[str, float], tuple[int, dict[str, float | str | None]]] = {}
     other_points: list[dict[str, float | str | None]] = []

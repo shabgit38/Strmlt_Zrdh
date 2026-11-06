@@ -36,6 +36,11 @@ export function PositionLineChart({ points = [] }: PositionLineChartProps) {
       >
         {points.map((point, index) => {
           const current = point.label === "LTP" || point.label === "Latest Close";
+          const dateLabel = point.date
+            ? new Intl.DateTimeFormat(undefined, { month: "short", year: "numeric" }).format(
+                new Date(`${point.date}T00:00:00`),
+              )
+            : null;
           const distanceValue = point.distance ? Number(point.distance.replace("%", "")) : 0;
           const color = current
             ? "#FFB15C"
@@ -49,13 +54,16 @@ export function PositionLineChart({ points = [] }: PositionLineChartProps) {
             <div
               key={`${point.label}-${point.value}`}
               data-position-current={current ? "true" : undefined}
-              className={`grid grid-rows-[0.9rem_0.5rem_auto] items-center rounded text-center ${
+              className={`grid grid-rows-[0.9rem_0.75rem_0.5rem_auto] items-center rounded text-center ${
                 current ? "bg-amber-100/10" : ""
               }`}
-              title={`${point.label} ${formatPrice(point.value)}${point.distance ? ` ${point.distance}` : ""}`}
+              title={`${point.label}${point.date ? ` ${point.date}` : ""} ${formatPrice(point.value)}${point.distance ? ` ${point.distance}` : ""}`}
             >
               <span className="whitespace-nowrap text-[10px] leading-none text-terminal-ink">
                 {point.label}
+              </span>
+              <span className="whitespace-nowrap text-[9px] leading-none text-terminal-muted">
+                {dateLabel ?? "\u00a0"}
               </span>
               <span className="flex w-full items-center">
                 <span className={`h-0.5 flex-1 ${index === 0 ? "bg-transparent" : "bg-terminal-muted/60"}`} />
