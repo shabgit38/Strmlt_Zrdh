@@ -83,7 +83,7 @@ class HistoricalDataTests(unittest.TestCase):
         self.assertEqual(len(history), 2)
         self.assertEqual(history.index.normalize().nunique(), 1)
 
-    def test_analytics_history_fetches_ten_years(self):
+    def test_analytics_history_fetches_at_most_two_thousand_days(self):
         load_analytics_history.clear()
         try:
             with patch(
@@ -93,14 +93,20 @@ class HistoricalDataTests(unittest.TestCase):
                 load_analytics_history(self.kite, 123, "2026-01-02")
 
             get_historical_data.assert_called_once()
+            end_date = pd.Timestamp("2026-01-02")
             self.assertEqual(
                 get_historical_data.call_args.kwargs["from_date"],
-                pd.Timestamp("2016-01-02").to_pydatetime(),
+                (end_date - pd.Timedelta(days=1999)).to_pydatetime(),
             )
             self.assertEqual(
                 get_historical_data.call_args.kwargs["to_date"],
                 pd.Timestamp("2026-01-02 23:59:59").to_pydatetime(),
             )
+            requested_interval = (
+                get_historical_data.call_args.kwargs["to_date"]
+                - get_historical_data.call_args.kwargs["from_date"]
+            )
+            self.assertLess(requested_interval, pd.Timedelta(days=2000))
         finally:
             load_analytics_history.clear()
 

@@ -2064,7 +2064,11 @@ if selected_main_tab == "Upload":
 if selected_main_tab == "Holdings":
     fetch_holdings_col, holdings_ltp_col = st.columns([1, 3], vertical_alignment="center")
     with fetch_holdings_col:
-        if st.button("Fetch Holdings", type="primary"):
+        if st.button(
+            "Fetch Holdings",
+            type="primary",
+            help="Fetch holdings and analytics using up to 2,000 daily Kite candles per ticker. Subsequent clicks refresh live prices.",
+        ):
             cached_holdings_df = st.session_state.get("kite_holdings_df")
             if cached_holdings_df is None:
                 with st.spinner("Fetching holdings and analytics..."):
@@ -2113,7 +2117,11 @@ if selected_main_tab == "Holdings":
         _render_holdings_analytics_tab(kite_holdings_df)
 
     with tab_returns:
-        if st.button("Display Historical Returns", key="display_kite_holdings_returns"):
+        if st.button(
+            "Display Historical Returns",
+            key="display_kite_holdings_returns",
+            help="Load cached history of up to 2,000 daily Kite candles per holding to calculate returns.",
+        ):
             token_rows = st.session_state.get("kite_holdings_token_rows", [])
             if not token_rows:
                 st.warning("Fetch holdings before loading returns.")
@@ -2357,7 +2365,7 @@ if selected_main_tab == "Historic Data":
         "Fetch dashboard",
         type="primary",
         key="historic_fetch_dashboard",
-        help="Fetch cached 2Y daily Kite data and show a sorted price ladder per ticker.",
+        help="Fetch up to 2,000 cached daily Kite candles per ticker (about 5.5 years) and show a sorted price ladder.",
     )
 
     if fetch_dashboard_clicked:
@@ -2650,7 +2658,11 @@ if selected_main_tab == "Historic Data":
                     show_summary=False,
                 )
         with tab_returns:
-            if st.button("Display Historical Returns", key="display_historic_returns"):
+            if st.button(
+                "Display Historical Returns",
+                key="display_historic_returns",
+                help="Load cached history of up to 2,000 daily Kite candles per ticker to calculate returns.",
+            ):
                 token_rows = st.session_state.get("historic_token_rows", [])
                 if not token_rows:
                     st.warning("Fetch a historic dashboard before loading returns.")
@@ -2685,7 +2697,11 @@ if selected_main_tab == "Historic Data":
                     max_rows=18,
                 )
         with tab_correlation:
-            if st.button("Show Correlation", key="show_historic_correlation"):
+            if st.button(
+                "Show Correlation",
+                key="show_historic_correlation",
+                help="Calculate correlation using up to 2,000 cached daily Kite candles per ticker.",
+            ):
                 token_rows = st.session_state.get("historic_token_rows", [])
                 if not token_rows:
                     st.warning("Fetch a historic dashboard before loading correlation.")

@@ -132,12 +132,11 @@ def load_analytics_history(
     to_date: str,
 ) -> pd.DataFrame:
     """
-    Load one cached 10Y daily dataframe for levels and EMAs.
+    Load up to 2,000 cached daily candles for levels and EMAs.
     """
-    # Define the end point as today
     end = datetime.combine(pd.to_datetime(to_date).date(), time(23, 59, 59))
-    # Calculate the start point ten years prior at midnight
-    start = datetime.combine((pd.Timestamp(end) - pd.DateOffset(years=10)).date(), time.min)
+    # Use 2,000 inclusive dates while keeping the API interval below 2,000 days.
+    start = datetime.combine((pd.Timestamp(end) - pd.DateOffset(days=1999)).date(), time.min)
     return get_kite_historical_data(
         kite=_kite,
         instrument_token=instrument_token,
@@ -428,7 +427,7 @@ def build_metric_ladder(
     invested: float | None = None,
 ) -> list[tuple[str, float | str | tuple[float, ...] | None]]:
     """
-    Build an ascending price ladder from the cached 10Y daily dataframe.
+    Build an ascending price ladder from the cached daily dataframe.
     """
     metrics = build_metric_values(analytics_df, live_ltp=live_ltp)
     range_position = calculate_range_position(metrics)

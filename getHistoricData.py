@@ -194,7 +194,7 @@ def _dataframe_height(row_count: int, *, min_rows: int = 1, max_rows: int | None
 
 kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
 
-st.caption("Fetch cached 10Y daily Kite data and show a sorted price ladder per ticker.")
+st.caption("Fetch up to 2,000 cached daily Kite candles (about 5.5 years) and show a sorted price ladder per ticker.")
 
 if "historic_tickers_input" not in st.session_state:
     st.session_state["historic_tickers_input"] = ""
@@ -220,7 +220,11 @@ tickers_input = st.text_area(
     help="Enter one or more stock ticker symbols separated by commas.",
 )
 
-if st.button("Fetch dashboard", type="primary"):
+if st.button(
+    "Fetch dashboard",
+    type="primary",
+    help="Fetch up to 2,000 daily Kite candles per ticker. Data is cached for one hour.",
+):
     raw_tickers = [item.strip().upper() for item in tickers_input.split(",") if item.strip()]
 
     if not raw_tickers:
