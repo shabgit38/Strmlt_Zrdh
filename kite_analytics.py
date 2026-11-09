@@ -235,11 +235,18 @@ def build_metric_values(analytics_df: pd.DataFrame, live_ltp: float | None = Non
         metrics["52W Low"] = float(df_52w["Low"].min())
         metrics["52W High"] = float(df_52w["High"].max())
 
-    for years in [2, 3, 4]:
+    for years in [2, 3, 4, 5]:
         period_df = analytics_df[analytics_df.index >= latest_date - pd.DateOffset(years=years)]
         if first_date <= latest_date - pd.DateOffset(years=years) and not period_df.empty:
             metrics[f"{years}Y Low"] = float(period_df["Low"].min())
             metrics[f"{years}Y High"] = float(period_df["High"].max())
+
+    history_years = (latest_date - first_date).days / 365.2425
+    rounded_history_years = int(history_years * 2 + 0.5) / 2
+    if rounded_history_years > 5:
+        history_label = f"{rounded_history_years:g}Y"
+        metrics[f"{history_label} Low"] = float(analytics_df["Low"].min())
+        metrics[f"{history_label} High"] = float(analytics_df["High"].max())
 
     coverage_boundaries = [
         ("1W", pd.DateOffset(weeks=1)),
@@ -549,6 +556,18 @@ def _yearly_position_levels(
         for years in range(1, 6)
         for label in (f"{years}Y Low", f"{years}Y High")
     ]
+    extended_years = sorted(
+        {
+            float(match.group(1))
+            for label in metrics
+            if (match := re.fullmatch(r"(\d+\.\d+)Y (?:High|Low)", label))
+        }
+    )
+    labels.extend(
+        label
+        for years in extended_years
+        for label in (f"{years:g}Y Low", f"{years:g}Y High")
+    )
     labels.extend(
         [
             f"<{period} Low"
@@ -614,7 +633,7 @@ def _format_position_level(
 
 
 def _position_level_date(label: str, analytics_df: pd.DataFrame) -> pd.Timestamp | None:
-    period_match = re.fullmatch(r"(<)?(\d+)([WMY]) (High|Low)", label)
+    period_match = re.fullmatch(r"(<)?(\d+(?:\.\d+)?)([WMY]) (High|Low)", label)
     if period_match is None:
         return None
 
@@ -623,7 +642,7 @@ def _position_level_date(label: str, analytics_df: pd.DataFrame) -> pd.Timestamp
     if df.empty:
         return None
 
-    if is_coverage_period:
+    if is_coverage_period or ("." in amount_text and unit == "Y"):
         period_df = df
     elif unit == "M" and int(amount_text) in {1, 3, 6}:
         current_month_start = pd.Timestamp(datetime.now(IST).date()).replace(day=1)
@@ -1561,11 +1580,14 @@ def _position_line_chart_points(position: str) -> list[dict[str, float | str | N
         {"label": label, "value": value, "distance": distance, "date": date}
         for label, value, distance, date in parsed_points
     ]
-    period_best: dict[tuple[str, float], tuple[int, dict[str, float | str | None]]] = {}
+    period_best: dict[tuple[str, float], tuple[float, dict[str, float | str | None]]] = {}
     other_points: list[dict[str, float | str | None]] = []
     for point in points:
         label = str(point["label"])
-        period_match = re.fullmatch(r"((?:<)?(?:1W|1M|3M|6M|52W|[1-5]Y)) (High|Low)", label)
+        period_match = re.fullmatch(
+            r"((?:<)?(?:1W|1M|3M|6M|52W|\d+(?:\.\d+)?Y)) (High|Low)",
+            label,
+        )
         if period_match is None:
             other_points.append(point)
             continue
@@ -1579,13 +1601,13 @@ def _position_line_chart_points(position: str) -> list[dict[str, float | str | N
     return other_points + [point for _, point in period_best.values()]
 
 
-def _position_period_days(period: str) -> int:
+def _position_period_days(period: str) -> float:
     period = period.removeprefix("<")
     if period.endswith("W"):
         return int(period.removesuffix("W")) * 7
     if period.endswith("M"):
         return int(period.removesuffix("M")) * 30
-    return int(period.removesuffix("Y")) * 365
+    return float(period.removesuffix("Y")) * 365.2425
 
 
 def _sort_position_chart_points(
@@ -1613,16 +1635,14 @@ def _sort_position_chart_points(
     return above + [current_point] + below
 
 
-def _position_chart_sort_key(point: dict[str, float | str | None]) -> tuple[float, int, str]:
+def _position_chart_sort_key(point: dict[str, float | str | None]) -> tuple[float, float, str]:
     label = str(point["label"])
-    period_match = re.fullmatch(r"(?:<(\d+)([WMY])|([\d]+)([WMY])) (High|Low)", label)
+    period_match = re.fullmatch(r"(<)?(\d+(?:\.\d+)?)([WMY]) (High|Low)", label)
     if period_match is None:
         return float(point["value"]), 0, label
 
-    amount = int(period_match.group(1) or period_match.group(3))
-    unit = period_match.group(2) or period_match.group(4)
-    period_days = amount * {"W": 7, "M": 30, "Y": 365}[unit]
-    return float(point["value"]), -period_days, label
+    period = label.split(" ", 1)[0]
+    return float(point["value"]), -_position_period_days(period), label
 
 
 def position_line_chart_points_from_dashboard_column(

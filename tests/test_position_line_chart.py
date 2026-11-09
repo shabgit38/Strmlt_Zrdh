@@ -3,6 +3,7 @@ import unittest
 import pandas as pd
 
 from kite_analytics import (
+    build_metric_values,
     _format_position_line_chart_html,
     _format_price_position,
     _position_level_date,
@@ -34,6 +35,34 @@ class PositionLineChartTests(unittest.TestCase):
         self.assertEqual(
             [point["label"] for point in points],
             ["<5Y High", "LTP"],
+        )
+
+    def test_available_history_adds_half_year_level_after_five_years(self):
+        dates = pd.bdate_range(start="2021-05-17", end="2026-11-06")
+        close = pd.Series(range(100, 100 + len(dates)), index=dates, dtype=float)
+        history = pd.DataFrame(
+            {"High": close + 2, "Low": close - 2, "Close": close},
+            index=dates,
+        )
+
+        metrics = build_metric_values(history)
+        position = _format_price_position(metrics, history)
+
+        self.assertIn("5Y Low", metrics)
+        self.assertIn("5.5Y Low", metrics)
+        self.assertIn("5.5Y High", position)
+        self.assertEqual(_position_level_date("5.5Y High", history), dates[-1])
+
+    def test_equal_half_year_levels_keep_longer_coverage_label(self):
+        points = _sort_position_chart_points(
+            _position_line_chart_points(
+                "LTP 1,500 | 5Y Low -16.67% 1,245.05 | 5.5Y Low -16.67% 1,245.05"
+            )
+        )
+
+        self.assertEqual(
+            [point["label"] for point in points],
+            ["LTP", "5.5Y Low"],
         )
 
     def test_position_chart_marks_ltp_for_initial_scroll_focus(self):
