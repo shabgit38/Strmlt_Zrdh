@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pandas as pd
 from kiteconnect import KiteConnect
 
-from kite_analytics import get_kite_historical_data
+from kite_analytics import get_kite_historical_data, load_analytics_history
 
 
 class HistoricalDataTests(unittest.TestCase):
@@ -82,6 +82,27 @@ class HistoricalDataTests(unittest.TestCase):
 
         self.assertEqual(len(history), 2)
         self.assertEqual(history.index.normalize().nunique(), 1)
+
+    def test_analytics_history_fetches_ten_years(self):
+        load_analytics_history.clear()
+        try:
+            with patch(
+                "kite_analytics.get_kite_historical_data",
+                return_value=pd.DataFrame(),
+            ) as get_historical_data:
+                load_analytics_history(self.kite, 123, "2026-01-02")
+
+            get_historical_data.assert_called_once()
+            self.assertEqual(
+                get_historical_data.call_args.kwargs["from_date"],
+                pd.Timestamp("2016-01-02").to_pydatetime(),
+            )
+            self.assertEqual(
+                get_historical_data.call_args.kwargs["to_date"],
+                pd.Timestamp("2026-01-02 23:59:59").to_pydatetime(),
+            )
+        finally:
+            load_analytics_history.clear()
 
 
 if __name__ == "__main__":
