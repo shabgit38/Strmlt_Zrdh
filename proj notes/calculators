@@ -123,11 +123,10 @@ def calculate_target_strikes(spot, step_size):
 ### Current Calculators tab behavior
 
 The index strike dropdown is dynamic, not a fixed-size list. It currently shows
-available NIFTY strikes: 100-point intervals within approximately 2% of spot,
-and 500-point intervals from there to approximately 5% of spot. Strikes without
-matching option contracts are omitted, so the displayed count depends on the
-live spot and available contracts. NIFTY is the only index currently enabled
-for this list.
+available NIFTY strikes at 100-point intervals across approximately ±5% of
+spot. Strikes without matching option contracts are omitted, so the displayed
+count depends on the live spot and available contracts. NIFTY is the only index
+currently enabled for this list.
 
 ---
 
