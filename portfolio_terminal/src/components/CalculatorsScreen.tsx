@@ -13,6 +13,7 @@ import {
   seedAverageRowsFromTrade,
   summarizeAverage,
   summarizeTrades,
+  toNumber,
 } from "../calculators/logic";
 import { generateExitAlert } from "../calculators/alertEngine";
 import { dateToInputValue, formatManualSpotDistance, parseOptionSymbol } from "../calculators/optionMetrics";
@@ -61,6 +62,7 @@ export function CalculatorsScreen({
   const [avgEnabled, setAvgEnabled] = useState(false);
   const [selectedMtfHolding, setSelectedMtfHolding] = useState<MtfHolding | null>(null);
   const [spots, setSpots] = useState<IndexSpot[]>([]);
+  const [optionSpotOverride, setOptionSpotOverride] = useState("");
   const [targetOptions, setTargetOptions] = useState<Record<string, TargetOptionContracts[]>>({});
   const [existingPositions, setExistingPositions] = useState<ExistingOptionPosition[]>([]);
   const [checkedGeneratedSymbols, setCheckedGeneratedSymbols] = useState<Set<string>>(() => new Set());
@@ -84,7 +86,14 @@ export function CalculatorsScreen({
       })),
     [optionRows, spots],
   );
-  const calculatedOptionRows = useMemo(() => calculateOptionRows(effectiveOptionRows), [effectiveOptionRows]);
+  const parsedSpotOverride = toNumber(optionSpotOverride);
+  const hasSpotOverride = optionSpotOverride.trim() !== "";
+  const invalidSpotOverride = hasSpotOverride && (parsedSpotOverride === null || parsedSpotOverride <= 0);
+  const distanceSpotOverride = hasSpotOverride ? (invalidSpotOverride ? null : parsedSpotOverride) : undefined;
+  const calculatedOptionRows = useMemo(
+    () => calculateOptionRows(effectiveOptionRows, distanceSpotOverride),
+    [effectiveOptionRows, distanceSpotOverride],
+  );
   const selectedOptionAverageRows = useMemo(
     () =>
       calculatedOptionRows
@@ -417,6 +426,30 @@ export function CalculatorsScreen({
             title="Option Calculator"
             onAdd={() => setOptionRows((rows) => [...rows, emptyOptionRow()])}
           />
+          <div className="flex flex-wrap items-end gap-3 rounded-md border border-terminal-line bg-terminal-panel px-3 py-2">
+            <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-terminal-muted" htmlFor="option-spot-override">
+              <span>Spot override</span>
+              <input
+                aria-invalid={invalidSpotOverride}
+                className="w-36 rounded-md border border-terminal-line bg-terminal-panel-alt px-2 py-1.5 text-sm font-normal text-terminal-ink outline-none focus:border-terminal-watch"
+                id="option-spot-override"
+                min="0.01"
+                onChange={(event) => setOptionSpotOverride(event.target.value)}
+                placeholder="Use live spot"
+                step="any"
+                type="number"
+                value={optionSpotOverride}
+              />
+            </label>
+            <span className="pb-2 text-[11px] text-terminal-muted">
+              Shared across rows; affects Dist Spot only. Clear to use live spots.
+            </span>
+            {invalidSpotOverride ? (
+              <span className="pb-2 text-[11px] text-terminal-negative" role="alert">
+                Enter a spot greater than zero.
+              </span>
+            ) : null}
+          </div>
           <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
             <table className="w-full min-w-[1160px] border-collapse text-left text-xs">
               <thead className="bg-terminal-panel-alt text-xs uppercase tracking-wide text-terminal-muted">
@@ -635,6 +668,11 @@ function ExistingPositionsSection({
   onAdd: (position: ExistingOptionPosition) => void;
   positions: ExistingOptionPosition[];
 }) {
+  const [spotOverride, setSpotOverride] = useState("");
+  const parsedSpotOverride = toNumber(spotOverride);
+  const hasSpotOverride = spotOverride.trim() !== "";
+  const invalidSpotOverride = hasSpotOverride && (parsedSpotOverride === null || parsedSpotOverride <= 0);
+  const distanceSpotOverride = hasSpotOverride ? (invalidSpotOverride ? null : parsedSpotOverride) : undefined;
   const spotSummary = existingPositionsSpotSummary(positions);
   const totals = positions.reduce(
     (total, position) => {
@@ -653,6 +691,30 @@ function ExistingPositionsSection({
         <h2 className="text-sm font-semibold uppercase tracking-wide text-terminal-muted">Existing Positions</h2>
         {spotSummary ? (
           <span className="text-sm font-semibold tabular-nums text-terminal-ink">{spotSummary}</span>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap items-end gap-3 rounded-md border border-terminal-line bg-terminal-panel px-3 py-2">
+        <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-terminal-muted" htmlFor="existing-positions-spot-override">
+          <span>Spot override</span>
+          <input
+            aria-invalid={invalidSpotOverride}
+            className="w-36 rounded-md border border-terminal-line bg-terminal-panel-alt px-2 py-1.5 text-sm font-normal text-terminal-ink outline-none focus:border-terminal-watch"
+            id="existing-positions-spot-override"
+            min="0.01"
+            onChange={(event) => setSpotOverride(event.target.value)}
+            placeholder="Use live spot"
+            step="any"
+            type="number"
+            value={spotOverride}
+          />
+        </label>
+        <span className="pb-2 text-[11px] text-terminal-muted">
+          Shared across rows; affects Dist Spot only. Clear to use live spots.
+        </span>
+        {invalidSpotOverride ? (
+          <span className="pb-2 text-[11px] text-terminal-negative" role="alert">
+            Enter a spot greater than zero.
+          </span>
         ) : null}
       </div>
       <div className="overflow-auto rounded-md border border-terminal-line bg-terminal-panel">
@@ -676,7 +738,7 @@ function ExistingPositionsSection({
           <tbody>
             {positions.map((position) => {
               const symbol = position.symbol.trim().toUpperCase();
-              const metrics = existingPositionMetrics(position);
+              const metrics = existingPositionMetrics(position, distanceSpotOverride);
               return (
                 <tr key={symbol} className="border-t border-terminal-line">
                   <td className="px-3 py-2 text-terminal-ink">
@@ -1187,7 +1249,7 @@ function existingPositionsSpotSummary(positions: ExistingOptionPosition[]): stri
   return Array.from(spotByPrefix, ([symbol, spot]) => `${symbol} ${formatPrice(spot)}`).join(" | ");
 }
 
-function existingPositionMetrics(position: ExistingOptionPosition) {
+function existingPositionMetrics(position: ExistingOptionPosition, distanceSpotOverride?: number | null) {
   const breakeven =
     position.strike === undefined || position.optionType === undefined
       ? null
@@ -1208,7 +1270,10 @@ function existingPositionMetrics(position: ExistingOptionPosition) {
 
   return {
     breakeven,
-    distSpot: formatManualSpotDistance(breakeven, position.spot ?? null),
+    distSpot: formatManualSpotDistance(
+      breakeven,
+      distanceSpotOverride === undefined ? position.spot ?? null : distanceSpotOverride,
+    ),
     dte,
     invested,
     pnlPct,

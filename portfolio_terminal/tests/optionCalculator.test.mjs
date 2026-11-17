@@ -70,3 +70,29 @@ test("unparseable option symbols clear contract metadata and show an error", () 
   assert.equal(row.symbolError, "Symbol can't be parsed");
   assert.equal(row.pnl, 0);
 });
+
+test("spot override changes only the option distance calculation", () => {
+  const option = {
+    id: "option-test",
+    symbol: "NIFTY27MAR21000PE",
+    openQty: "65",
+    avgPrice: "215.30",
+    ltp: "215.30",
+    spot: "22742",
+    expiry: "2026-12-29",
+    strike: "21000",
+    optionType: "PE",
+    exitPrice: "",
+    avgSelected: false,
+  };
+  const [liveSpotRow] = calculateOptionRows([option]);
+  const [overriddenRow] = calculateOptionRows([option], 22000);
+
+  assert.equal(liveSpotRow.distSpot, "1957.30 [8.6%]");
+  assert.equal(overriddenRow.distSpot, "1215.30 [5.5%]");
+  assert.equal(overriddenRow.spot, liveSpotRow.spot);
+  assert.equal(overriddenRow.alert, liveSpotRow.alert);
+
+  const [invalidOverrideRow] = calculateOptionRows([option], null);
+  assert.equal(invalidOverrideRow.distSpot, "");
+});

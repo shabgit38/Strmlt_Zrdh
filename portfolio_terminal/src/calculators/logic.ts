@@ -52,7 +52,10 @@ export function toNumber(value: string | number | null | undefined): number | nu
   return Number.isFinite(next) ? next : null;
 }
 
-export function calculateOptionRows(rows: OptionCalculatorRow[]): CalculatedOptionRow[] {
+export function calculateOptionRows(
+  rows: OptionCalculatorRow[],
+  distanceSpotOverride?: number | null,
+): CalculatedOptionRow[] {
   const today = new Date();
   return rows.map((row) => {
     const symbol = normalizeSymbol(row.symbol);
@@ -66,6 +69,7 @@ export function calculateOptionRows(rows: OptionCalculatorRow[]): CalculatedOpti
     const expiry = parsed?.expiry ?? null;
     const effectiveAvgPrice = avgPrice ?? ltp;
     const valuationPrice = exitPrice ?? ltp;
+    const distanceSpot = distanceSpotOverride === undefined ? spot : distanceSpotOverride;
     const invested = openQty !== null && effectiveAvgPrice !== null ? Math.abs(openQty) * effectiveAvgPrice : null;
     const current = openQty !== null && valuationPrice !== null ? openQty * valuationPrice : null;
     const pnl =
@@ -100,7 +104,7 @@ export function calculateOptionRows(rows: OptionCalculatorRow[]): CalculatedOpti
       expiry: dateToInputValue(parsed?.expiry ?? null),
       daysExpiry,
       breakeven,
-      distSpot: formatManualSpotDistance(breakeven, spot),
+      distSpot: formatManualSpotDistance(breakeven, distanceSpot),
       alert: alert.label,
       alertTone: alert.tone,
       invested,
