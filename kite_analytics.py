@@ -1035,6 +1035,7 @@ def format_price_ladder_summary_html(
     dashboard_df: pd.DataFrame,
     *,
     highlight_symbols: dict[str, str] | None = None,
+    index_symbols: set[str] | None = None,
     momentum_labels: dict[str, str] | None = None,
     momentum_context_by_symbol: dict[str, str] | None = None,
     early_entry_labels: dict[str, list[str]] | None = None,
@@ -1052,6 +1053,7 @@ def format_price_ladder_summary_html(
             symbol_color_groups,
             dashboard_df=dashboard_df if show_positions else None,
             highlight_symbols=highlight_symbols,
+            index_symbols=index_symbols,
             momentum_labels=momentum_labels,
             momentum_context_by_symbol=momentum_context_by_symbol,
             early_entry_labels=early_entry_labels,
@@ -1172,6 +1174,7 @@ def _format_symbol_color_summary(
     *,
     dashboard_df: pd.DataFrame | None = None,
     highlight_symbols: dict[str, str] | None = None,
+    index_symbols: set[str] | None = None,
     momentum_labels: dict[str, str] | None = None,
     momentum_context_by_symbol: dict[str, str] | None = None,
     early_entry_labels: dict[str, list[str]] | None = None,
@@ -1179,6 +1182,11 @@ def _format_symbol_color_summary(
     mtf_symbols: set[str] | None = None,
     exited_symbols: set[str] | None = None,
 ) -> str:
+    normalized_index_symbols = {
+        str(symbol).strip().upper()
+        for symbol in (index_symbols or set())
+        if str(symbol).strip()
+    }
     summary_items = [
         (">= 75", *MOMENTUM_PALETTE["entry"], "rgba(15, 118, 110, 0.18)", color_groups["green"]),
         (">= 50 and < 75", *MOMENTUM_PALETTE["near"], "rgba(125, 206, 155, 0.16)", color_groups["light_green"]),
@@ -1199,10 +1207,21 @@ def _format_symbol_color_summary(
                 mtf_symbols,
                 exited_symbols,
             )
+            range_index_names = ", ".join(
+                escape(str(symbol).strip())
+                for symbol in symbols
+                if str(symbol).strip().upper() in normalized_index_symbols
+            )
+            range_label = f"RANGE {escape(label)}"
+            if range_index_names:
+                range_label += (
+                    " <span style='font-size:0.72rem;font-weight:500;color:white;'>"
+                    f"{range_index_names}</span>"
+                )
             rows.append(
                 "<div style='display:grid;gap:0.2rem;font-size:0.8rem;'>"
                 f"<div style='font-size:0.9rem;font-weight:700;color:{background};"
-                f"padding:0.1rem 0 0.05rem;'>RANGE {label}</div>"
+                f"padding:0.1rem 0 0.05rem;'>{range_label}</div>"
                 f"<div style='color:inherit;font-weight:400;padding:0.1rem 0.45rem;'>"
                 f"{symbol_text}</div></div>"
             )

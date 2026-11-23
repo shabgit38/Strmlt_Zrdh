@@ -1602,6 +1602,7 @@ def _render_price_ladder_summary_card(
     dashboard_df: pd.DataFrame,
     *,
     highlight_symbols: dict[str, str] | None = None,
+    index_symbols: set[str] | None = None,
     momentum_labels: dict[str, str] | None = None,
     momentum_context_by_symbol: dict[str, str] | None = None,
     early_entry_labels: dict[str, list[str]] | None = None,
@@ -1613,6 +1614,7 @@ def _render_price_ladder_summary_card(
     summary_html = format_price_ladder_summary_html(
         dashboard_df,
         highlight_symbols=highlight_symbols,
+        index_symbols=index_symbols,
         momentum_labels=momentum_labels,
         momentum_context_by_symbol=momentum_context_by_symbol,
         early_entry_labels=early_entry_labels,
@@ -2659,6 +2661,7 @@ if selected_main_tab == "Historic Data":
             _render_price_ladder_summary_card(
                 filtered_dashboard_df,
                 highlight_symbols=historic_ladder_highlight_symbols,
+                index_symbols=historic_index_symbols,
                 momentum_labels=_momentum_label_by_symbol(momentum_df),
                 momentum_context_by_symbol=_momentum_context_by_symbol(momentum_df),
                 early_entry_labels=early_entry_labels,

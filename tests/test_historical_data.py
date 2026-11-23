@@ -4,7 +4,11 @@ from unittest.mock import patch
 import pandas as pd
 from kiteconnect import KiteConnect
 
-from kite_analytics import get_kite_historical_data, load_analytics_history
+from kite_analytics import (
+    format_price_ladder_summary_html,
+    get_kite_historical_data,
+    load_analytics_history,
+)
 
 
 class HistoricalDataTests(unittest.TestCase):
@@ -109,6 +113,29 @@ class HistoricalDataTests(unittest.TestCase):
             self.assertLess(requested_interval, pd.Timedelta(days=2000))
         finally:
             load_analytics_history.clear()
+
+    def test_price_ladder_summary_lists_index_names_beside_each_range(self):
+        dashboard = pd.DataFrame(
+            {
+                "NIFTY AUTO": ["Rng:80%"],
+                "NIFTY IT": ["Rng:76%"],
+                "NIFTY METAL": ["Rng:60%"],
+                "NIFTY INFRA": ["Rng:51%"],
+                "RELIANCE": ["Rng:40%"],
+            }
+        )
+
+        summary = format_price_ladder_summary_html(
+            dashboard,
+            index_symbols={"NIFTY AUTO", "NIFTY IT", "NIFTY METAL", "NIFTY INFRA"},
+            show_positions=True,
+        )
+
+        self.assertIn("RANGE &gt;= 75 <span style='font-size:0.72rem;font-weight:500;color:white;'>", summary)
+        self.assertIn("NIFTY AUTO, NIFTY IT</span>", summary)
+        self.assertIn("RANGE &gt;= 50 and &lt; 75 <span", summary)
+        self.assertIn("NIFTY METAL, NIFTY INFRA</span>", summary)
+        self.assertIn("RANGE &gt;= 25 and &lt; 50</div>", summary)
 
 
 if __name__ == "__main__":
