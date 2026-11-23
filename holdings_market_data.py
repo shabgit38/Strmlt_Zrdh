@@ -44,6 +44,8 @@ def resolve_tokens_from_tickers(
             requested_exchange = str(
                 (exchange_by_symbol or {}).get(normalized_ticker) or ""
             ).strip().upper()
+            if requested_exchange == "INDICES":
+                requested_exchange = ""
             exchanges = matches["exchange"].astype(str).str.strip().str.upper()
             if requested_exchange:
                 matches = matches[exchanges == requested_exchange]
@@ -61,7 +63,40 @@ def resolve_tokens_from_tickers(
     return resolved, missing
 
 
+def resolve_exchanges_for_tokens(
+    token_map: dict[str, int],
+    instruments_df: pd.DataFrame,
+) -> dict[str, str]:
+    if instruments_df.empty or not {
+        "instrument_token",
+        "exchange",
+    }.issubset(instruments_df.columns):
+        return {}
+
+    tokens = pd.to_numeric(instruments_df["instrument_token"], errors="coerce")
+    exchanges = instruments_df["exchange"].astype(str).str.strip().str.upper()
+    exchange_by_token = pd.DataFrame({"token": tokens, "exchange": exchanges})
+    exchange_by_token = exchange_by_token[
+        tokens.notna() & exchanges.ne("") & exchanges.ne("NAN")
+    ]
+    resolved: dict[str, str] = {}
+    for symbol, token in token_map.items():
+        matches = (
+            exchange_by_token.loc[
+                exchange_by_token["token"] == token,
+                "exchange",
+            ]
+            .dropna()
+            .unique()
+        )
+        if len(matches) == 1 and matches[0]:
+            resolved[symbol] = str(matches[0])
+    return resolved
+
+
 def _historic_quote_instrument(symbol: str, exchange: str) -> str:
+    if symbol == "SENSEX":
+        return "BSE:SENSEX"
     if exchange == "INDICES":
         index_symbols = {
             "NIFTY 50": "NSE:NIFTY 50",

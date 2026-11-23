@@ -7,6 +7,7 @@ from holdings_market_data import (
     fetch_live_ltp,
     fetch_live_ltp_by_symbol,
     instrument_lookup_symbols,
+    resolve_exchanges_for_tokens,
     resolve_tokens_from_tickers,
 )
 
@@ -134,6 +135,35 @@ class HoldingsLtpTests(unittest.TestCase):
 
         self.assertEqual(tokens, {})
         self.assertEqual(missing, ["NSDL"])
+
+    def test_indices_alert_exchange_does_not_filter_instrument_exchange(self):
+        instruments = pd.DataFrame(
+            [
+                {"tradingsymbol": "NIFTY 50", "exchange": "NSE", "instrument_token": 256265},
+                {"tradingsymbol": "SENSEX", "exchange": "BSE", "instrument_token": 265},
+            ]
+        )
+
+        tokens, missing = resolve_tokens_from_tickers(
+            ["NIFTY 50", "SENSEX"],
+            instruments,
+            exchange_by_symbol={"NIFTY 50": "INDICES", "SENSEX": "INDICES"},
+        )
+
+        self.assertEqual(tokens, {"NIFTY 50": 256265, "SENSEX": 265})
+        self.assertEqual(missing, [])
+        self.assertEqual(
+            resolve_exchanges_for_tokens(tokens, instruments),
+            {"NIFTY 50": "NSE", "SENSEX": "BSE"},
+        )
+
+    def test_sensex_quote_uses_bse_without_an_exchange_override(self):
+        kite = FakeKite({"BSE:SENSEX": {"last_price": 80000.0}})
+
+        ltp_by_symbol = fetch_live_ltp_by_symbol(kite, ["SENSEX"])
+
+        self.assertEqual(kite.requested_instruments, ("BSE:SENSEX",))
+        self.assertEqual(ltp_by_symbol, {"SENSEX": 80000.0})
 
     def test_token_resolution_uses_unique_base_alias_when_exact_symbol_is_absent(self):
         instruments = pd.DataFrame(

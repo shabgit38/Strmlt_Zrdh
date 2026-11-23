@@ -62,6 +62,7 @@ from holdings_market_data import (
     fetch_live_ltp,
     fetch_live_ltp_by_symbol,
     instrument_lookup_symbols,
+    resolve_exchanges_for_tokens,
     resolve_tokens_from_tickers,
 )
 
@@ -2393,11 +2394,15 @@ if selected_main_tab == "Historic Data":
         try:
             historic_kite, _, _ = bootstrap_kite_app("Zerodha Historical Data")
             alert_exchange_by_symbol = _historic_alert_exchange_by_symbol()
+            resolved_exchange_by_symbol = st.session_state.get("historic_exchange_by_symbol", {})
+            if not isinstance(resolved_exchange_by_symbol, dict):
+                resolved_exchange_by_symbol = {}
+            exchange_by_symbol = {**alert_exchange_by_symbol, **resolved_exchange_by_symbol}
             with st.spinner("Refreshing live LTP..."):
                 live_ltp_by_symbol = fetch_live_ltp_by_symbol(
                     historic_kite,
                     pending_historic_ltp_tickers,
-                    exchange_by_symbol=alert_exchange_by_symbol,
+                    exchange_by_symbol=exchange_by_symbol,
                 )
                 st.session_state["historic_dashboard_df"] = _patch_historic_dashboard_ltp(
                     st.session_state.get("historic_dashboard_df", pd.DataFrame()),
@@ -2434,6 +2439,7 @@ if selected_main_tab == "Historic Data":
             alert_exchange_by_symbol = _historic_alert_exchange_by_symbol()
 
             with st.spinner("Fetching historic dashboard..."):
+                load_instrument_token_from_supabase.clear()
                 instruments_df = load_instrument_token_from_supabase(
                     pending_historic_tickers + [pending_benchmark]
                 )
@@ -2458,6 +2464,11 @@ if selected_main_tab == "Historic Data":
                     st.error("No instrument tokens found for the selected tickers.")
                     st.session_state.pop("historic_pending_tickers", None)
                 else:
+                    resolved_exchange_by_symbol = resolve_exchanges_for_tokens(token_map, instruments_df)
+                    quote_exchange_by_symbol = {
+                        **alert_exchange_by_symbol,
+                        **resolved_exchange_by_symbol,
+                    }
                     token_rows = [
                         {"Ticker": ticker, "instrument_token": token}
                         for ticker, token in token_map.items()
@@ -2465,7 +2476,7 @@ if selected_main_tab == "Historic Data":
                     live_ltp_by_symbol = fetch_live_ltp_by_symbol(
                         historic_kite,
                         pending_historic_tickers,
-                        exchange_by_symbol=alert_exchange_by_symbol,
+                        exchange_by_symbol=quote_exchange_by_symbol,
                     )
                     dashboard_df, day_movers_df, skipped_symbols = build_price_ladder_and_day_movers_frames(
                         historic_kite,
@@ -2479,6 +2490,7 @@ if selected_main_tab == "Historic Data":
                     st.session_state["historic_skipped_symbols"] = skipped_symbols
                     st.session_state["historic_momentum_benchmark_used"] = pending_benchmark
                     st.session_state["historic_token_rows"] = token_rows
+                    st.session_state["historic_exchange_by_symbol"] = resolved_exchange_by_symbol
                     st.session_state["historic_as_of_date"] = as_of_date
                     st.session_state["historic_ltp_refreshed_at"] = pd.Timestamp.now().isoformat()
                     st.session_state["historic_loaded_request_signature"] = _historic_request_signature(
