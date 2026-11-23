@@ -1,6 +1,6 @@
 # Alerts tab
 
-The Alerts tab fetches Kite alerts and displays status, symbol, sector, LTP, trigger, distance, and update date. Use search, status and sector filters, or sortable columns to find alerts. Simple constant-price alerts can be created, edited, and deleted; unsupported alert types are view-only.
+The Alerts tab fetches Kite alerts and displays status, symbol, sector, LTP, trigger, distance, and update date. Use search, status and sector filters, or sortable columns to find alerts. Simple constant-price alerts can be created, edited, and deleted; unsupported alert types are view-only. The edit form exposes the condition field (for example, `LastTradedPrice` or `ClosePrice`); this is independent of the live LTP shown in the table, and edits preserve the existing field unless it is changed.
 
 When Kite rejects a new alert because its condition is already met, the app fetches the instrument's current LTP, moves the trigger 1% to the non-triggering side (`<`/`<=` below LTP; `>`/`>=` above LTP), and retries creation once. The success message reports the adjusted trigger. Other errors are not retried.
 

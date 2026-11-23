@@ -306,6 +306,12 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 <SelectField label="Exchange" value={formValues.lhs_exchange} options={["NSE", "BSE", "NFO", "CDS", "BCD", "MCX", "INDICES"]} onChange={(value) => setFormValues((current) => ({ ...current, lhs_exchange: value }))} />
                 <TextField label="Symbol" value={formValues.lhs_tradingsymbol} onChange={(value) => setFormValues((current) => ({ ...current, lhs_tradingsymbol: value.toUpperCase() }))} />
               </div>
+              <SelectField
+                label="Condition field"
+                value={formValues.lhs_attribute}
+                options={Array.from(new Set(["LastTradedPrice", "ClosePrice", formValues.lhs_attribute]))}
+                onChange={(value) => setFormValues((current) => ({ ...current, lhs_attribute: value }))}
+              />
               <div className="grid grid-cols-[0.8fr_1.2fr] gap-2">
                 <SelectField label="Operator" value={formValues.operator} options={[">=", "<=", ">", "<", "=="]} onChange={(value) => setFormValues((current) => ({ ...current, operator: operatorValue(value) }))} />
                 <TextField label="Trigger" value={formValues.rhs_constant} onChange={(value) => setFormValues((current) => ({ ...current, rhs_constant: value }))} />
@@ -319,7 +325,7 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 <Save className={`h-4 w-4 ${pendingAction === "create" || pendingAction === "modify" ? "animate-pulse text-terminal-near" : ""}`} />
                 {pendingAction === "modify" ? "Modifying..." : pendingAction === "create" ? "Creating..." : editingUuid ? "Modify" : "Create"}
               </button>
-              <p className="text-xs leading-5 text-terminal-muted">Phase 1 supports simple constant-price alerts. ATO alerts are visible in the table but should be edited in Kite until basket support is added.</p>
+              <p className="text-xs leading-5 text-terminal-muted">The condition field is what Kite evaluates; it can differ from the live LTP shown in the table. Phase 1 supports simple constant-price alerts. ATO alerts are visible in the table but should be edited in Kite until basket support is added.</p>
             </div>
           </aside>
         </section>
