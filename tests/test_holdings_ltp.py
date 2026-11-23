@@ -6,6 +6,7 @@ from holdings_market_data import (
     _apply_live_ltp_to_holdings,
     fetch_live_ltp,
     fetch_live_ltp_by_symbol,
+    index_symbols_from_groups,
     instrument_lookup_symbols,
     resolve_exchanges_for_tokens,
     resolve_tokens_from_tickers,
@@ -27,6 +28,18 @@ class HoldingsLtpTests(unittest.TestCase):
         self.assertEqual(
             instrument_lookup_symbols(["BIRET-RR", "INDIGRID-IV", "NSDL"]),
             ["BIRET", "BIRET-RR", "INDIGRID", "INDIGRID-IV", "NSDL"],
+        )
+
+    def test_index_symbols_are_collected_from_index_groups(self):
+        self.assertEqual(
+            index_symbols_from_groups(
+                {
+                    "MAIN INDICES": "NIFTY 50, SENSEX",
+                    "Indices2": "NIFTY BANK",
+                    "NIFTY 50": "RELIANCE, INFY",
+                }
+            ),
+            {"NIFTY 50", "SENSEX", "NIFTY BANK"},
         )
 
     def test_live_quote_requests_keep_exact_suffix_symbols(self):

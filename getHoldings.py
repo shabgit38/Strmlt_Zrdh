@@ -61,6 +61,7 @@ from holdings_market_data import (
     _apply_live_ltp_to_holdings,
     fetch_live_ltp,
     fetch_live_ltp_by_symbol,
+    index_symbols_from_groups,
     instrument_lookup_symbols,
     resolve_exchanges_for_tokens,
     resolve_tokens_from_tickers,
@@ -2292,6 +2293,8 @@ if selected_main_tab == "Historic Data":
         indices = {}
         st.warning(f"Could not load index constituents: {exc}")
 
+    historic_index_symbols = index_symbols_from_groups(indices)
+
     if indices:
         index_names = ["Custom"] + list(indices.keys())
         default_index = next((name for name in index_names if name.lower() == "main indices"), "Custom")
@@ -2328,15 +2331,8 @@ if selected_main_tab == "Historic Data":
                 for ticker in indices[selected_index].split(",")
                 if ticker.strip()
             ]
-            prepend_index_names = {
-                ticker.strip().upper()
-                for group_name, group_constituents in indices.items()
-                if group_name.strip().lower() in {"main indices", "indices2"}
-                for ticker in group_constituents.split(",")
-                if ticker.strip()
-            }
             selected_tickers = constituent_tickers
-            if selected_index.strip().upper() in prepend_index_names:
+            if selected_index.strip().upper() in historic_index_symbols:
                 selected_tickers = [selected_index, *selected_tickers]
             selected_constituents = ", ".join(
                 dict.fromkeys(selected_tickers)
@@ -2541,8 +2537,24 @@ if selected_main_tab == "Historic Data":
             st.session_state.pop("historic_pending_benchmark", None)
 
     missing_tickers = st.session_state.get("historic_missing_tickers", [])
-    if missing_tickers:
-        st.warning(f"Skipped tickers with no instrument token: {', '.join(missing_tickers)}")
+    missing_index_symbols = [
+        ticker for ticker in missing_tickers
+        if ticker.strip().upper() in historic_index_symbols
+    ]
+    if missing_index_symbols:
+        st.info(
+            "Index names not available in the instruments table: "
+            + ", ".join(missing_index_symbols)
+        )
+    missing_non_index_tickers = [
+        ticker for ticker in missing_tickers
+        if ticker.strip().upper() not in historic_index_symbols
+    ]
+    if missing_non_index_tickers:
+        st.warning(
+            "Skipped tickers with no instrument token: "
+            + ", ".join(missing_non_index_tickers)
+        )
 
     missing_benchmark = st.session_state.get("historic_missing_benchmark")
     if missing_benchmark:

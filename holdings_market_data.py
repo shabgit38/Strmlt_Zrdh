@@ -18,6 +18,16 @@ def instrument_lookup_symbols(symbols: list[str]) -> list[str]:
     return sorted(lookup_symbols)
 
 
+def index_symbols_from_groups(indices: dict[str, str]) -> set[str]:
+    return {
+        symbol.strip().upper()
+        for group_name, constituents in indices.items()
+        if group_name.strip().lower() in {"main indices", "indices2"}
+        for symbol in constituents.split(",")
+        if symbol.strip()
+    }
+
+
 def resolve_tokens_from_tickers(
     tickers: list[str],
     instruments_df: pd.DataFrame,
