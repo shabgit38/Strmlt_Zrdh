@@ -152,10 +152,10 @@ export function AlertsScreen({ data }: { data?: AlertsData | null }) {
                 className="inline-flex items-center gap-2 rounded-md border border-terminal-line px-3 py-2 text-sm font-semibold text-terminal-ink hover:bg-terminal-hover disabled:cursor-default disabled:opacity-40"
                 type="button"
                 disabled={!data?.loaded || (disabledAlertCount === 0 && enabledAlertsNeedingReset.length === 0) || pendingAction !== null}
-                title="Reset disabled alerts to the nearest EMA at least 1% on the safe side of LTP; set enabled alerts to 1% from LTP."
+                title="Reset disabled alerts to the nearest EMA at least 1% on the safe side of LTP (or a whole-rupee, rounded-down 1% fallback); set enabled alerts to a whole-rupee, rounded-down 1% target."
                 onClick={() => {
                   const enabledAlertUuids = enabledAlertsNeedingReset.map((alert) => alert.uuid);
-                  if (window.confirm(`Reset ${disabledAlertCount} disabled alert(s) to the nearest EMA at least 1% on the safe side of LTP, and set ${enabledAlertUuids.length} enabled alert(s) to 1% from LTP if their trigger is currently farther or closer than that? Unsupported alert types will be skipped.`)) {
+                  if (window.confirm(`Reset ${disabledAlertCount} disabled alert(s) to the nearest EMA at least 1% on the safe side of LTP (or a whole-rupee, rounded-down 1% fallback), and set ${enabledAlertUuids.length} enabled alert(s) to a whole-rupee, rounded-down 1% target if needed? Unsupported alert types will be skipped.`)) {
                     sendAction("reset", { enabledAlertUuids });
                   }
                 }}
@@ -503,9 +503,11 @@ function enabledAlertNeedsReset(alert: KiteAlert) {
   const rawTarget = operator === ">=" || operator === ">" || operator === "=="
     ? Math.max(ltp * 1.01, ltp + 0.01)
     : Math.min(ltp * 0.99, ltp - 0.01);
-  const target = operator === ">=" || operator === ">" || operator === "=="
-    ? Math.ceil(rawTarget * 100) / 100
-    : Math.floor(rawTarget * 100) / 100;
+  const isUpperTarget = operator === ">=" || operator === ">" || operator === "==";
+  let target = Math.floor(rawTarget);
+  if (isUpperTarget ? target <= ltp : target >= ltp) {
+    target = isUpperTarget ? Math.floor(ltp) + 1 : Math.ceil(ltp) - 1;
+  }
   return Math.abs(trigger - target) >= 0.005;
 }
 

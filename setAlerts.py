@@ -451,7 +451,11 @@ def _alert_distance_percentage(alert: dict[str, Any]) -> float | None:
 
 def _enabled_alert_reset_target(current_price: float, operator: str) -> float:
     normalized_operator = operator.strip()
-    target_price = _non_triggering_alert_target(current_price, normalized_operator)
+    target_price = _round_reset_target_to_whole_rupees(
+        _non_triggering_alert_target(current_price, normalized_operator),
+        current_price,
+        normalized_operator,
+    )
     if _alert_condition_is_met(normalized_operator, current_price, target_price):
         raise ValueError("could not move trigger outside the already-met condition")
     return target_price
@@ -472,9 +476,32 @@ def _reset_alert_trigger_target(
     direction = "lower" if normalized_operator in {"<", "<="} else "upper"
     nearest_ema = _nearest_ema_beyond_minimum_gap(current_price, metrics, direction)
     if nearest_ema is None:
-        return _non_triggering_alert_target(current_price, normalized_operator), True
+        target_price = _non_triggering_alert_target(current_price, normalized_operator)
+        return (
+            _round_reset_target_to_whole_rupees(target_price, current_price, normalized_operator),
+            True,
+        )
 
     return _round_price_outward(nearest_ema[1], direction), False
+
+
+def _round_reset_target_to_whole_rupees(
+    target_price: float,
+    current_price: float,
+    operator: str,
+) -> float:
+    rounded_target = float(math.floor(target_price))
+    if rounded_target <= 0:
+        raise ValueError("no positive trigger price remains after rounding to whole rupees")
+    if _alert_condition_is_met(operator, current_price, rounded_target):
+        rounded_target = (
+            float(math.floor(current_price) + 1)
+            if operator in {">=", ">", "=="}
+            else float(math.ceil(current_price) - 1)
+        )
+    if rounded_target <= 0 or _alert_condition_is_met(operator, current_price, rounded_target):
+        raise ValueError("no whole-rupee trigger price remains on the non-triggering side of LTP")
+    return rounded_target
 
 
 def _non_triggering_alert_target(current_price: float, operator: str) -> float:

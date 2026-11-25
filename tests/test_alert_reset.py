@@ -70,6 +70,21 @@ class AlertResetTests(unittest.TestCase):
         self.assertEqual(_enabled_alert_reset_target(100, ">="), 101.0)
         self.assertEqual(_enabled_alert_reset_target(100, "<="), 99.0)
 
+    def test_reset_one_percent_targets_round_down_to_whole_rupees(self):
+        self.assertEqual(_enabled_alert_reset_target(100.5, ">="), 101.0)
+        self.assertEqual(_enabled_alert_reset_target(100.5, "<="), 99.0)
+        self.assertEqual(
+            _reset_alert_trigger_target(100.5, {}, ">="),
+            (101.0, True),
+        )
+
+    def test_reset_rounding_keeps_target_on_non_triggering_side_of_ltp(self):
+        self.assertEqual(_enabled_alert_reset_target(50, ">="), 51.0)
+        self.assertEqual(
+            _reset_alert_trigger_target(50, {}, ">="),
+            (51.0, True),
+        )
+
     def test_enabled_reset_targets_ltp_offset_regardless_of_existing_gap(self):
         target = _enabled_alert_reset_target(100, "<=")
         self.assertEqual(target, 99.0)
