@@ -127,6 +127,37 @@ class HoldingsBreakdownOrderTests(unittest.TestCase):
             ["2026-09-05", "2026-09-10"],
         )
 
+    def test_active_breakdown_matches_batch_to_summary_by_isin(self):
+        breakdown_df = pd.DataFrame(
+            [
+                {
+                    "row_type": "SUMMARY",
+                    "symbol": "SGBMAY29I",
+                    "isin": "IN000SGB",
+                    "total_qty": 3,
+                    "id": 10,
+                },
+                {
+                    "row_type": "BATCH",
+                    "symbol": "SGBMAY29I-GB",
+                    "isin": "IN000SGB",
+                    "batch_qty": 3,
+                    "id": 11,
+                },
+                {
+                    "row_type": "BATCH",
+                    "symbol": "OTHER",
+                    "isin": "IN000OTHER",
+                    "batch_qty": 1,
+                    "id": 12,
+                },
+            ]
+        )
+
+        active_df = getHldgBrk._active_breakdown_df(breakdown_df)
+
+        self.assertEqual(active_df["id"].tolist(), [10, 11])
+
     def test_full_batch_exit_marks_summary_exited(self):
         summary = pd.Series({"id": 10, "symbol": "ABC", "ltp": 12.5})
         holdings_df = pd.DataFrame(

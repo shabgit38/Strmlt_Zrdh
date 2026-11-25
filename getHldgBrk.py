@@ -1695,11 +1695,20 @@ def _active_breakdown_df(df: pd.DataFrame) -> pd.DataFrame:
     if "total_qty" in df.columns:
         active_summary = active_summary & pd.to_numeric(df["total_qty"], errors="coerce").fillna(0).gt(0)
 
-    active_symbols = set(df.loc[active_summary, "symbol"].astype(str).str.upper().str.strip())
+    symbol_keys = df["symbol"].astype(str).str.upper().str.strip()
+    active_symbols = set(symbol_keys.loc[active_summary])
+    matching_active_summary = symbol_keys.isin(active_symbols)
+    if "isin" in df.columns:
+        isin_keys = df["isin"].fillna("").astype(str).str.upper().str.strip()
+        active_isins = set(isin_keys.loc[active_summary]) - {""}
+        matching_active_summary = matching_active_summary | (
+            isin_keys.isin(active_isins) & isin_keys.ne("")
+        )
+
     active_batch = (
         row_type.eq("BATCH")
         & ~exited_rows
-        & df["symbol"].astype(str).str.upper().str.strip().isin(active_symbols)
+        & matching_active_summary
     )
     return df[active_summary | active_batch].copy()
 
